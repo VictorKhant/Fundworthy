@@ -157,3 +157,37 @@ def test_repair_does_not_join_unrelated_numbers():
     assert _clean("We gave $5 million. 2024 was a strong year.") == \
         "We gave $5 million. 2024 was a strong year."
     assert _clean("Applications cost $25 to submit") == "Applications cost $25 to submit"
+
+
+# --- regression: unreadable files must never reach a model --------------------
+#
+# On a real scored run, three results had a raw URL as their title because the crawl
+# followed links to PDFs. A PDF fetched as HTML decodes to its byte stream —
+# "%PDF-1.6 ... FlateDecode ..." — the title falls back to the URL, and Sonnet scored
+# one of them 55 out of 100. A confident number derived from binary noise, at full
+# token cost, is the worst possible combination.
+
+def test_pdf_and_office_links_are_not_followed():
+    from agent.parse import find_grant_links
+
+    links = [
+        ("/grants/application-instructions.pdf", "Application instructions"),
+        ("/grants/FY27-GAP-Program-Guidelines.PDF", "Program guidelines"),
+        ("/grants/budget-template.xlsx", "Budget template"),
+        ("/grants/apply", "Apply for funding"),
+    ]
+    out = find_grant_links("https://example.invalid/grants", links)
+    assert out == ["https://example.invalid/grants/apply"], \
+        "only the readable page should be followed"
+
+
+def test_a_non_html_content_type_is_refused():
+    """The extension check catches most of it; a URL with no extension that still
+    serves a PDF is caught here, where the server has told us what it sent."""
+    from agent.fetch import _READABLE_TYPE
+
+    for ok in ("text/html", "text/plain", "application/xhtml+xml", "application/json"):
+        assert _READABLE_TYPE.match(ok), ok
+    for bad in ("application/pdf", "image/png", "application/zip",
+                "application/octet-stream", "application/msword"):
+        assert not _READABLE_TYPE.match(bad), bad

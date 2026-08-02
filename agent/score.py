@@ -214,6 +214,13 @@ Also:
   is labelled as one; null if you have nothing to go on.
 - score_rationale is one sentence, no preamble, no hedging, written for someone
   deciding whether to spend ten hours.
+- needs_human_check is NOT "some information was missing". Missing information is the
+  normal case — most funders publish neither an amount nor a deadline — and it is
+  already reflected in the score. Set it true only when YOU reported something you
+  could not fully confirm from the page. Most results should be false.
+- If the text you are given is not readable prose — binary, a PDF stream, markup
+  fragments — do not score it. Return score 0, say so in the rationale, and set
+  needs_human_check true.
 """
 
 TRIAGE_SCHEMA = {
@@ -370,7 +377,19 @@ def scoring_schema(program_slugs: list[str]) -> dict:
                                "RISE program listed above.",
             },
 
-            "needs_human_check": {"type": "boolean"},
+            "needs_human_check": {
+                "type": "boolean",
+                "description": (
+                    "TRUE ONLY IF you reported a value above that you could not fully "
+                    "confirm from the page text — an amount, deadline, geography or "
+                    "contact you are unsure of. "
+                    "FALSE when information is simply ABSENT: a funder that never "
+                    "states an award amount or a deadline is normal and is not a "
+                    "problem to flag. Most results should be FALSE. This field moves "
+                    "the result into a separate 'needs your eyes' block, so flagging "
+                    "everything makes the block meaningless and buries good results."
+                ),
+            },
         },
         "required": [
             "score", "score_rationale", "program_match", "estimated_effort_hours",

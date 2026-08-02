@@ -94,6 +94,16 @@ _GRANT_LINK_HINT = re.compile(
     re.IGNORECASE,
 )
 
+# Files we cannot read. This is not a nicety: a PDF fetched as HTML yields its raw
+# byte stream ("%PDF-1.6 ... FlateDecode ..."), the title falls back to the URL, and on
+# a real run Sonnet scored one of those 55 out of 100 — a confident number derived from
+# binary noise, at full token cost. Decision A2 deferred PDF support; until it lands,
+# not following these is the honest behaviour.
+_UNREADABLE_SUFFIX = re.compile(
+    r"\.(pdf|docx?|xlsx?|pptx?|zip|rar|csv|jpe?g|png|gif|svg|mp4|mov|mp3)$",
+    re.IGNORECASE,
+)
+
 _MULTIPLIERS = {
     "million": 1_000_000, "m": 1_000_000,
     "billion": 1_000_000_000,
@@ -314,6 +324,8 @@ def find_grant_links(base_url: str, links: list[tuple[str, str]], limit: int = 2
         absolute = urljoin(base_url, href)
         parsed = urlparse(absolute)
         if parsed.scheme not in ("http", "https") or parsed.netloc != base_host:
+            continue
+        if _UNREADABLE_SUFFIX.search(parsed.path):
             continue
         if not (_GRANT_LINK_HINT.search(parsed.path) or _GRANT_LINK_HINT.search(anchor)):
             continue

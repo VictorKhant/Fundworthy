@@ -9,6 +9,7 @@ cost to the organization.
 from __future__ import annotations
 
 import asyncio
+import re
 import logging
 import urllib.robotparser
 from dataclasses import dataclass
@@ -27,6 +28,10 @@ REQUEST_TIMEOUT = httpx.Timeout(20.0, connect=10.0)
 MAX_RETRIES = 2
 PER_HOST_DELAY_SECONDS = 2.0
 MAX_BYTES = 3_000_000  # a grants page over 3MB is not a grants page
+
+# Content types we can actually read. Anything else — PDF above all — decodes into
+# noise that looks like text to everything downstream.
+_READABLE_TYPE = re.compile(r"^(text/|application/(xhtml\+xml|xml|json))", re.IGNORECASE)
 
 
 @dataclass
@@ -115,6 +120,19 @@ class Fetcher:
                             status=resp.status_code,
                             html=None,
                             error=f"http_{resp.status_code}",
+                            final_url=str(resp.url),
+                        )
+
+                    # A URL with no extension can still serve a PDF, and decoding one
+                    # as text yields its raw byte stream — which the parser will
+                    # happily hand to a model that scores it. The extension check in
+                    # parse.py catches most of these; this catches the rest, at the
+                    # only point where the server has told us what it actually sent.
+                    ctype = resp.headers.get("content-type", "").split(";")[0].strip()
+                    if ctype and not _READABLE_TYPE.match(ctype):
+                        return FetchResult(
+                            url=url, status=resp.status_code, html=None,
+                            error=f"unreadable_content_type:{ctype}",
                             final_url=str(resp.url),
                         )
 
