@@ -256,8 +256,7 @@ def main() -> int:
             "     runs today. A PASS HERE DOES NOT MEAN THE MODEL IS CALIBRATED — it means\n"
             "     the pipeline can rank. See STAKEHOLDER.md question 8.\n"
         )
-    if cfg.min_award_is_placeholder:
-        print(f"  ⚠️  MIN_AWARD is a placeholder (${cfg.min_award:,}) — §11 Q1 unanswered.\n")
+    print(f"  Award floor for this run: ${cfg.min_award:,} (§11 Q1, answered).\n")
 
     outcomes: list[Outcome] = []
     try:

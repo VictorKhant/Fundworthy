@@ -107,8 +107,10 @@ class Opportunity:
     deadline: date | None
     estimated_effort_hours: int | None   # vs the 10-hour cap
 
-    # matching
-    program_match: list[Program]
+    # matching. Plain strings, not the three-value Program enum: RISE has seven
+    # programs and Mauri can add more from the dashboard, so a program she invents
+    # must not be something the pipeline drops for being missing from Python source.
+    program_match: list[str]
     score: int                   # 0-100
     score_rationale: str         # one sentence, human-readable
 
@@ -221,10 +223,14 @@ class RunLog:
     usd_spent: float = 0.0
     stop_reason: StopReason | None = None
     notes: list[str] = field(default_factory=list)
+    purged_rows: int = 0          # archive rows deleted at run start
+    duplicates_skipped: int = 0   # already shown this month, killed for free
 
     def to_dict(self) -> dict:
         return {
             "started_at": self.started_at.isoformat(),
+            "purged_rows": self.purged_rows,
+            "duplicates_skipped": self.duplicates_skipped,
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
             "sources_attempted": self.sources_attempted,
             "sources_ok": self.sources_ok,

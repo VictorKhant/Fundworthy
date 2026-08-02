@@ -158,15 +158,19 @@ def apply_filters(page: ParsedPage, funder: str, cfg: Config) -> FilterResult:
         return FilterResult(True, Reject.GEOGRAPHY, detail)
 
     # --- amount. Null is a flag, never a reject (see module docstring).
+    #
+    # Filter at the LOWEST floor across the ticked programs, not the global one. If
+    # RISE Arts accepts $5,000 while everything else needs $10,000, rejecting at
+    # $10,000 here would kill Arts opportunities before any program-aware scoring got
+    # to look at them. The per-program floor is applied again during scoring, where we
+    # know which program a candidate actually matches.
+    floor = cfg.effective_min_award
     award_max = page.award_max
     if award_max is None:
         flags.append(Flag.AMOUNT_NOT_STATED)
-    elif award_max < cfg.min_award:
+    elif award_max < floor:
         return FilterResult(
-            True,
-            Reject.BELOW_MIN_AWARD,
-            f"${award_max:,} < ${cfg.min_award:,}"
-            + (" (PLACEHOLDER floor)" if cfg.min_award_is_placeholder else ""),
+            True, Reject.BELOW_MIN_AWARD, f"${award_max:,} < ${floor:,}",
         )
 
     # --- deadline. Same rule.

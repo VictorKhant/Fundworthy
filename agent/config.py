@@ -1,12 +1,22 @@
-"""Reads the Config tab of the Sheet. (CLAUDE.md §4, §9)
+"""Runtime configuration. (docs/PLAN.md §0, §2)
 
-Closes a hole in the spec: §4 requires the run to read config from the Sheet and to
-check the kill switch at step 0, but §10's file list gave that job to nobody —
-sinks/sheets.py is described as a write path. This module owns the read.
+Where config lives changed. CLAUDE.md §4 put it in a Google Sheets tab and §3 called
+editing it in the dashboard a non-goal; both are deliberately reversed, because what
+Mauri actually asked for — tick these programs, with these search terms, at this floor,
+this week — is not a thing a spreadsheet cell can express.
 
-Config lives in the Sheet and nowhere else (§3: editing config in the dashboard is a
-non-goal). Every key here is plain English so that the tab stays editable by someone
-who has never seen a config file.
+Resolution order, most authoritative first:
+
+  1. **SQLite** (`data/rise.db`) — what the dashboard writes. The normal path.
+  2. **The Google Sheet** — kept as a fallback so the existing scheduled job and anyone
+     already using the Config tab keep working through the transition.
+  3. **Shipped defaults** — so the agent stays runnable from a fresh clone with no
+     database, no Sheet and no key.
+
+The kill switch keeps its §8 guarantee in every one of those cases: under
+`RISE_STRICT_CONFIG` a config we cannot read is a refusal to run, never a silent
+fallback to `enabled=True`. The direction of that failure is the whole point — a
+transient outage must not be able to swallow Mauri's decision to turn the agent off.
 """
 
 from __future__ import annotations
@@ -15,56 +25,109 @@ import logging
 import os
 from dataclasses import dataclass, field
 
-from .models import Program
 from .sources import Tier
 
 log = logging.getLogger(__name__)
 
 CONFIG_TAB = "Config"
 
-# MIN_AWARD is the primary filter and the whole point of the product (§11 Q1).
-# CLAUDE.md is explicit: do not guess at it. This placeholder exists so the pipeline
-# runs before Mauri answers; it is not an answer, and the run says so out loud.
-MIN_AWARD_PLACEHOLDER = 25_000
-MIN_AWARD_IS_PLACEHOLDER = True  # TODO(Mauri, §11 Q1): set the real floor, flip to False
+# CLAUDE.md §11 Q1 — ANSWERED. $10,000 is the smallest award RISE considers worth ten
+# collective hours of team time. This used to be a $25,000 placeholder wrapped in
+# machinery that shouted "not a real answer" on every run; that machinery is gone,
+# because the question it was guarding is closed.
+MIN_AWARD_DEFAULT = 10_000
+
+
+@dataclass
+class ProgramCard:
+    """One of RISE's programs, as Mauri edits it in the dashboard.
+
+    This replaces the hardcoded three-value `Program` enum as the unit of "what are we
+    searching for". Seven programs exist; she ticks the ones that matter this week.
+    """
+
+    slug: str
+    name: str
+    summary: str = ""
+    what_it_funds: str = ""
+    keywords: list[str] = field(default_factory=list)
+    funder_types: list[str] = field(default_factory=list)
+    search_queries: list[str] = field(default_factory=list)
+    min_award: int | None = None   # per-program override of the global floor
+
+    def floor(self, global_min: int) -> int:
+        return self.min_award if self.min_award is not None else global_min
+
+
+DEFAULT_PROGRAMS = [
+    ProgramCard(slug="RULFP", name="RISE Urban Leadership Fellows Program"),
+    ProgramCard(slug="RESILIENCE", name="RISE Resilience & Renewal"),
+    ProgramCard(slug="ARTS", name="RISE Arts"),
+]
 
 
 @dataclass
 class Config:
-    """Runtime settings. Defaults match the Config tab's shipped values."""
+    """Runtime settings, whatever they were read from."""
 
-    enabled: bool = True                     # ENABLED — the kill switch (§8)
-    min_award: int = MIN_AWARD_PLACEHOLDER   # MIN_AWARD (§11 Q1 — placeholder)
-    min_award_is_placeholder: bool = MIN_AWARD_IS_PLACEHOLDER
+    enabled: bool = True                     # the kill switch (§8)
+    min_award: int = MIN_AWARD_DEFAULT       # §11 Q1, answered
     max_opportunities: int = 12              # sized for a 1-hour review (§9)
-    programs_active: list[Program] = field(
-        default_factory=lambda: [Program.RULFP, Program.RESILIENCE, Program.ARTS]
+    programs: list[ProgramCard] = field(default_factory=lambda: list(DEFAULT_PROGRAMS))
+    sectors_active: list[str] = field(
+        default_factory=lambda: ["warm_partner", "foundation", "government", "arts_agency"]
     )
+    search_beyond_partners: bool = False     # lights up when a DiscoveryProvider lands
     run_day: str = "Wednesday"
     run_time: str = "23:00"
-    max_tier: Tier = Tier.WARM               # crawl scope; tier 1 for Block 1
+    max_tier: Tier = Tier.WARM
     weekly_budget_usd: float = 1.00          # hard ceiling (§8)
     min_deadline_runway_days: int = 14       # reject inside this window (§7)
+    source: str = "defaults"                 # "database" | "sheet" | "defaults"
+
+    @property
+    def programs_active(self) -> list[str]:
+        """Active program slugs. Kept as plain strings so a program Mauri invents in
+        the dashboard is a first-class citizen, not something the pipeline drops
+        because it is missing from a Python enum."""
+        return [p.slug for p in self.programs]
+
+    @property
+    def effective_min_award(self) -> int:
+        """The floor the deterministic filter should use.
+
+        The LOWEST floor across active programs, not the global one. If RISE Arts will
+        take $5,000 while everything else needs $10,000, filtering the crawl at $10,000
+        would throw away Arts opportunities before any program-aware scoring ever sees
+        them. The per-program floor is then applied again during scoring, where we know
+        which program a candidate actually matches.
+        """
+        floors = [p.floor(self.min_award) for p in self.programs]
+        return min(floors) if floors else self.min_award
 
     @property
     def warnings(self) -> list[str]:
         out: list[str] = []
-        if self.min_award_is_placeholder:
+        if not self.programs:
             out.append(
-                f"MIN_AWARD is a PLACEHOLDER (${self.min_award:,}). CLAUDE.md §11 Q1 is "
-                "unanswered — the award floor has not been set by Mauri. Every count "
-                "below is provisional until it is."
+                "No programs are ticked, so there is nothing to search for. Tick at "
+                "least one program card on the dashboard."
+            )
+        if self.source == "defaults":
+            out.append(
+                "Running on shipped defaults — no database and no Sheet was readable. "
+                "Nothing Mauri set in the dashboard is being applied."
             )
         return out
 
 
-# --- Sheet reader -------------------------------------------------------------
+# --- parsing helpers ----------------------------------------------------------
 
 _TRUE = {"true", "yes", "y", "1", "on", "enabled"}
 _FALSE = {"false", "no", "n", "0", "off", "disabled"}
 
 
-def _as_bool(value: str, default: bool) -> bool:
+def _as_bool(value, default: bool) -> bool:
     v = str(value).strip().casefold()
     if v in _TRUE:
         return True
@@ -73,8 +136,8 @@ def _as_bool(value: str, default: bool) -> bool:
     return default
 
 
-def _as_int(value: str, default: int) -> int:
-    """Tolerant of what a person actually types: '$25,000', '25k', '25 000'."""
+def _as_int(value, default: int) -> int:
+    """Tolerant of what a person actually types: '$10,000', '10k', '10 000'."""
     v = str(value).strip().casefold().replace("$", "").replace(",", "").replace(" ", "")
     if not v:
         return default
@@ -91,74 +154,134 @@ def _as_int(value: str, default: int) -> int:
 
 
 class ConfigUnavailable(RuntimeError):
-    """The Config tab could not be read while running in strict mode."""
+    """Config could not be read while running in strict mode."""
 
 
-def load_config(sheet_id: str | None = None, credentials_path: str | None = None,
-                strict: bool | None = None) -> Config:
-    """Read the Config tab.
+# --- the database path (the normal one) ---------------------------------------
 
-    Without credentials, falls back to shipped defaults — the agent has to be
-    runnable before the Sheet exists.
+def load_from_db(db_path=None) -> Config | None:
+    """Read settings and active program cards out of SQLite. None if unavailable."""
+    try:
+        from app.db import db_path as default_db_path
+        from app.db import session
+        from app.repo import get_settings, list_programs
+    except ImportError as exc:  # noqa: BLE001 — running the agent without the app package
+        log.debug("app package unavailable (%s)", exc)
+        return None
 
-    With `strict` (set `RISE_STRICT_CONFIG=1`, which the scheduled job does), an
-    unreadable Config tab raises instead of falling back. This matters more than it
-    looks: `ENABLED` is Mauri's kill switch, and a silent fall back to defaults means
-    `enabled=True`. She would set `ENABLED` to `FALSE`, a transient Sheets outage
-    would swallow it, and the agent would run anyway — the one failure the kill
-    switch exists to prevent. Refusing to run on an unreadable config is the correct
-    direction to fail.
-    """
-    sheet_id = sheet_id or os.environ.get("RISE_SHEET_ID")
-    credentials_path = credentials_path or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-    if strict is None:
-        strict = os.environ.get("RISE_STRICT_CONFIG", "").strip() in _TRUE
-
-    if not sheet_id or not credentials_path:
-        if strict:
-            raise ConfigUnavailable(
-                "RISE_STRICT_CONFIG is on but RISE_SHEET_ID / "
-                "GOOGLE_APPLICATION_CREDENTIALS are not set. Refusing to run without "
-                "reading the kill switch."
-            )
-        log.info("No Sheet credentials — using shipped defaults.")
-        return Config()
+    target = db_path or default_db_path()
+    if db_path is None and not default_db_path().exists():
+        return None
 
     try:
-        import gspread  # imported lazily so the agent runs without Sheets installed
-
-        gc = gspread.service_account(filename=credentials_path)
-        tab = gc.open_by_key(sheet_id).worksheet(CONFIG_TAB)
-        raw = {
-            str(row[0]).strip().upper(): str(row[1]).strip()
-            for row in tab.get_all_values()
-            if len(row) >= 2 and row[0]
-        }
+        with session(target) as conn:
+            settings = get_settings(conn)
+            cards = list_programs(conn, active_only=True)
     except Exception as exc:  # noqa: BLE001
-        if strict:
-            raise ConfigUnavailable(
-                f"Could not read the {CONFIG_TAB} tab ({exc}). Refusing to run: the "
-                "ENABLED kill switch lives there and we cannot confirm it is on."
-            ) from exc
-        log.warning("Could not read the Config tab (%s) — using shipped defaults.", exc)
-        return Config()
+        log.warning("could not read the settings database (%s)", exc)
+        return None
 
-    cfg = Config()
+    cfg = Config(source="database")
+    cfg.enabled = bool(settings["enabled"])
+    cfg.min_award = int(settings["min_award"])
+    cfg.max_opportunities = int(settings["max_opportunities"])
+    cfg.weekly_budget_usd = float(settings["run_budget_usd"])
+    cfg.min_deadline_runway_days = int(settings["min_deadline_runway_days"])
+    cfg.sectors_active = list(settings["sectors_active"])
+    cfg.search_beyond_partners = bool(settings["search_beyond_partners"])
+    cfg.programs = [
+        ProgramCard(
+            slug=c["slug"], name=c["name"], summary=c.get("summary", ""),
+            what_it_funds=c.get("what_it_funds", ""),
+            keywords=list(c.get("keywords") or []),
+            funder_types=list(c.get("funder_types") or []),
+            search_queries=list(c.get("search_queries") or []),
+            min_award=c.get("min_award"),
+        )
+        for c in cards
+    ]
+    # Government sources are a real scope decision (§11 Q3), and the answer is yes —
+    # Mauri wants RFPs and contracts too. Ticking the sector is what turns them on.
+    cfg.max_tier = Tier.GOVERNMENT if "government" in cfg.sectors_active else (
+        Tier.INTERMEDIARY if "intermediary" in cfg.sectors_active else Tier.WARM
+    )
+    return cfg
+
+
+# --- the Sheet path (kept as a fallback) --------------------------------------
+
+def load_from_sheet(sheet_id: str, credentials_path: str) -> Config:
+    """Read the legacy Config tab. Raises on any failure; the caller decides."""
+    import gspread
+
+    gc = gspread.service_account(filename=credentials_path)
+    tab = gc.open_by_key(sheet_id).worksheet(CONFIG_TAB)
+    raw = {
+        str(row[0]).strip().upper(): str(row[1]).strip()
+        for row in tab.get_all_values()
+        if len(row) >= 2 and row[0]
+    }
+
+    cfg = Config(source="sheet")
     cfg.enabled = _as_bool(raw.get("ENABLED", ""), cfg.enabled)
-    if "MIN_AWARD" in raw and raw["MIN_AWARD"]:
-        cfg.min_award = _as_int(raw["MIN_AWARD"], cfg.min_award)
-        # A human typed a number into the tab, so it is no longer our placeholder.
-        cfg.min_award_is_placeholder = False
+    cfg.min_award = _as_int(raw.get("MIN_AWARD", ""), cfg.min_award)
     cfg.max_opportunities = _as_int(raw.get("MAX_OPPORTUNITIES", ""), cfg.max_opportunities)
     cfg.run_day = raw.get("RUN_DAY") or cfg.run_day
     cfg.run_time = raw.get("RUN_TIME") or cfg.run_time
 
     if raw.get("PROGRAMS_ACTIVE"):
         wanted = {p.strip().upper() for p in raw["PROGRAMS_ACTIVE"].split(",")}
-        chosen = [p for p in Program if p.value in wanted]
+        chosen = [p for p in DEFAULT_PROGRAMS if p.slug in wanted]
         if chosen:
-            cfg.programs_active = chosen
+            cfg.programs = chosen
         else:
             log.warning("PROGRAMS_ACTIVE=%r matched no program — keeping all three.",
                         raw["PROGRAMS_ACTIVE"])
     return cfg
+
+
+# --- the entrypoint -----------------------------------------------------------
+
+def load_config(sheet_id: str | None = None, credentials_path: str | None = None,
+                strict: bool | None = None, db_path=None) -> Config:
+    """Resolve config from the database, then the Sheet, then shipped defaults.
+
+    Under `RISE_STRICT_CONFIG` (which the scheduled job sets), reaching the "shipped
+    defaults" step is a hard failure rather than a fallback. That is not paranoia: the
+    shipped default is `enabled=True`, so a silent fallback means Mauri sets the kill
+    switch to off, a transient outage swallows it, and the agent runs anyway — the one
+    failure the kill switch exists to prevent (evidence/README.md E7).
+    """
+    if strict is None:
+        strict = os.environ.get("RISE_STRICT_CONFIG", "").strip() in _TRUE
+
+    cfg = load_from_db(db_path)
+    if cfg is not None:
+        log.info("Config: read from the settings database (%s).",
+                 db_path or "data/rise.db")
+        return cfg
+
+    sheet_id = sheet_id or os.environ.get("RISE_SHEET_ID")
+    credentials_path = credentials_path or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if sheet_id and credentials_path:
+        try:
+            cfg = load_from_sheet(sheet_id, credentials_path)
+            log.info("Config: read from the Google Sheet Config tab (legacy path).")
+            return cfg
+        except Exception as exc:  # noqa: BLE001
+            if strict:
+                raise ConfigUnavailable(
+                    f"Could not read the {CONFIG_TAB} tab ({exc}) and there is no "
+                    "settings database. Refusing to run: the kill switch lives in "
+                    "config and we cannot confirm it is on."
+                ) from exc
+            log.warning("Could not read the Config tab (%s).", exc)
+
+    if strict:
+        raise ConfigUnavailable(
+            "RISE_STRICT_CONFIG is on but no settings database and no readable Config "
+            "tab were found. Refusing to run without confirming the kill switch."
+        )
+
+    log.info("Config: no database and no Sheet — using shipped defaults.")
+    return Config(source="defaults")

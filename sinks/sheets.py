@@ -218,7 +218,7 @@ class SheetsSink:
         No technical vocabulary on this tab. Mauri has never seen a config file and
         should not be able to tell that this is one.
         """
-        from agent.config import CONFIG_TAB, MIN_AWARD_PLACEHOLDER
+        from agent.config import CONFIG_TAB, MIN_AWARD_DEFAULT
 
         import gspread
 
@@ -235,10 +235,10 @@ class SheetsSink:
                 ["ENABLED", "TRUE",
                  "Set to FALSE to stop the agent. It will not run again until you set it "
                  "back to TRUE. Nobody else needs to be involved."],
-                ["MIN_AWARD", str(MIN_AWARD_PLACEHOLDER),
-                 "PLACEHOLDER — please replace. The smallest award worth 10 hours of the "
-                 "team's time. Anything smaller is not shown to you at all. This is the "
-                 "single most important setting on this page."],
+                ["MIN_AWARD", str(MIN_AWARD_DEFAULT),
+                 "The smallest award worth 10 hours of the team's time. Anything smaller "
+                 "is not shown to you at all. This is the single most important setting "
+                 "on this page."],
                 ["MAX_OPPORTUNITIES", "12",
                  "How many results to bring you each week. Sized for a one-hour review."],
                 ["PROGRAMS_ACTIVE", "RULFP, RESILIENCE, ARTS",

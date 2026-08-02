@@ -55,13 +55,45 @@ class WebJsonSink:
         return len(opportunities)
 
     def write_run_log(self, run: RunLog) -> None:
-        scored, not_stated = split_sections(self._opportunities)
+        rows = self._month_rows()
+        if rows is None:
+            scored, not_stated = split_sections(self._opportunities)
+            rows = {"scored": [_public(o) for o in scored],
+                    "amount_not_stated": [_public(o) for o in not_stated]}
+
         payload = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "run": run.to_dict(),
-            "scored": [_public(o) for o in scored],
-            "amount_not_stated": [_public(o) for o in not_stated],
+            **rows,
         }
         self.out_path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+
+    def _month_rows(self) -> dict | None:
+        """The month's findings from the archive, or None if there is no database.
+
+        This file is read as *the brief*, not as a run artifact, and those differ the
+        moment monthly dedup exists: a re-run mid-week legitimately finds nothing new,
+        and writing only that run's output would blank a page that should still be
+        showing everything found so far this month. The run block above still reports
+        the run itself, so "this run found nothing new" stays visible without the
+        results disappearing underneath it.
+        """
+        try:
+            from app.db import db_path, session
+            from app.repo import list_opportunities
+
+            if not db_path().exists():
+                return None
+            with session() as conn:
+                rows = list_opportunities(conn)
+        except Exception:  # noqa: BLE001 — no database is a normal state
+            return None
+
+        allowed = set(PUBLIC_FIELDS) | {"days_left"}
+        public = [{k: v for k, v in r.items() if k in allowed} for r in rows]
+        return {
+            "scored": [r for r in public if r.get("section") == "scored"],
+            "amount_not_stated": [r for r in public if r.get("section") != "scored"],
+        }
