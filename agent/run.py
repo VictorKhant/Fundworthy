@@ -164,6 +164,23 @@ def excluded_funders() -> set[str]:
         return set()
 
 
+def _on_remove_list(funder: str, title: str, excluded: set[str]) -> bool:
+    """Is this candidate excluded, by funder or by named programme?
+
+    An exact funder match removes the whole organisation. A remove-list entry that
+    appears inside the page title removes just that programme — which is the case §7
+    always described and never actually implemented.
+
+    Substring matching is deliberately one-directional: the entry must appear in the
+    title, not the reverse. "County of San Diego" would otherwise match every County
+    page, which is exactly the over-reach §7 warned against.
+    """
+    if funder.strip().casefold() in excluded:
+        return True
+    haystack = f"{funder} {title}".casefold()
+    return any(len(name) > 12 and name in haystack for name in excluded)
+
+
 async def crawl(cfg: Config, run: RunLog,
                 *, follow_links: bool = True,
                 already_seen: set[str] | None = None) -> list[tuple[ParsedPage, Source]]:
@@ -200,7 +217,12 @@ async def crawl(cfg: Config, run: RunLog,
         # The remove list, second door. A source on it is never fetched — but the
         # indexed databases carry grants from every funder in the state, so one can
         # still arrive that way. Dropped here, before triage, so it costs nothing.
-        if source.funder.strip().casefold() in excluded:
+        #
+        # Matched against the page TITLE as well as the funder, so a single named
+        # programme can be removed without removing its funder. That is what §7 asked
+        # for and never got: "the Equity Impact Grant is a hard reject — that is one
+        # program, not the whole County. Other County solicitations stay eligible."
+        if _on_remove_list(source.funder, page.title, excluded):
             key = "on_the_remove_list"
             run.rejected_by_filter[key] = run.rejected_by_filter.get(key, 0) + 1
             return

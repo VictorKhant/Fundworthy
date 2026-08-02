@@ -239,12 +239,30 @@ REJECT if geography excludes San Diego County,
           Imperial County, California, or national
 REJECT if funder is a religious organization       # Mauri, explicit
 REJECT if funder is a political party              # Mauri, explicit
-REJECT if funder == "County of San Diego Equity Impact Grant"   # done, no more funding
+REJECT if on the remove list                       # ← Mauri's, editable. See below.
 REJECT if requires a match RISE cannot meet        # ← TBD
 ```
 
 Geography note: RISE operates across **San Diego AND Imperial Counties** (Far
 South/Border North spans both). Do not hardcode San Diego County alone.
+
+### The remove list — one mechanism, and it is hers
+
+> There used to be TWO exclusion lists: this hardcoded reject, and the remove list.
+> That is one too many — "excluded" meant two different things and only one of them was
+> visible to Mauri. Worse, **the hardcoded one never fired**: it matched on the funder
+> name, and no source is called "County of San Diego Equity Impact Grant" (the registry
+> has "County of San Diego"). Zero hits across every recorded run, while presenting
+> itself as a working §7 filter.
+>
+> Everything now lives on the remove list, which matches the funder name **and** the
+> page title — so a single named programme can be excluded without excluding its funder.
+> That is what this section always asked for and never got: *"that is one program, not
+> the whole County. Other County solicitations stay eligible."*
+>
+> Seeded on the list: the eight below (*already funded by them — no need to reapply*)
+> and the County Equity Impact Grant (*done, no more funding*). Every one is a single
+> click from being searched again.
 
 ### ~~Warm funders (score boost)~~ → the remove list
 

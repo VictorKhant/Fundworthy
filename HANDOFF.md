@@ -102,10 +102,17 @@ The important control is the **tick box on the left**:
 
 New funders can be added with a name and their grants page.
 
-**Nothing is on the remove list to begin with.** The eight funders we had marked as
-"partners" came from your 2025 Impact Report — that is who has funded you *before*,
-which is not the same as who funds you *reliably*. You know which is which; we did not
-want to guess and drop something real.
+**Nine things start on the remove list**, because you told us to:
+
+- the **eight funders you already receive money from** — San Diego Foundation, Alliance
+  Healthcare, Prebys, City Economic Development, City Arts & Culture, California Arts
+  Council, the Morales Fund, the Villegas Fund. Reason recorded as *"already funded by
+  them — no need to reapply"*.
+- the **County Equity Impact Grant**, as *done — no more funding*. Note this removes
+  that one programme, **not** the whole County: other County grants are still searched.
+
+If any of those is wrong — if one of them is a funder you *would* reapply to — tick it
+back on and it returns to the search immediately. Nothing was deleted.
 
 ---
 

@@ -95,10 +95,23 @@ POLITICAL = re.compile(
     re.IGNORECASE,
 )
 
-# §7, verbatim: "done, no more funding."
-EXCLUDED_FUNDERS = {
-    "county of san diego equity impact grant",
-}
+# REMOVED — there is now one exclusion mechanism, not two.
+#
+# This used to be `EXCLUDED_FUNDERS = {"county of san diego equity impact grant"}`,
+# checked against the funder name. Two things were wrong with it:
+#
+#   1. It never fired. Not once, across every recorded run. It matched on `funder`,
+#      and no source is named "County of San Diego Equity Impact Grant" — the registry
+#      has "County of San Diego". It has been sitting here since day one presented as a
+#      working §7 hard filter while rejecting nothing.
+#   2. Even working, it was a second exclusion list. Mauri now has a remove list she
+#      controls; a hardcoded one beside it means "excluded" has two meanings, only one
+#      of which she can see or change.
+#
+# Both now live on the remove list (app/db.py seeds them), which matches on the funder
+# name AND the page title — so a single named PROGRAM can be excluded without excluding
+# the whole funder, which is what §7 actually asked for: "that is one program, not the
+# whole County. Other County solicitations stay eligible."
 
 # NOT in §7. Added after the first crawl surfaced "CALL FOR PANELISTS",
 # "Grant Panels", "Recent Grants Search", and "Volunteer Opportunities" as
@@ -139,9 +152,6 @@ def apply_filters(page: ParsedPage, funder: str, cfg: Config) -> FilterResult:
     text = page.text
     haystack = f"{funder}\n{page.title}\n{text[:6000]}"
     flags: list[Flag] = []
-
-    if funder.strip().casefold() in EXCLUDED_FUNDERS:
-        return FilterResult(True, Reject.EXCLUDED_FUNDER, funder)
 
     if RELIGIOUS.search(funder):
         return FilterResult(True, Reject.RELIGIOUS, funder)

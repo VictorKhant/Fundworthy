@@ -41,7 +41,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path("data/rise.db")
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 # --- schema -------------------------------------------------------------------
 
@@ -201,6 +201,27 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "search_beyond_partners": "0",  # lights up once the discovery provider lands
 }
 
+# Seeded onto the REMOVE LIST, with the reason recorded. RISE already receives money
+# from these and does not want to reapply, so searching them spends tokens producing
+# rows Mauri skips. Each is one click from being searched again if she disagrees.
+#
+# The last entry is not a funder but a PROGRAMME — §7's "done, no more funding". It was
+# previously a hardcoded reject in filters.py that matched on funder name and therefore
+# never fired once. On the remove list it matches the page title, so the programme is
+# excluded and the rest of the County stays eligible, which is what §7 asked for.
+REMOVE_LIST_SEED: dict[str, str] = {
+    "San Diego Foundation": "Already funded by them — no need to reapply",
+    "Alliance Healthcare Foundation": "Already funded by them — no need to reapply",
+    "Prebys Foundation": "Already funded by them — no need to reapply",
+    "City of San Diego Economic Development": "Already funded by them — no need to reapply",
+    "City of San Diego Commission for Arts and Culture":
+        "Already funded by them — no need to reapply",
+    "California Arts Council": "Already funded by them — no need to reapply",
+    "The Morales Fund": "Already funded by them — no need to reapply",
+    "The Villegas Fund": "Already funded by them — no need to reapply",
+    "County of San Diego Equity Impact Grant": "Done — no more funding (CLAUDE.md §7)",
+}
+
 SECTORS = ("warm_partner", "foundation", "government", "arts_agency",
            "intermediary", "corporate", "other")
 
@@ -256,6 +277,7 @@ def init_db(path: Path | str | None = None, *, seed: bool = True) -> None:
             seed_settings(conn)
             seed_programs(conn)
             seed_funders(conn)
+            seed_remove_list_only(conn)
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
@@ -326,6 +348,22 @@ def _migrate(conn: sqlite3.Connection) -> None:
                 if col not in have:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {kind}")
         current = 5
+
+    if current < 6:
+        # v6 puts the eight former partners and the County Equity Impact Grant on the
+        # remove list. Only touches rows Mauri has not already made a decision about —
+        # an empty exclude_reason means nobody has ticked or unticked it — so a database
+        # where she has already chosen is left exactly as she left it.
+        for name, reason in REMOVE_LIST_SEED.items():
+            conn.execute(
+                "UPDATE funders SET active=0, exclude_reason=? "
+                "WHERE lower(name)=lower(?) AND exclude_reason=''",
+                (reason, name),
+            )
+        # NB: no insert here. This runs before seed_funders, so inserting into an empty
+        # table would duplicate every name once seed_funders adds its url-keyed rows.
+        # init_db calls seed_remove_list_only after seeding, for fresh and existing both.
+        current = 6
 
     conn.execute(
         "INSERT INTO meta(key, value) VALUES('schema_version', ?) "
@@ -503,21 +541,52 @@ def seed_funders(conn: sqlite3.Connection) -> None:
     from agent.sources import ALL_SOURCES, sector_for
 
     stamp = now_iso()
+    removed = {k.casefold(): v for k, v in REMOVE_LIST_SEED.items()}
     for s in ALL_SOURCES:
+        reason = removed.get(s.funder.strip().casefold(), "")
         conn.execute(
             """INSERT INTO funders(
-                   id, name, url, sector, funder_type, warm, active, tier,
-                   confidence, programs, adapter, notes, created_at, updated_at)
-               VALUES(?,?,?,?,?,?,1,?,?,?,?,?,?,?)
+                   id, name, url, sector, funder_type, warm, active, exclude_reason,
+                   tier, confidence, programs, adapter, notes, created_at, updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(id) DO UPDATE SET
                    -- Only ever backfill the adapter. Everything else on an existing
                    -- row is Mauri's, and a re-seed must not overwrite her edits.
                    adapter=COALESCE(funders.adapter, excluded.adapter)""",
             (
                 _funder_id(s.funder, s.url), s.funder, s.url, sector_for(s),
-                _funder_type_for(s), int(s.warm), int(s.tier), int(s.confidence),
+                _funder_type_for(s), int(s.warm), 0 if reason else 1, reason,
+                int(s.tier), int(s.confidence),
                 dumps([p.value for p in s.programs]), s.adapter, s.notes, stamp, stamp,
             ),
+        )
+
+
+def seed_remove_list_only(conn: sqlite3.Connection) -> None:
+    """Remove-list entries that are not sources in their own right.
+
+    "County of San Diego Equity Impact Grant" is a PROGRAMME, not a funder — §7 is
+    explicit that the rest of the County stays eligible. It has no registry row to mark,
+    so it gets a row here whose only job is to be on the remove list and be matched
+    against page titles.
+
+    This is also what makes the remove list Mauri's single lever: she can exclude a
+    whole funder or one named programme from the same place, and see both.
+    """
+    stamp = now_iso()
+    existing = {r["name"].casefold() for r in conn.execute("SELECT name FROM funders")}
+    for name, reason in REMOVE_LIST_SEED.items():
+        if name.casefold() in existing:
+            continue
+        conn.execute(
+            """INSERT INTO funders(
+                   id, name, url, sector, funder_type, warm, active, exclude_reason,
+                   tier, confidence, programs, notes, created_at, updated_at)
+               VALUES(?,?,NULL,'other','other',0,0,?,1,0,'[]',?,?,?)
+               ON CONFLICT(id) DO NOTHING""",
+            (_funder_id(name), name, reason,
+             "On the remove list only — a named programme rather than a funder we crawl.",
+             stamp, stamp),
         )
 
 

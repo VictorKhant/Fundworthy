@@ -367,12 +367,18 @@ def test_month_summary_counts(db):
 def test_sources_sharing_a_funder_name_get_separate_rows(db):
     from agent.sources import ALL_SOURCES
 
+    from app.db import REMOVE_LIST_SEED
+
     with session(db) as conn:
         seeded = repo.list_funders(conn)
 
-    assert len(seeded) == len(ALL_SOURCES), (
-        f"{len(ALL_SOURCES)} registry entries seeded {len(seeded)} rows — "
-        "two entries collapsed into one"
+    # The table also holds remove-list-only rows — entries that are not crawl sources,
+    # like the County Equity Impact Grant, which is a PROGRAMME rather than a funder.
+    extra = sum(1 for n in REMOVE_LIST_SEED
+                if n.casefold() not in {s.funder.casefold() for s in ALL_SOURCES})
+    assert len(seeded) == len(ALL_SOURCES) + extra, (
+        f"{len(ALL_SOURCES)} registry entries + {extra} remove-list-only seeded "
+        f"{len(seeded)} rows — something collapsed or duplicated"
     )
     federal = [f for f in seeded if f["name"] == "U.S. Federal Government"]
     assert len(federal) == 2, "Grants.gov and SAM.gov must both survive seeding"
@@ -453,3 +459,92 @@ def test_sqlite_sink_creates_its_own_schema(tmp_path, monkeypatch):
 
     with session() as conn:
         assert len(repo.list_opportunities(conn)) == 1
+
+
+# --- one exclusion mechanism, not two -----------------------------------------
+#
+# filters.py used to carry a hardcoded EXCLUDED_FUNDERS beside the remove list. Two
+# problems: "excluded" meant two different things, only one of which Mauri could see —
+# and the hardcoded one NEVER FIRED. It matched on funder name, and no source is called
+# "County of San Diego Equity Impact Grant"; the registry has "County of San Diego".
+# Zero occurrences across every recorded run, while presenting as a working §7 filter.
+
+def test_the_hardcoded_exclusion_list_is_gone(db):
+    import agent.filters as filters
+
+    assert not hasattr(filters, "EXCLUDED_FUNDERS"), \
+        "exclusion lives on the remove list, which Mauri controls — nowhere else"
+
+
+def test_the_eight_former_partners_ship_on_the_remove_list(db):
+    with session(db) as conn:
+        removed = {f["name"] for f in repo.list_funders(conn) if not f["active"]}
+    for name in ("San Diego Foundation", "Alliance Healthcare Foundation",
+                 "Prebys Foundation", "City of San Diego Economic Development",
+                 "City of San Diego Commission for Arts and Culture",
+                 "California Arts Council", "The Morales Fund", "The Villegas Fund"):
+        assert name in removed, f"{name} should be on the remove list"
+
+
+def test_every_removal_records_why(db):
+    with session(db) as conn:
+        removed = [f for f in repo.list_funders(conn) if not f["active"]]
+    assert removed
+    for f in removed:
+        assert f["exclude_reason"], f"{f['name']} was removed with no reason recorded"
+
+
+def test_a_named_programme_can_be_removed_without_removing_its_funder(db):
+    """§7 verbatim: "that is one program, not the whole County. Other County
+    solicitations stay eligible." Said since day one, implemented only now."""
+    from agent.run import _on_remove_list
+
+    with session(db) as conn:
+        excluded = repo.excluded_funder_names(conn)
+
+    assert _on_remove_list("County of San Diego",
+                           "Equity Impact Grant — County of San Diego", excluded)
+    assert not _on_remove_list("County of San Diego",
+                               "Community Enhancement Program", excluded)
+
+
+def test_removing_a_funder_removes_all_of_its_pages(db):
+    from agent.run import _on_remove_list
+
+    with session(db) as conn:
+        excluded = repo.excluded_funder_names(conn)
+    assert _on_remove_list("California Arts Council", "Grants", excluded)
+    assert _on_remove_list("California Arts Council", "Grant Programs", excluded)
+
+
+def test_a_funder_not_on_the_list_is_untouched(db):
+    from agent.run import _on_remove_list
+
+    with session(db) as conn:
+        excluded = repo.excluded_funder_names(conn)
+    assert not _on_remove_list("The Parker Foundation", "Grant Making", excluded)
+    assert not _on_remove_list("W.K. Kellogg Foundation", "Grantseekers", excluded)
+
+
+def test_removed_funders_are_never_fetched(db):
+    """The cheap half: they do not enter the source registry at all."""
+    from agent.sources import Tier, sources_from_db
+
+    fetchable, _ = sources_from_db(Tier.GOVERNMENT, [])
+    names = {s.funder for s in fetchable}
+    assert "San Diego Foundation" not in names
+    assert "Prebys Foundation" not in names
+    assert "The Parker Foundation" in names, "everyone else still searched"
+
+
+def test_seeding_is_idempotent_and_does_not_duplicate_names(db):
+    """The migration runs before seed_funders, so seeding remove-list rows there hit an
+    empty table and duplicated every name once seed_funders added its url-keyed rows."""
+    from collections import Counter
+
+    init_db(db); init_db(db)
+    with session(db) as conn:
+        names = [f["name"] for f in repo.list_funders(conn)]
+    dupes = [n for n, c in Counter(names).items() if c > 1]
+    # Grants.gov and SAM.gov legitimately share a funder name; nothing else may.
+    assert dupes == ["U.S. Federal Government"], f"unexpected duplicates: {dupes}"
