@@ -192,7 +192,7 @@ Stated plainly, because claiming otherwise is the failure mode the rubric penali
   environment, so Haiku triage and Sonnet scoring are **written and statically checked
   but never executed against the real API.** Verified statically: model IDs, schemas
   (all-required, `additionalProperties: false`), no `temperature`/`top_p`/`top_k`/
-  `budget_tokens` (all 400 on Sonnet 5), `max_tokens` headroom for adaptive thinking.
+  `budget_tokens` (removed/deprecated on Sonnet 4.6), `max_tokens` headroom for adaptive thinking.
   Not verified: that a real call returns what the schema promises. **Treat every score
   in this repo as unproven until someone runs it with a key.**
 - ❌ **Calibration fixtures are not Mauri's.** The harness is real and runs; the ten
@@ -202,7 +202,7 @@ Stated plainly, because claiming otherwise is the failure mode the rubric penali
   TBD pending Mauri's forced-rank (§11 Q5). They are in the scoring prompt as stated,
   labeled PROVISIONAL.
 - ❌ **Prompt caching is off.** The scoring system prompt is ~554 tokens, below
-  Sonnet 5's 1024-token cache minimum, so `cache_control` would be silently ignored.
+  Sonnet 4.6's 2048-token cache minimum, so `cache_control` would be silently ignored.
   The code checks the threshold and only attaches the marker when it would do
   something; it turns on by itself once the Org Profile boilerplate lands.
 

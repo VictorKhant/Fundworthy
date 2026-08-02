@@ -25,15 +25,16 @@ from datetime import date, datetime, timezone
 from .config import Config
 from .models import Opportunity, Program, RawCandidate, stable_id
 from .sources import Source
+from .verify import quote_on_page, year_in_quote
 
 log = logging.getLogger(__name__)
 
-TRIAGE_MODEL = "claude-haiku-4-5"   # §5: Haiku for triage
-SCORING_MODEL = "claude-sonnet-5"   # §5: Sonnet for final scoring
+TRIAGE_MODEL = "claude-haiku-4-5"    # §5: Haiku for triage
+SCORING_MODEL = "claude-sonnet-4-6"  # §5: Sonnet for final scoring
 
-# USD per million tokens. Sonnet 5 has introductory pricing ($2/$10) through
-# 2026-08-31, but we budget at the standard rate: over-estimating spend makes the
-# ceiling stop us early, which is the safe direction to be wrong in.
+# USD per million tokens, standard published rates (Haiku 4.5 $1/$5, Sonnet 4.6
+# $3/$15). We budget at the standard rate: over-estimating spend makes the ceiling
+# stop us early, which is the safe direction to be wrong in.
 PRICING = {
     TRIAGE_MODEL: {"input": 1.00, "output": 5.00},
     SCORING_MODEL: {"input": 3.00, "output": 15.00},
@@ -42,14 +43,14 @@ PRICING = {
 TRIAGE_TEXT_CAP = 8_000     # chars ≈ 2k tokens (§8: "cap at ~2k tokens per candidate")
 SCORING_TEXT_CAP = 12_000
 TRIAGE_MAX_TOKENS = 512
-SCORING_MAX_TOKENS = 8_000  # headroom: max_tokens caps thinking + response on Sonnet 5
+SCORING_MAX_TOKENS = 8_000  # headroom: max_tokens caps thinking + response on Sonnet 4.6
 
-# Sonnet 5 will not cache a prefix shorter than this — a cache_control marker on a
-# shorter prompt is silently ignored, no error and no saving. Today SCORING_SYSTEM is
-# ~554 tokens, so caching is genuinely off; it turns on by itself once the Org Profile
+# Sonnet 4.6 will not cache a prefix shorter than 2048 tokens — a cache_control marker
+# on a shorter prompt is silently ignored, no error and no saving. Today SCORING_SYSTEM
+# is ~554 tokens, so caching is genuinely off; it turns on by itself once the Org Profile
 # boilerplate (§4) lands in the prompt. Asserting the threshold rather than pasting a
 # marker that does nothing keeps the code honest about which it is.
-SONNET_CACHE_MIN_TOKENS = 1024
+SONNET_CACHE_MIN_TOKENS = 2048
 
 
 class BudgetExceeded(RuntimeError):
@@ -89,7 +90,7 @@ class Budget:
 # --- prompts ------------------------------------------------------------------
 
 # Kept byte-stable so it caches across the N scoring calls in a run (min cacheable
-# prefix on Sonnet 5 is 1024 tokens). Nothing per-candidate goes in here.
+# prefix on Sonnet 4.6 is 2048 tokens). Nothing per-candidate goes in here.
 ORG_CONTEXT = """\
 You are screening funding opportunities for RISE San Diego, a nonprofit working \
 across San Diego County and Imperial County (the Far South / Border North region \
@@ -137,6 +138,12 @@ Weights (CLAUDE.md §7 — PROVISIONAL, pending Mauri's forced-rank in §11 Q5):
 Rules you must not break:
 - Judge only what is in the page text given to you. If the amount or deadline is not
   there, say so — never infer, estimate, or recall a number from elsewhere.
+- Whenever you fill award_min_stated / award_max_stated, copy the exact sentence you
+  read it from into award_quote, verbatim. Same for deadline_stated -> deadline_quote,
+  and that sentence MUST include the full date with the year. If a value is not stated
+  verbatim in the page text, set BOTH the value and its quote to null. A quote that is
+  not a literal substring of the page is rejected and the value discarded, so never
+  paraphrase or reconstruct one.
 - estimated_effort_hours is your read of what a competitive application costs this
   team. Above 10 is a real signal, not a rounding error — say so.
 - score_rationale is one sentence, no preamble, no hedging, written for someone
@@ -177,15 +184,32 @@ SCORING_SCHEMA = {
             "type": ["integer", "null"],
             "description": "Only if a per-award maximum appears in the text. Else null.",
         },
+        "award_quote": {
+            "type": ["string", "null"],
+            "description": (
+                "The exact sentence, copied verbatim from the page text, that states the "
+                "award amount(s) above — character-for-character, no paraphrasing. "
+                "null if no award amount appears in the text."
+            ),
+        },
         "deadline_stated": {
             "type": ["string", "null"],
             "description": "YYYY-MM-DD, only if a deadline appears in the text. Else null.",
+        },
+        "deadline_quote": {
+            "type": ["string", "null"],
+            "description": (
+                "The exact sentence, copied verbatim from the page text, that states the "
+                "deadline above. It MUST contain the full date including the year. "
+                "null if no deadline appears in the text."
+            ),
         },
         "needs_human_check": {"type": "boolean"},
     },
     "required": [
         "score", "score_rationale", "program_match", "estimated_effort_hours",
-        "award_min_stated", "award_max_stated", "deadline_stated", "needs_human_check",
+        "award_min_stated", "award_max_stated", "award_quote",
+        "deadline_stated", "deadline_quote", "needs_human_check",
     ],
     "additionalProperties": False,
 }
@@ -278,12 +302,36 @@ def score_one(candidate: RawCandidate, source: Source, cfg: Config,
     cost = budget.record(SCORING_MODEL, resp.usage.input_tokens, resp.usage.output_tokens)
     data = _first_json(resp)
 
+    page_text = candidate.text
+    needs_check = bool(data.get("needs_human_check"))
+
+    # --- Accuracy gate (§6). A stated award/deadline is trusted only if the model
+    # returned the verbatim sentence it read it from AND that sentence is literally on
+    # the page. Anything unverifiable is nulled and flagged — never shown as a number.
+    award_min = data.get("award_min_stated")
+    award_max = data.get("award_max_stated")
+    if (award_min is not None or award_max is not None) and not quote_on_page(
+        data.get("award_quote"), page_text
+    ):
+        log.warning("  ⚠ award unverified (quote not on page) — nulling %s/%s",
+                    award_min, award_max)
+        award_min = award_max = None
+        needs_check = True
+
     deadline = None
-    if data.get("deadline_stated"):
-        try:
-            deadline = date.fromisoformat(data["deadline_stated"])
-        except ValueError:
-            log.warning("unparseable deadline %r — dropping", data["deadline_stated"])
+    deadline_iso = data.get("deadline_stated")
+    if deadline_iso:
+        dquote = data.get("deadline_quote")
+        if quote_on_page(dquote, page_text) and year_in_quote(deadline_iso, dquote):
+            try:
+                deadline = date.fromisoformat(deadline_iso)
+            except ValueError:
+                log.warning("unparseable deadline %r — dropping", deadline_iso)
+                needs_check = True
+        else:
+            log.warning("  ⚠ deadline unverified (quote/year not on page) — dropping %r",
+                        deadline_iso)
+            needs_check = True
 
     programs = [Program(p) for p in data.get("program_match", []) if p in Program.__members__]
 
@@ -291,8 +339,8 @@ def score_one(candidate: RawCandidate, source: Source, cfg: Config,
         id=stable_id(candidate.source_url, candidate.title),
         title=candidate.title[:300],
         funder=candidate.funder,
-        award_min=data.get("award_min_stated"),
-        award_max=data.get("award_max_stated"),
+        award_min=award_min,
+        award_max=award_max,
         deadline=deadline,
         estimated_effort_hours=data.get("estimated_effort_hours"),
         program_match=programs or list(cfg.programs_active),
@@ -300,7 +348,7 @@ def score_one(candidate: RawCandidate, source: Source, cfg: Config,
         score_rationale=str(data["score_rationale"]).strip(),
         source_url=candidate.source_url,
         verified=True,
-        needs_human_check=bool(data.get("needs_human_check")),
+        needs_human_check=needs_check,
         fetched_at=datetime.now(timezone.utc),
     )
     log.info("  scored %3d  %-30s  %s  ($%.5f)",
