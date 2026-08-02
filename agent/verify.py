@@ -57,6 +57,41 @@ def quote_on_page(quote: str | None, page_text: str) -> bool:
     return _squeeze(quote) in _squeeze(page_text)
 
 
+_MONEY_IN_PROSE = re.compile(r"\$\s?\d[\d,]*(?:\.\d+)?\s*[kKmM]?\b")
+
+
+def unsourced_figures(prose: str | None, page_text: str) -> list[str]:
+    """Dollar figures in `prose` that do not appear anywhere in `page_text`.
+
+    The quote gate protects the structured fields. It does not protect the one-sentence
+    rationale — and that is the part Mauri actually reads.
+
+    Found on a real run: the Andy Warhol Foundation result correctly had `award_max =
+    None`, because the model had no quote to back an amount. Its rationale then said
+    "solid average awards (~$80k inferred from public announcements)". The field was
+    honest and the sentence was not, which is worse than either alone: it reads as
+    sourced because everything around it is.
+
+    Comparison is on digits only, so "$80k" written as "80,000" on the page still
+    counts as sourced — we are catching invention, not formatting.
+    """
+    if not prose:
+        return []
+    page_digits = re.sub(r"[^0-9]", "", page_text or "")
+    bad: list[str] = []
+    for match in _MONEY_IN_PROSE.finditer(prose):
+        token = match.group(0)
+        digits = re.sub(r"[^0-9]", "", token)
+        if not digits:
+            continue
+        # "$80k" -> also try the expanded form, since pages write it either way.
+        expanded = digits + "000" if token.rstrip().lower().endswith("k") else None
+        if digits in page_digits or (expanded and expanded in page_digits):
+            continue
+        bad.append(token.strip())
+    return bad
+
+
 def year_in_quote(deadline_iso: str | None, quote: str | None) -> bool:
     """True if the deadline's 4-digit year literally appears in its quote.
 

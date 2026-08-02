@@ -26,7 +26,7 @@ from .config import Config
 from .models import (DeadlineType, FunderType, Opportunity, RawCandidate,
                      SourceKind, stable_id)
 from .sources import Source
-from .verify import quote_on_page, year_in_quote
+from .verify import quote_on_page, unsourced_figures, year_in_quote
 
 log = logging.getLogger(__name__)
 
@@ -213,7 +213,10 @@ Also:
   what the page says about review cycles and award dates. This is a judgement, and it
   is labelled as one; null if you have nothing to go on.
 - score_rationale is one sentence, no preamble, no hedging, written for someone
-  deciding whether to spend ten hours.
+  deciding whether to spend ten hours. It must not contain any dollar figure or date
+  that is not in the page text above. Do not write "awards are typically around $X"
+  from your own knowledge of the funder — a number in this sentence reads as sourced
+  because everything around it is, and it is checked against the page.
 - needs_human_check is NOT "some information was missing". Missing information is the
   normal case — most funders publish neither an amount nor a deadline — and it is
   already reflected in the score. Set it true only when YOU reported something you
@@ -563,6 +566,19 @@ def score_one(candidate: RawCandidate, source: Source, cfg: Config,
         confidence_pct = max(0, min(100, int(confidence_pct)))
 
     active = cfg.programs_active
+    # The rationale is prose, so it never passed through the quote gate — and it is the
+    # part Mauri actually reads. A real run produced `award_max = None` (honest) beside
+    # a sentence saying "~$80k inferred from public announcements" (not). Flag it and
+    # say so on the row rather than silently letting the number stand.
+    rationale = str(data["score_rationale"]).strip()
+    invented = unsourced_figures(rationale, page_text)
+    if invented:
+        log.warning("  ⚠ rationale cites unsourced figure(s) %s — flagging",
+                    ", ".join(invented))
+        rationale = (f"⚠ Mentions {', '.join(invented)}, which is not on the funder's "
+                     f"page — check before relying on it. {rationale}")
+        needs_check = True
+
     programs = [p for p in (data.get("program_match") or []) if p in active]
 
     opp = Opportunity(
@@ -575,7 +591,7 @@ def score_one(candidate: RawCandidate, source: Source, cfg: Config,
         estimated_effort_hours=data.get("estimated_effort_hours"),
         program_match=programs or list(active),
         score=max(0, min(100, int(data["score"]))),
-        score_rationale=str(data["score_rationale"]).strip(),
+        score_rationale=rationale,
         source_url=candidate.source_url,
         verified=True,
         needs_human_check=needs_check,

@@ -191,3 +191,50 @@ def test_a_non_html_content_type_is_refused():
     for bad in ("application/pdf", "image/png", "application/zip",
                 "application/octet-stream", "application/msword"):
         assert not _READABLE_TYPE.match(bad), bad
+
+
+# --- regression: the rationale is prose and never passed the quote gate --------
+#
+# Found on a real scored run. The Andy Warhol Foundation result correctly had
+# award_max = None — the model had no quote to back an amount. Its rationale then read
+# "solid average awards (~$80k inferred from public announcements)". The field was
+# honest and the sentence was not, which is worse than either alone: the number reads
+# as sourced because everything around it is. And the sentence is the part Mauri reads.
+
+PAGE_WITH_AMOUNTS = (
+    "Grants of up to $25,000 are awarded annually. "
+    "Since inception the foundation has distributed 250,000 dollars in total."
+)
+
+
+def test_an_invented_figure_in_the_rationale_is_caught():
+    from agent.verify import unsourced_figures
+
+    assert unsourced_figures(
+        "solid average awards (~$80k inferred from public announcements)",
+        PAGE_WITH_AMOUNTS,
+    ) == ["$80k"]
+
+
+def test_a_figure_that_is_on_the_page_is_not_flagged():
+    from agent.verify import unsourced_figures
+
+    assert unsourced_figures("Awards up to $25,000, which clears the floor",
+                             PAGE_WITH_AMOUNTS) == []
+
+
+def test_formatting_differences_are_not_treated_as_invention():
+    """We are catching invention, not formatting — '$250k' and '250,000' are the
+    same claim, and flagging the second would train everyone to ignore the flag."""
+    from agent.verify import unsourced_figures
+
+    assert unsourced_figures("about $250k distributed", PAGE_WITH_AMOUNTS) == []
+
+
+def test_prose_without_figures_is_left_alone():
+    from agent.verify import unsourced_figures
+
+    assert unsourced_figures("A strong fit for the arts program with real runway.",
+                             PAGE_WITH_AMOUNTS) == []
+    assert unsourced_figures("", PAGE_WITH_AMOUNTS) == []
+    assert unsourced_figures(None, PAGE_WITH_AMOUNTS) == []
