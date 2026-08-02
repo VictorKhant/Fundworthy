@@ -376,3 +376,38 @@ def test_warmth_no_longer_orders_the_funder_list(client):
     """'Partner first' was the ordering the stakeholder asked us to drop."""
     names = [f["name"] for f in client.get("/api/funders").json()["funders"]]
     assert names == sorted(names, key=str.casefold)
+
+
+def test_stopping_a_run_is_not_recorded_as_a_failure():
+    """Pressing Stop sends SIGTERM, so the child exits with a negative code. The pump
+    thread reached _finalize before stop() could mark the row, and a run Mauri ended
+    deliberately reported "failed (exit -15)". Decided from the exit code now, so there
+    is no race to lose."""
+    from app.db import init_db, session
+    from app.runner import RunManager
+    from app import repo
+
+    init_db()
+    with session() as conn:
+        run_id = repo.create_run(conn)
+
+    RunManager()._finalize(run_id, -15)          # SIGTERM
+    with session() as conn:
+        run = repo.get_run(conn, run_id)
+    assert run["status"] == "stopped"
+    assert run["stop_reason"] == "stopped_by_user"
+    assert run["progress"]["message"] == "Stopped by you."
+
+
+def test_a_real_crash_is_still_recorded_as_a_failure(client):
+    from app.runner import RunManager
+    from app import repo
+    from app.db import session
+
+    with session() as conn:
+        run_id = repo.create_run(conn)
+    RunManager()._finalize(run_id, 1)            # non-zero, not a signal
+    with session() as conn:
+        run = repo.get_run(conn, run_id)
+    assert run["status"] == "failed"
+    assert run["stop_reason"] == "exit_1"

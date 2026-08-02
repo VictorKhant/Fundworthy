@@ -169,22 +169,30 @@ class RunManager:
 
     def _finalize(self, run_id: str, code: int) -> None:
         """The agent writes its own run row through the sink. This only has to catch
-        the cases where it could not: a crash, or a stop before the sink ran."""
+        the cases where it could not: a crash, or a stop before the sink ran.
+
+        A NEGATIVE exit code means the process was killed by a signal, which for this
+        app means the Stop button — `stop()` sends SIGTERM. That is not a failure, and
+        it raced: the pump thread got here before stop() could mark the row, so a run
+        Mauri deliberately ended reported "failed (exit -15)". Deciding it here, from
+        the exit code itself, removes the race rather than papering over it.
+        """
+        stopped = code < 0
         try:
             with session() as conn:
                 run = repo.get_run(conn, run_id)
                 if run and run["status"] == "running":
+                    status = "done" if code == 0 else ("stopped" if stopped else "failed")
+                    message = ("Finished." if code == 0 else
+                               "Stopped by you." if stopped else
+                               f"The search failed (exit {code}). The log below says why.")
                     repo.update_run(
                         conn, run_id,
-                        status="done" if code == 0 else "failed",
+                        status=status,
                         stop_reason=run["stop_reason"] or (
-                            None if code == 0 else f"exit_{code}"),
-                        progress=dumps({
-                            "phase": "done" if code == 0 else "failed",
-                            "message": ("Finished." if code == 0 else
-                                        f"The search failed (exit {code}). "
-                                        "The log below says why."),
-                        }),
+                            None if code == 0 else
+                            "stopped_by_user" if stopped else f"exit_{code}"),
+                        progress=dumps({"phase": status, "message": message}),
                     )
                 elif run:
                     repo.update_run(conn, run_id, progress=dumps(

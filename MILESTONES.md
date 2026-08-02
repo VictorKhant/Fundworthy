@@ -19,10 +19,9 @@ the reasoning survives.
 | | |
 |---|---|
 | Verified | 2 |
-| Pending mentor verification | 3 |
-| Unlogged but earned | **1** — the Aug 2 stakeholder conversation (see C1) |
+| Pending mentor verification | **4** |
 | Categories verified | `stakeholder-conversation: 2` |
-| Categories pending | `teammate-hygiene: 2` · `asset-shipped: 1` |
+| Categories pending | `teammate-hygiene: 2` · `asset-shipped: 1` · `stakeholder-conversation: 1` |
 
 ⚠️ **Pending milestones are invisible on the board.** `/leaderboard` only reports
 *verified* categories, which is why M3 looked unlogged until we checked our own records.
@@ -194,9 +193,40 @@ real software, real runs, no deployment, no user yet.
 
 ---
 
+### M6 — Stakeholder conversation (pending ⏳)
+
+| | |
+|---|---|
+| **Category** | `stakeholder-conversation` |
+| **Event ID** | `rec0A45d4IlMF2JHt` |
+| **Logged by** | Phyo Thant |
+| **When** | Sun Aug 2, 2026 |
+| **Source** | self_reported → **pending** |
+| **Evidence** | `STAKEHOLDER.md` on main |
+
+**Who:** Mauri Hamilton, COO, RISE San Diego — the second conversation, not the intake.
+
+**Why this is the strongest one on the board:** it is not "we showed them a demo". She
+told us two things and the product was rebuilt on both, inside the same day.
+
+| She said | What changed |
+|---|---|
+| "We don't want opportunities from funders we're already warm with — we get those cheques without reapplying" | Funder warmth went from a **+20 scoring weight and the first key in the spend ordering** to a reason to **exclude**. The partner list was replaced by 44 researched, URL-verified funders. |
+| The forced-rank: program fit, funding amount, how long the application takes against the deadline, the 990 | §11 Q5 — open in the spec since Saturday — is **answered**. Weights are now **40 / 35 / 25**, hers not ours. |
+| "There are two kinds of time-sensitivity" | Two separate fields where we had one "effort" number: calendar days to be ready to submit, and days from submitting to money in the bank. |
+
+**Caveats stated in the note itself:** written from a relay by the teammate who was on
+the call, so no verbatim quotes and no exact time; and **Mauri still has not used the
+tool**.
+
+**Evidence of what changed:** `evidence/README.md` E17 · `docs/DECISIONS.md` C1–C9 ·
+`STAKEHOLDER.md` Q5 and Q13.
+
+---
+
 ## Not yet submitted — candidates
 
-### C1 — Stakeholder conversation (Sun Aug 2) — **log this**
+### ~~C1 — Stakeholder conversation (Sun Aug 2)~~ — **LOGGED as M6 above**
 
 A second conversation with RISE happened on Aug 2 and it **changed the product**, which
 is the strongest kind of stakeholder evidence there is: not "we showed them a demo" but

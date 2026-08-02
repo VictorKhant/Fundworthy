@@ -571,6 +571,13 @@ async def main_async(args: argparse.Namespace) -> int:
         format="%(message)s",
         stream=sys.stdout,
     )
+    # httpx logs every request at INFO, which drowns the run's own output — hundreds of
+    # "HTTP Request: GET ... 200 OK" lines around the handful that say what happened.
+    # It is also what the dashboard streams under the Re-run button, so Mauri was
+    # reading raw request logs instead of progress. -v still turns it back on.
+    if not args.verbose:
+        for noisy in ("httpx", "httpcore", "urllib3"):
+            logging.getLogger(noisy).setLevel(logging.WARNING)
 
     run = RunLog(started_at=datetime.now(timezone.utc))
 
