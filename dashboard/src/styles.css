@@ -404,19 +404,21 @@ tbody tr:last-child td { border-bottom: none; }
 
 /* --- findings -------------------------------------------------------------- */
 
+.findings { margin-bottom: 30px; }
+.findings h2 { font-size: 21px; margin: 0 0 4px; }
+.findings-note { margin: 0 0 14px; color: var(--muted); font-size: 13.5px; }
+
 .opps { display: flex; flex-direction: column; gap: 12px; }
 .opp {
-  /* 4.25rem, not 3rem: the badge carries a "fit · AI" label under the number, and the
-     label is wider than the number it describes. At 3rem it spilled past the card. */
-  display: grid; grid-template-columns: 4.25rem minmax(0, 1fr); gap: 16px;
   border: 1px solid var(--line); border-radius: 14px;
   padding: 16px 18px; background: var(--card);
 }
-/* A grid column defaults to min-width:auto, so it refuses to shrink below its widest
+.opp-row { display: flex; gap: 16px; align-items: flex-start; }
+/* A flex item defaults to min-width:auto, so it refuses to shrink below its widest
    unbreakable word. Funder URLs and long grant titles have no break opportunity, so the
-   column grew past the card border instead of wrapping. minmax(0, 1fr) above and this
-   min-width let it shrink; overflow-wrap then breaks the long token itself. */
-.opp-body { min-width: 0; }
+   body grew past the card border instead of wrapping. min-width:0 lets it shrink;
+   overflow-wrap then breaks the long token itself. */
+.opp-body { flex: 1; min-width: 0; }
 .opp-title, .opp-why, .opp-funder, .opp-meta a { overflow-wrap: anywhere; }
 
 /* The flagged block reads as a whole card, not a card with a stripe. The 3px
@@ -424,9 +426,28 @@ tbody tr:last-child td { border-bottom: none; }
    different" without implying a severity ramp we do not have. */
 .opp.flagged { border-color: var(--clay-line); }
 
+.opp-toggle { flex-shrink: 0; white-space: nowrap; padding: 4px 0; font-size: 13px; }
+.opp-detail {
+  margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line-soft);
+  display: flex; flex-direction: column; gap: 10px;
+}
+.opp-detail .opp-meta { margin-top: 0; }
+.opp-why-label { font-family: var(--display); font-style: italic; color: var(--muted); }
+.opp-links { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; font-size: 13.5px; }
+.opp-links .strong-link { font-weight: 500; }
+.opp-links .muted-link { color: var(--muted); }
+.opp-links .muted-link:hover { color: var(--body); }
+
+/* Narrow windows: the toggle drops under the body rather than squeezing the title. */
+@media (max-width: 620px) {
+  .opp-row { flex-wrap: wrap; }
+  .opp-toggle { margin-left: 68px; }
+}
+
 .opp-score {
   font-family: var(--display); font-size: 26px; font-weight: 500;
   text-align: center; color: var(--accent); line-height: 1.1;
+  min-width: 52px; padding-top: 2px; flex-shrink: 0;
 }
 /* The badge holds the AI's fit estimate, which is a judgement and not a figure read off
    the funder's page. It is the biggest number on the row, so the inferred marking has to
