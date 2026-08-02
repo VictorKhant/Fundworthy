@@ -38,7 +38,6 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
-from .models import Program
 from .parse import Evidence, ParsedPage, _parse_date
 
 log = logging.getLogger(__name__)
@@ -59,9 +58,17 @@ class ApiResult:
     # Free rejects made inside the adapter, folded into the run's reject counters
     # so the Runs tab shows them next to every other zero-cost filter.
     rejected: dict[str, int] = field(default_factory=dict)
+    # Things Mauri needs to READ, as opposed to `note`, which describes what the
+    # adapter did. A ticked program that searched nothing belongs here: it is an
+    # action she can take, not a statistic, and burying it in a source's detail line
+    # means the one person who can fix it never sees it.
+    warnings: list[str] = field(default_factory=list)
 
     def reject(self, reason: str) -> None:
         self.rejected[reason] = self.rejected.get(reason, 0) + 1
+
+    def warn(self, message: str) -> None:
+        self.warnings.append(message)
 
 
 def _first(record: dict, *names: str) -> str:
@@ -123,17 +130,22 @@ CA_PACKAGE = "california-grants-portal"
 # free, structured relevance: without it every run pays Haiku to read dairy, archery
 # and dam-safety grants. A record with no category at all is kept, following the same
 # permissive convention as the geography filter — absence is not exclusion.
-CA_CATEGORIES: dict[Program, set[str]] = {
-    Program.RULFP: {
+# Keyed by program SLUG rather than by the old three-value enum. RISE has seven
+# programs and Mauri can create more from the dashboard, so anything keyed on a fixed
+# enum silently ignores every program beyond the original three — which is worse than
+# it sounds, because the fallback below then searches ALL categories, making her
+# program selection do nothing at all for this source.
+CA_CATEGORIES: dict[str, set[str]] = {
+    "RULFP": {
         "Education",
         "Employment, Labor & Training",
         "Housing, Community and Economic Development",
     },
-    Program.RESILIENCE: {
+    "RESILIENCE": {
         "Health & Human Services",
         "Employment, Labor & Training",
     },
-    Program.ARTS: {
+    "ARTS": {
         "Libraries and Arts",
     },
 }
@@ -192,8 +204,34 @@ async def fetch_ca_grants_portal(fetcher, cfg) -> ApiResult:
         return ApiResult(note="portal answered with zero active grants")
 
     result = ApiResult()
-    wanted = {c for p in CA_CATEGORIES if p in cfg.programs_active
-              for c in CA_CATEGORIES[p]} or set().union(*CA_CATEGORIES.values())
+
+    # Categories for the ticked programs. A program with no mapping (anything beyond
+    # the three we tuned) contributes nothing here, so the run says which ones and why
+    # rather than either silently narrowing to the other programs' categories or
+    # silently widening to everything. Both of those look identical to a working
+    # filter from the outside, and one of them quietly drops her opportunities.
+    active = list(cfg.programs_active)
+    mapped = [p for p in active if p in CA_CATEGORIES]
+    unmapped = [p for p in active if p not in CA_CATEGORIES]
+
+    if not mapped:
+        # Nothing ticked has a category mapping. Filtering on an empty set would reject
+        # every row; filtering on all categories would ignore her selection entirely.
+        # Neither is honest, so we don't narrow, and we say so.
+        wanted = set().union(*CA_CATEGORIES.values())
+        result.warn(
+            "No ticked program matches a California funding category "
+            f"({', '.join(active) or 'nothing is ticked'}), so every category was "
+            "searched. Expect more California results to review than usual."
+        )
+    else:
+        wanted = {c for p in mapped for c in CA_CATEGORIES[p]}
+        if unmapped:
+            result.warn(
+                f"California was searched for {', '.join(mapped)} only. "
+                f"{', '.join(unmapped)} has no California funding category on file, so "
+                "nothing was searched for it there — Grants.gov still covers it."
+            )
 
     for rec in records:
         title = _first(rec, "Title", "GrantTitle", "title")
@@ -256,7 +294,11 @@ async def fetch_ca_grants_portal(fetcher, cfg) -> ApiResult:
             notes=[f"California Grants Portal · {agency}"],
         ))
 
-    result.note = f"{len(result.pages)} of {len(records)} active CA grants are on-mission"
+    # Appended, not assigned: the category-coverage note set before the loop explains
+    # WHICH programs were searched for, and overwriting it here would delete the only
+    # signal that a ticked program contributed nothing.
+    summary = f"{len(result.pages)} of {len(records)} active CA grants are on-mission"
+    result.note = f"{summary} · {result.note}" if result.note else summary
     return result
 
 
@@ -265,12 +307,37 @@ async def fetch_ca_grants_portal(fetcher, cfg) -> ApiResult:
 GG_SEARCH = "https://api.grants.gov/v1/api/search2"
 GG_DETAIL = "https://api.grants.gov/v1/api/fetchOpportunity"
 
-# §7: three programs, three vocabularies. Never one search across all three.
-GG_KEYWORDS: dict[Program, str] = {
-    Program.RULFP: "community leadership development civic engagement",
-    Program.RESILIENCE: "behavioral health workforce wellness resilience",
-    Program.ARTS: "arts culture creative community",
+# §7: one vocabulary per program, never one search across all of them.
+#
+# These are the tuned defaults for the three programs we had when this adapter was
+# written, keyed by slug. They are DEFAULTS, not the whole story: a program Mauri
+# creates has no entry here and draws its vocabulary from its own card instead
+# (ProgramCard.api_vocabulary). Keeping them means her federal results for the three
+# priority programs do not change shape because someone edited a keyword list.
+GG_SEED_KEYWORDS: dict[str, str] = {
+    "RULFP": "community leadership development civic engagement",
+    "RESILIENCE": "behavioral health workforce wellness resilience",
+    "ARTS": "arts culture creative community",
 }
+
+
+def program_vocabularies(cfg) -> tuple[list[tuple[str, str]], list[str]]:
+    """(searchable, skipped) — what to search for, and which cards had nothing to give.
+
+    Returns the ticked programs paired with their search terms, plus the slugs of any
+    ticked program whose card is still empty. An empty card is a real state — four of
+    RISE's seven ship that way on purpose — and the honest response is to search
+    nothing for it and say so, not to invent terms from the programme's internal name.
+    """
+    searchable: list[tuple[str, str]] = []
+    skipped: list[str] = []
+    for card in cfg.programs:
+        terms = card.api_vocabulary(GG_SEED_KEYWORDS.get(card.slug))
+        if terms:
+            searchable.append((card.slug, terms))
+        else:
+            skipped.append(card.slug)
+    return searchable, skipped
 
 
 async def fetch_grants_gov(fetcher, cfg) -> ApiResult:
@@ -280,26 +347,43 @@ async def fetch_grants_gov(fetcher, cfg) -> ApiResult:
     the field MIN_AWARD filters on (§7). So a bounded number of detail lookups is the
     difference between a usable federal feed and a pile of amount-not-stated rows.
     """
-    programs = [p for p in GG_KEYWORDS if p in cfg.programs_active] or list(GG_KEYWORDS)
+    searchable, skipped = program_vocabularies(cfg)
+
+    result = ApiResult()
+    if skipped:
+        # Loud, not silent. She ticked it, so she is expecting results from it, and a
+        # program that quietly searched nothing is indistinguishable from one that
+        # searched and found nothing — which is the ambiguity this whole project exists
+        # to remove.
+        result.warn(
+            f"Nothing was searched for {', '.join(skipped)} — "
+            f"{'those program cards are' if len(skipped) > 1 else 'that program card is'}"
+            " still empty. Open it, press Edit, and paste the program's page to fill it in."
+        )
+        log.warning("Grants.gov: %s", result.warnings[-1])
+
+    if not searchable:
+        result.note = "no program had search terms to look for"
+        return result
 
     searches = await asyncio.gather(*(
         fetcher.fetch_json(
             GG_SEARCH,
             method="POST",
             json_body={
-                "keyword": GG_KEYWORDS[p],
+                "keyword": terms,
                 "oppStatuses": "posted|forecasted",
                 "rows": GG_ROWS_PER_PROGRAM,
             },
         )
-        for p in programs
+        for _slug, terms in searchable
     ))
 
-    hits: dict[str, tuple[dict, Program]] = {}
+    hits: dict[str, tuple[dict, str]] = {}
     errors: list[str] = []
-    for program, (payload, error) in zip(programs, searches):
+    for (program, _terms), (payload, error) in zip(searchable, searches):
         if error:
-            errors.append(f"{program.value}: {error}")
+            errors.append(f"{program}: {error}")
             continue
         data = (payload or {}).get("data") or {}
         for hit in data.get("oppHits", []) or []:
@@ -308,18 +392,21 @@ async def fetch_grants_gov(fetcher, cfg) -> ApiResult:
                 hits[key] = (hit, program)
 
     if not hits:
+        # Reuse `result` rather than building a fresh one: it already carries the
+        # empty-card warnings, and returning a new ApiResult here would drop exactly
+        # the message that explains why there were no hits.
         if errors:
-            return ApiResult(error="; ".join(errors))
-        return ApiResult(note="no federal hits for the active program keywords")
-
-    result = ApiResult()
+            result.error = "; ".join(errors)
+            return result
+        result.note = "no federal hits for the active program keywords"
+        return result
 
     # Apply the runway floor BEFORE spending detail lookups. search2 already gives us
     # closeDate for free, and §7 rejects anything inside the floor — so ordering by
     # "soonest" without this spends the entire detail budget on the twelve
     # opportunities guaranteed to be thrown away seconds later.
     floor = date.today() + timedelta(days=cfg.min_deadline_runway_days)
-    eligible: list[tuple[dict, Program, date]] = []
+    eligible: list[tuple[dict, str, date]] = []
     for hit, program in hits.values():
         closes = _parse_date(_first(hit, "closeDate", "close_date"))
         if closes is None:
@@ -378,7 +465,7 @@ async def fetch_grants_gov(fetcher, cfg) -> ApiResult:
             "Geography: national — open to applicants nationwide unless stated otherwise.",
         ) if x)
 
-        notes = [f"Grants.gov · {number}", f"program vocabulary: {program.value}"]
+        notes = [f"Grants.gov · {number}", f"program vocabulary: {program}"]
         if detail_error:
             # Honest: we have the listing but not the money. It will land in the
             # amount-not-stated block rather than being ranked on a guess.

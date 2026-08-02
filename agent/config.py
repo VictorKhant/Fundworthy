@@ -58,6 +58,36 @@ class ProgramCard:
     def floor(self, global_min: int) -> int:
         return self.min_award if self.min_award is not None else global_min
 
+    @property
+    def is_described(self) -> bool:
+        """Has anyone actually said what this program is looking for?
+
+        The four non-priority cards ship with a name and a real URL and nothing else,
+        because inventing a description of a real organisation's programme is the
+        failure §6 forbids for award amounts. Ticking one of those is a real state, and
+        every search path has to handle it by saying so rather than by guessing.
+        """
+        return bool(self.keywords or self.search_queries)
+
+    def api_vocabulary(self, default: str | None = None) -> str | None:
+        """Search terms for a keyword API, or None if this card can't supply any.
+
+        Order matters. A keyword API wants a handful of words: `search_queries` are
+        written for a general web search ("arts and social justice grant California")
+        and over-narrow a federal index that has no notion of California, so a curated
+        `default` for a program we already tuned wins over them. Cards Mauri creates
+        have no default, so their own keywords drive the search — which is the whole
+        point of making the cards editable.
+        """
+        if default:
+            return default
+        if self.keywords:
+            # Capped: a query built from every phrase on the card matches nothing.
+            return " ".join(self.keywords[:4])
+        if self.search_queries:
+            return self.search_queries[0]
+        return None
+
 
 DEFAULT_PROGRAMS = [
     ProgramCard(slug="RULFP", name="RISE Urban Leadership Fellows Program"),

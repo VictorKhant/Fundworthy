@@ -176,6 +176,12 @@ async def crawl(cfg: Config, run: RunLog,
                     status=SourceStatus.OK, detail=result.note,
                 ))
                 log.info("  ✓ %-46s %s", source.funder, result.note)
+                # Warnings are things Mauri can act on — a ticked program whose card is
+                # empty searched nothing. They go in the run notes, where she reads
+                # them, not only in this source's detail line.
+                for warning in result.warnings:
+                    run.notes.append(warning)
+                    log.warning("  ⚠ %s", warning)
                 for key, count in result.rejected.items():
                     run.rejected_by_filter[key] = run.rejected_by_filter.get(key, 0) + count
                 for page in result.pages:
