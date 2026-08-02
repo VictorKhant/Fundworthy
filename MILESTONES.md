@@ -19,9 +19,9 @@ the reasoning survives.
 | | |
 |---|---|
 | Verified | 2 |
-| Pending mentor verification | 2 |
+| Pending mentor verification | 3 |
 | Categories verified | `stakeholder-conversation: 2` |
-| Categories pending | `teammate-hygiene: 2` |
+| Categories pending | `teammate-hygiene: 2` · `asset-shipped: 1` |
 
 ⚠️ **Pending milestones are invisible on the board.** `/leaderboard` only reports
 *verified* categories, which is why M3 looked unlogged until we checked our own records.
@@ -152,14 +152,52 @@ of logging.
 
 ---
 
+### M5 — Asset shipped (pending ⏳)
+
+| | |
+|---|---|
+| **Category** | `asset-shipped` |
+| **Event ID** | `reczuyUvwJaTBXwoD` |
+| **Logged by** | Phyo Thant |
+| **When** | Sun Aug 2, 2026 — immediately after `main` was pushed |
+| **Source** | self_reported → **pending** |
+| **Evidence** | https://github.com/VictorKhant/Rise-Fund-Finder |
+
+**What shipped:** `./start.sh` brings up a local FastAPI + React app — program cards to
+tick, an editable partner-funder list, an encrypted write-only API-key box, a monthly
+archive that makes repeat findings cost nothing, and a Re-run button that streams live
+output and can be stopped. The agent behind it has run end to end against live funder
+pages and two public grant databases for **$0.2265** against a $1.00 hard ceiling, with
+**211 of 216 candidates rejected before any model call**. 84 offline tests.
+
+**Timing was deliberate.** This was held back until `main` was pushed. The category says
+*"live and **reachable**"*, and with everything sitting in unpushed local commits that
+word was genuinely contestable. One `git push` turned an arguable claim into an
+evidence-URL.
+
+**Caveats put in the note itself, not left for a mentor to find:**
+- it runs locally by design and is **not deployed**;
+- **nobody at RISE has used it**, so everything about how it fits Mauri's week is a guess;
+- the two public grant databases produced **zero** usable results in the one scored run
+  so far (evidence E15).
+
+**The defence on "reachable by whom?"** — the artifact is reachable: repo, code, docs,
+one command. The app being local is a *documented decision*, not a gap: it stores an API
+key, and `CLAUDE.md` §3 rules out auth for v1, so not being network-reachable is what
+makes "no login" honest rather than a hole. `HANDOFF.md` lists the four things that must
+change before it is ever exposed.
+
+**Honest self-rating:** weaker than M3/M4. Those are unusually strong — E12 and E16 are
+what "steering AI teammates well" actually looks like. This one is solid but ordinary:
+real software, real runs, no deployment, no user yet.
+
+---
+
 ## Not yet submitted — candidates
 
-### C1 — Asset shipped (hold until pushed)
-
-The app runs (`./start.sh` → `localhost:8000`), 66 tests pass, 10 commits are on
-`phyo-build`. But the category says *"live and **reachable**"* and right now the commits
-are **local only and unpushed**, so nobody but us can reach any of it. Logging it after
-the push — with the repo URL as evidence — turns a contestable claim into a solid one.
+Nothing queued. The next one worth logging is a **stakeholder conversation** the first
+time someone at RISE opens the app — that would also let M5's "nobody has used it"
+caveat be retired.
 
 ---
 
