@@ -503,7 +503,7 @@ Stated plainly, because claiming otherwise is the failure mode the rubric penali
 # or, the pipeline on its own:
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
-.venv/bin/python -m pytest tests/ -q              # 66 tests, offline, no key
+.venv/bin/python -m pytest tests/ -q              # 126 tests, offline, no key
 .venv/bin/python -m agent.run --no-llm            # free tiers only, $0.00
 .venv/bin/python -m tests.calibration --dry-run   # the §10 test, filters only
 
