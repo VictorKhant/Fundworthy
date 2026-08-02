@@ -95,7 +95,6 @@ th, td {
   white-space: nowrap;
 }
 th { font-weight: 600; color: var(--muted); font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; }
-td.notes { white-space: normal; min-width: 22rem; color: var(--muted); font-size: .82rem; }
 tbody tr:last-child td { border-bottom: none; }
 
 .empty {

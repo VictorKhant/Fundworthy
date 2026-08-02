@@ -43,6 +43,11 @@ class Config:
     run_day: str = "Wednesday"
     run_time: str = "23:00"
     max_tier: Tier = Tier.WARM               # crawl scope; tier 1 for Block 1
+    # Balanced mode: take at most this many from each source kind (funder pages vs
+    # indexed databases) instead of one combined cap. Off by default — see the design
+    # note in §8: a per-kind quota makes the agent pad a thin category rather than
+    # report that the category was thin, which is the failure the cap exists to avoid.
+    per_kind_cap: int | None = None
     weekly_budget_usd: float = 1.00          # hard ceiling (§8)
     min_deadline_runway_days: int = 14       # reject inside this window (§7)
 

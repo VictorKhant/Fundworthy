@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 
 from .config import Config
-from .models import Opportunity, Program, RawCandidate, stable_id
+from .models import Opportunity, Program, RawCandidate, SourceKind, stable_id
 from .sources import Source
 
 log = logging.getLogger(__name__)
@@ -302,6 +302,8 @@ def score_one(candidate: RawCandidate, source: Source, cfg: Config,
         verified=True,
         needs_human_check=bool(data.get("needs_human_check")),
         fetched_at=datetime.now(timezone.utc),
+        source_kind=(SourceKind.INDEXED_DATABASE if source.is_api
+                     else SourceKind.FUNDER_PAGE),
     )
     log.info("  scored %3d  %-30s  %s  ($%.5f)",
              opp.score, opp.funder[:30], opp.title[:40], cost)

@@ -93,7 +93,13 @@ export default async function handler(req, res) {
     }
 
     const [runValues, configValues] = await Promise.all([
-      readRange(client, sheetId, "Runs!A1:K200"),
+      // Column range is deliberately wider than the Runs tab currently is. The sink
+      // appends new columns on the right as the agent learns to report more, and a
+      // range pinned to the exact width silently truncates them — the page keeps
+      // rendering, just without the newest column, which is the hardest kind of
+      // missing data to notice. toObjects() keys off the header row, so extra empty
+      // columns cost nothing.
+      readRange(client, sheetId, "Runs!A1:Z200"),
       readRange(client, sheetId, "Config!A1:C40").catch(() => []),
     ]);
 

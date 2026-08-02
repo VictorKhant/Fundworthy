@@ -12,6 +12,49 @@ function money(n) {
   return `$${Number(n || 0).toFixed(2)}`;
 }
 
+const RUN_TIME_COLUMN = "When it ran";
+
+// Rows the agent wrote before it switched to Pacific carry a UTC stamp, so the column
+// would otherwise mix timezones and read as though runs jumped seven hours. Converting
+// here rather than rewriting the Sheet keeps the log honest about what it recorded:
+// the stored value stays UTC, only the display is normalized.
+//
+// The zone label comes from Intl, not a constant. Pacific is PDT from March to
+// November — hardcoding "PST" would be an hour wrong for most of the year.
+function toPacific(stamp) {
+  const s = String(stamp || "").trim();
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})(?::\d{2})?\s*([A-Z]{2,5})?$/);
+  if (!m) return s;
+
+  const [, date, time, zone] = m;
+  if (zone && zone !== "UTC") return s; // already Pacific — leave it alone
+
+  const d = new Date(`${date}T${time}:00Z`);
+  if (Number.isNaN(d.getTime())) return s;
+
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Los_Angeles",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+    timeZoneName: "short",
+  }).formatToParts(d);
+  const get = (t) => parts.find((p) => p.type === t)?.value ?? "";
+
+  return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")} ${get("timeZoneName")}`;
+}
+
+// Splits the zone off a stamp so it can render as a caption beside the time.
+function stampZone(stamp) {
+  const m = String(stamp || "").match(/\s([A-Z]{2,5})$/);
+  return m ? m[1] : "";
+}
+
+function stampTime(stamp) {
+  if (!stamp) return "never";
+  const zone = stampZone(stamp);
+  return zone ? String(stamp).slice(0, -(zone.length + 1)).trim() : String(stamp);
+}
+
 function Stat({ label, value, sub, tone = "" }) {
   return (
     <div className={`stat ${tone}`}>
@@ -70,7 +113,13 @@ export default function App() {
   }
 
   const { configured, reason, error, runs = [], totals = {}, config = {} } = state.data;
-  const columns = runs.length ? Object.keys(runs[0]) : [];
+  // Notes is a single cell holding every reject tally and every warning from the run,
+  // which is thousands of characters and drowns the table it sits in. It stays in the
+  // Runs tab of the Sheet — this page just doesn't render it.
+  const HIDDEN_COLUMNS = ["Notes"];
+  const columns = runs.length
+    ? Object.keys(runs[0]).filter((c) => !HIDDEN_COLUMNS.includes(c))
+    : [];
   const minAward = config.MIN_AWARD;
   // The agent ships a $25,000 placeholder; §11 Q1 says do not guess at this.
   const awardIsPlaceholder = !minAward || String(minAward).replace(/[^0-9]/g, "") === "25000";
@@ -105,8 +154,8 @@ export default function App() {
             {/* The timestamp is long enough to wrap onto two lines at the stat's
                 default size, so it renders one step smaller. */}
             <Stat label="Last run"
-                  value={(totals.lastRun || "never").replace(" UTC", "")}
-                  sub={`${totals.runCount || 0} run${totals.runCount === 1 ? "" : "s"} logged${totals.lastRun ? " · UTC" : ""}`}
+                  value={stampTime(toPacific(totals.lastRun))}
+                  sub={`${totals.runCount || 0} run${totals.runCount === 1 ? "" : "s"} logged${stampZone(toPacific(totals.lastRun)) ? ` · ${stampZone(toPacific(totals.lastRun))}` : ""}`}
                   tone="compact" />
             <Stat label="Spent to date" value={money(totals.spendToDate)}
                   sub={`ceiling ${money(MONTHLY_CEILING)}/month`} />
@@ -144,8 +193,8 @@ export default function App() {
                     {runs.map((run, i) => (
                       <tr key={i}>
                         {columns.map((c) => (
-                          <td key={c} className={c === "Notes" ? "notes" : ""}>
-                            {run[c]}
+                          <td key={c}>
+                            {c === RUN_TIME_COLUMN ? toPacific(run[c]) : run[c]}
                           </td>
                         ))}
                       </tr>

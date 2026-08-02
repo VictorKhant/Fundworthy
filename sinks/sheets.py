@@ -17,10 +17,11 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
-from agent.models import Opportunity, RunLog
+from agent.models import Opportunity, RunLog, SourceKind
 
-from .base import split_sections
+from .base import coverage_banner, split_sections
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ ARCHIVE_PREFIX = "Archive"   # last week's brief is snapshotted to "Archive <dat
 HEADERS = [
     "Score",
     "Why this one",          # score_rationale — kept early, she reads left to right
+    "Where it came from",    # provenance — a curated funder page vs a public database
     "Funder",
     "Opportunity",
     "Award (low)",
@@ -45,10 +47,14 @@ HEADERS = [
     "id",                    # last: bookkeeping, not for reading
 ]
 
+# New columns go on the END, never in the middle. The Runs tab is append-only and
+# already has history in it; inserting a column would leave every existing row's
+# values sitting one column left of the header that now names them.
 RUN_HEADERS = [
     "When it ran", "Minutes", "Funders checked", "Couldn't reach",
     "Pages read", "Ruled out for free", "Brought to you", "Amount not stated",
     "Cost", "How it ended", "Notes",
+    "Which ones failed",
 ]
 
 # §9: no technical vocabulary on anything Mauri reads. StopReason values are for
@@ -59,12 +65,43 @@ STOP_REASON_PLAIN = {
     "sources_exhausted": "Checked every funder on the list",
     "disabled": "You had turned it off (ENABLED was FALSE)",
     "error": "Something went wrong — see Notes",
+    "partial": "Something broke partway — the results above are what it got first",
 }
 
 SECTION_BANNER = (
     "AMOUNT NOT STATED ON THE FUNDER'S PAGE — these need a human look. "
     "They are not ranked, because there is no award amount to rank them by."
 )
+
+KIND_BANNER = {
+    SourceKind.FUNDER_PAGE: (
+        "FROM FUNDERS WE WATCH DIRECTLY — read off the funder's own page. These are "
+        "organizations on RISE's list, several of them already warm."
+    ),
+    SourceKind.INDEXED_DATABASE: (
+        "FROM PUBLIC GRANT DATABASES — the California Grants Portal and Grants.gov. "
+        "Complete public lists, so these are cold leads: nobody at RISE has a "
+        "relationship with these funders yet."
+    ),
+}
+
+
+# Everything Mauri reads is in her own timezone. The agent runs Wednesday 11pm PT so
+# the brief is waiting Thursday morning (§9) — in UTC that run is stamped Thursday,
+# which reads as a day late for a job that ran on time.
+#
+# The zone is America/Los_Angeles, not a fixed -8 offset: Pacific is PDT for most of
+# the year and PST only from November to March. %Z prints whichever is actually in
+# force, so the label is never wrong by an hour.
+PACIFIC = ZoneInfo("America/Los_Angeles")
+
+
+def _pacific(when: datetime) -> datetime:
+    """UTC timestamp -> Pacific. Naive datetimes are assumed UTC, which is what the
+    agent produces (`datetime.now(timezone.utc)`)."""
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return when.astimezone(PACIFIC)
 
 
 def _fmt_money(value: int | None) -> str:
@@ -76,6 +113,7 @@ def _row(opp: Opportunity) -> list:
     return [
         opp.score if opp.award_max is not None else "",
         opp.score_rationale,
+        opp.source_kind.label,
         opp.funder,
         opp.title,
         _fmt_money(opp.award_min),
@@ -86,7 +124,9 @@ def _row(opp: Opportunity) -> list:
         ", ".join(p.value for p in opp.program_match),
         "YES" if opp.needs_human_check else "",
         opp.source_url,
-        opp.fetched_at.strftime("%Y-%m-%d"),
+        # Pacific, so "Found on" matches the day the run actually happened. A late
+        # Wednesday-night run is already Thursday in UTC.
+        _pacific(opp.fetched_at).strftime("%Y-%m-%d"),
         opp.id,
     ]
 
@@ -111,15 +151,51 @@ class SheetsSink:
         self._gc = gspread.service_account(filename=self.credentials_path)
         self._book = self._gc.open_by_key(self.sheet_id)
 
-    def _tab(self, title: str, headers: list[str]):
+    def _tab(self, title: str, headers: list[str], *, rewritable: bool = False):
+        """Fetch or create a tab, reconciling its header row with `headers`.
+
+        `rewritable` says whether this tab's rows are replaced wholesale every run.
+        It decides how far reconciliation is allowed to go:
+
+        - Runs is append-only and holds history, so the header may only be *extended*
+          on the right. Rewriting it would rename the columns sitting above existing
+          rows, which silently changes what every past row claims to say.
+        - Opportunities is archived and cleared on every write, so no row outlives its
+          header. A full rewrite is safe there, and it is the only way a new column can
+          be placed anywhere except last — which matters, because Mauri reads this tab
+          left to right and provenance belongs near the front, not past the id column.
+        """
         import gspread
+        from gspread.utils import rowcol_to_a1
 
         try:
             ws = self._book.worksheet(title)
         except gspread.WorksheetNotFound:
-            ws = self._book.add_worksheet(title=title, rows=200, cols=max(len(headers), 14))
+            ws = self._book.add_worksheet(title=title, rows=200, cols=max(len(headers), 16))
             ws.append_row(headers, value_input_option="USER_ENTERED")
             ws.freeze(rows=1)
+            return ws
+
+        existing = ws.row_values(1)
+        if existing == headers:
+            return ws
+
+        if rewritable:
+            ws.update([headers], range_name="A1", value_input_option="USER_ENTERED")
+            log.info("Rewrote the header row of %s (%d columns).", title, len(headers))
+        elif len(existing) < len(headers) and headers[:len(existing)] == existing:
+            ws.update(
+                [headers[len(existing):]],
+                range_name=rowcol_to_a1(1, len(existing) + 1),
+                value_input_option="USER_ENTERED",
+            )
+            log.info("Added %d new column(s) to %s.", len(headers) - len(existing), title)
+        else:
+            log.warning(
+                "%s has a header this version does not recognise (%d columns vs %d). "
+                "Leaving it alone — reconciling it could misalign existing rows.",
+                title, len(existing), len(headers),
+            )
         return ws
 
     def _unique_title(self, base: str) -> str:
@@ -157,24 +233,58 @@ class SheetsSink:
         last_col = re.sub(r"\d+", "", rowcol_to_a1(1, len(HEADERS)))
         ws.batch_clear([f"A2:{last_col}"])
 
-    def write_opportunities(self, opportunities: list[Opportunity]) -> int:
+    @staticmethod
+    def _banner(text: str) -> list:
+        """A full-width label row. Text sits in the wide 'Why this one' column."""
+        row = [""] * len(HEADERS)
+        row[1] = text
+        return row
+
+    def write_opportunities(
+        self, opportunities: list[Opportunity], run: RunLog | None = None
+    ) -> int:
         scored, not_stated = split_sections(opportunities)
-        ws = self._tab(OPPORTUNITIES_TAB, HEADERS)
+        ws = self._tab(OPPORTUNITIES_TAB, HEADERS, rewritable=True)
         self._archive_and_reset(ws)  # Option C: snapshot last week, start clean
 
-        rows: list[list] = [_row(o) for o in scored]
-        if not_stated:
+        rows: list[list] = []
+
+        # Coverage first, above the results. The Runs tab has the full picture, but
+        # Mauri reviews this tab (§9) — so if a source was down, it has to say so
+        # here, or she reads a short list as a quiet week and never finds out.
+        banner = coverage_banner(run)
+        if banner:
+            for line in banner:
+                row = [""] * len(HEADERS)
+                row[1] = line
+                rows.append(row)
             rows.append([""] * len(HEADERS))
-            banner = [""] * len(HEADERS)
-            banner[1] = SECTION_BANNER
-            rows.append(banner)
-            rows.extend(_row(o) for o in not_stated)
+
+        # Provenance is the top-level split, and scored/not-stated sits inside it.
+        # The other way round buries it: a funder page that never publishes an award
+        # amount lands entirely in the not-stated block, so a section headed "from
+        # funders we watch" renders empty even on a week when four of them reported.
+        # Where a record came from is the thing she needs first — it decides whether
+        # she is looking at a warm relationship or a cold lead.
+        for kind in (SourceKind.FUNDER_PAGE, SourceKind.INDEXED_DATABASE):
+            ranked = [o for o in scored if o.source_kind is kind]
+            unranked = [o for o in not_stated if o.source_kind is kind]
+            if not ranked and not unranked:
+                continue
+
+            rows.append(self._banner(KIND_BANNER[kind]))
+            rows.extend(_row(o) for o in ranked)
+            if unranked:
+                rows.append(self._banner(SECTION_BANNER))
+                rows.extend(_row(o) for o in unranked)
+            rows.append([""] * len(HEADERS))
 
         if not rows:
             log.info("Nothing to write.")
             return 0
 
         ws.append_rows(rows, value_input_option="USER_ENTERED")
+        # append_rows returns the count of rows, not of records — report records.
         log.info("Wrote %d ranked + %d amount-not-stated rows.", len(scored), len(not_stated))
         return len(scored) + len(not_stated)
 
@@ -195,9 +305,13 @@ class SheetsSink:
         notes = " | ".join(d["notes"])
         stop = STOP_REASON_PLAIN.get(d["stop_reason"] or "", d["stop_reason"] or "")
 
+        # Names, not just a count. "Couldn't reach: 2" is not actionable; "Couldn't
+        # reach: Grants.gov, Prebys Foundation" tells her exactly what to check herself.
+        failed_names = ", ".join(h.funder for h in run.degraded_sources) or "—"
+
         ws.append_row(
             [
-                run.started_at.strftime("%Y-%m-%d %H:%M UTC"),
+                _pacific(run.started_at).strftime("%Y-%m-%d %H:%M %Z"),
                 minutes,
                 d["sources_attempted"],
                 d["sources_failed"],
@@ -208,6 +322,7 @@ class SheetsSink:
                 f"${d['usd_spent']:.2f}",
                 stop,
                 " || ".join(x for x in (rejects, notes) if x)[:4000],
+                failed_names,
             ],
             value_input_option="USER_ENTERED",
         )

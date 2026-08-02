@@ -22,10 +22,21 @@ import os
 import sys
 from datetime import date, datetime, timezone
 
+from .apis import ADAPTERS, ApiResult
 from .config import Config, ConfigUnavailable, load_config
 from .fetch import Fetcher
 from .filters import Flag, apply_filters
-from .models import Opportunity, Program, RawCandidate, RunLog, StopReason, stable_id
+from .models import (
+    Opportunity,
+    Program,
+    RawCandidate,
+    RunLog,
+    SourceHealth,
+    SourceKind,
+    SourceStatus,
+    StopReason,
+    stable_id,
+)
 from .parse import ParsedPage, parse_page, to_candidate
 from .score import Budget, BudgetExceeded, score_one, triage
 from .sources import Source, Tier, active_sources, unconfirmed_sources
@@ -53,10 +64,14 @@ async def crawl(cfg: Config, run: RunLog,
     skipped = unconfirmed_sources(cfg.max_tier)
 
     for s in skipped:
-        run.notes.append(f"SKIPPED (no confirmed URL): {s.name}")
+        run.record(SourceHealth(
+            name=s.name, funder=s.funder, status=SourceStatus.NOT_CHECKED,
+            detail="no confirmed web address on file",
+        ))
         log.warning("Skipping %s — %s", s.name, s.notes or "no URL on file")
 
     survivors: dict[str, tuple[ParsedPage, Source]] = {}
+    match_flagged: list[str] = []
 
     def consider(page: ParsedPage, source: Source) -> None:
         run.candidates_parsed += 1
@@ -73,27 +88,74 @@ async def crawl(cfg: Config, run: RunLog,
             log.debug("    rejected [%s] %s — %s", key, page.title[:50], verdict.detail)
             return
         if Flag.MATCH_REQUIREMENT in verdict.flags:
-            run.notes.append(
-                f"MATCH REQUIREMENT mentioned: {source.funder} — {page.title[:60]} "
-                "(§11 Q4 unanswered, so not filtered)"
-            )
+            # Counted, not narrated. The structured sources state matching funds on
+            # every record, so one note each buries every other note in the Runs tab.
+            match_flagged.append(page.title[:60])
         survivors[page.url] = (page, source)
+        run.credit(source.funder)
+
+    api_sources = [s for s in sources if s.is_api]
+    html_sources = [s for s in sources if not s.is_api]
+    run.sources_attempted = len(sources)
 
     async with Fetcher() as fetcher:
-        run.sources_attempted = len(sources)
-        results = await fetcher.get_many([s.url for s in sources])  # type: ignore[misc]
+        # --- tier 0: the indexed APIs. Concurrent, bounded, no link-following. ---
+        if api_sources:
+            log.info("Querying %d indexed source(s)…", len(api_sources))
+            api_results = await asyncio.gather(
+                *(_run_adapter(s, fetcher, cfg) for s in api_sources)
+            )
+            for source, result in zip(api_sources, api_results):
+                if result.error:
+                    run.record(SourceHealth(
+                        name=source.name, funder=source.funder,
+                        status=SourceStatus.UNREACHABLE, detail=result.error,
+                    ))
+                    log.warning("  ✗ %-46s %s", source.funder, result.error)
+                    continue
+                run.record(SourceHealth(
+                    name=source.name, funder=source.funder,
+                    status=SourceStatus.OK, detail=result.note,
+                ))
+                log.info("  ✓ %-46s %s", source.funder, result.note)
+                for key, count in result.rejected.items():
+                    run.rejected_by_filter[key] = run.rejected_by_filter.get(key, 0) + count
+                for page in result.pages:
+                    consider(page, source)
+
+        # --- tiers 1-3: the HTML crawl ---------------------------------------
+        if not html_sources:
+            run.finalize_health()
+            return list(survivors.values())
+
+        results = await fetcher.get_many([s.url for s in html_sources])  # type: ignore[misc]
 
         follow_up: list[tuple[Source, str]] = []
 
-        for source, result in zip(sources, results):
+        for source, result in zip(html_sources, results):
             if not result.ok:
-                run.sources_failed += 1
-                run.notes.append(f"FETCH FAILED {source.funder}: {result.error or result.status}")
+                run.record(SourceHealth(
+                    name=source.name, funder=source.funder,
+                    status=SourceStatus.UNREACHABLE,
+                    detail=str(result.error or result.status),
+                ))
                 log.warning("  ✗ %-46s %s", source.funder, result.error or result.status)
                 continue
 
-            run.sources_ok += 1
-            page = parse_page(result.final_url or result.url, result.html or "")
+            # A page that breaks the parser is one unhealthy source, not a dead run.
+            try:
+                page = parse_page(result.final_url or result.url, result.html or "")
+            except Exception as exc:  # noqa: BLE001
+                run.record(SourceHealth(
+                    name=source.name, funder=source.funder,
+                    status=SourceStatus.UNPARSEABLE, detail=f"{type(exc).__name__}: {exc}",
+                ))
+                log.warning("  ✗ %-46s could not be read: %r", source.funder, exc)
+                continue
+
+            run.record(SourceHealth(
+                name=source.name, funder=source.funder, status=SourceStatus.OK,
+            ))
             log.info(
                 "  ✓ %-46s %d amounts, %d deadlines, %d links",
                 source.funder, len(page.amounts), len(page.deadlines), len(page.links),
@@ -109,10 +171,43 @@ async def crawl(cfg: Config, run: RunLog,
             log.info("Following %d program links…", len(follow_up))
             sub_results = await fetcher.get_many([u for _, u in follow_up])
             for (source, url), result in zip(follow_up, sub_results):
-                if result.ok:
+                if not result.ok:
+                    continue
+                try:
                     consider(parse_page(result.final_url or url, result.html or ""), source)
+                except Exception as exc:  # noqa: BLE001 — one bad subpage, not a dead run
+                    log.debug("subpage %s could not be read: %r", url, exc)
 
+    _note_match_requirements(run, match_flagged)
+    run.finalize_health()
     return list(survivors.values())
+
+
+def _note_match_requirements(run: RunLog, titles: list[str]) -> None:
+    """One line about matching funds, not one per record.
+
+    §11 Q4 (can RISE meet a match?) is unanswered, so these are surfaced rather than
+    filtered — but surfacing has to stay readable to count as surfacing.
+    """
+    if not titles:
+        return
+    head = "; ".join(titles[:3])
+    more = f" and {len(titles) - 3} more" if len(titles) > 3 else ""
+    run.notes.append(
+        f"MATCHING FUNDS mentioned on {len(titles)} opportunit(ies) — {head}{more}. "
+        "Not filtered: §11 Q4 is unanswered."
+    )
+
+
+async def _run_adapter(source: Source, fetcher, cfg: Config) -> ApiResult:
+    """Call one API adapter. Never raises — a broken API is one unhealthy source."""
+    adapter = ADAPTERS.get(source.adapter or "")
+    if adapter is None:
+        return ApiResult(error=f"no adapter registered for {source.adapter!r}")
+    try:
+        return await adapter(fetcher, cfg)
+    except Exception as exc:  # noqa: BLE001
+        return ApiResult(error=f"{type(exc).__name__}: {exc}")
 
 
 def _rank_for_scoring(survivors: list[tuple[ParsedPage, Source]], cfg: Config) -> list:
@@ -151,6 +246,8 @@ def _unscored(page: ParsedPage, source: Source, cfg: Config, note: str) -> Oppor
         verified=True,
         needs_human_check=True,
         fetched_at=datetime.now(timezone.utc),
+        source_kind=(SourceKind.INDEXED_DATABASE if source.is_api
+                     else SourceKind.FUNDER_PAGE),
     )
 
 
@@ -158,14 +255,37 @@ def evaluate(survivors: list[tuple[ParsedPage, Source]], cfg: Config, run: RunLo
              budget: Budget, *, use_llm: bool) -> list[Opportunity]:
     """Tiers 2 and 3 of §8. Stops on the first stop condition to fire."""
     ranked = _rank_for_scoring(survivors, cfg)
+    per_kind = cfg.per_kind_cap
+    kinds: dict[SourceKind, int] = {k: 0 for k in SourceKind}
+
+    def kind_of(source: Source) -> SourceKind:
+        return SourceKind.INDEXED_DATABASE if source.is_api else SourceKind.FUNDER_PAGE
 
     if not use_llm:
         run.stop_reason = StopReason.SOURCES_EXHAUSTED
-        return [_unscored(p, s, cfg, "--no-llm: deterministic tiers only") for p, s in ranked]
+        out = []
+        for page, source in ranked:
+            k = kind_of(source)
+            if per_kind is not None and kinds[k] >= per_kind:
+                continue
+            kinds[k] += 1
+            out.append(_unscored(page, source, cfg, "--no-llm: deterministic tiers only"))
+        return out
 
     out: list[Opportunity] = []
+    scoring_errors = 0
     for page, source in ranked:
-        if len(out) >= cfg.max_opportunities:
+        if per_kind is not None:
+            # Balanced mode: each kind gets its own cap, and a candidate from a kind
+            # that is already full is skipped *before* triage — paying Haiku to read
+            # something we have already decided not to keep is pure waste.
+            if all(n >= per_kind for n in kinds.values()):
+                run.stop_reason = StopReason.TARGET_MET
+                log.info("Per-source-kind cap of %d reached for both kinds.", per_kind)
+                break
+            if kinds[kind_of(source)] >= per_kind:
+                continue
+        elif len(out) >= cfg.max_opportunities:
             run.stop_reason = StopReason.TARGET_MET
             log.info("Cap of %d reached — stopping.", cfg.max_opportunities)
             break
@@ -189,12 +309,39 @@ def evaluate(survivors: list[tuple[ParsedPage, Source]], cfg: Config, run: RunLo
                 run.rejected_by_filter[key] = run.rejected_by_filter.get(key, 0) + 1
                 log.info("  dropped (deadline %s passed): %s", opp.deadline, opp.title[:40])
                 continue
+            kinds[opp.source_kind] += 1
             out.append(opp)
         except BudgetExceeded as exc:
             run.stop_reason = StopReason.BUDGET
             run.notes.append(f"BUDGET CEILING: {exc}")
             log.warning("Budget ceiling hit — %s", exc)
             break
+        except Exception as exc:  # noqa: BLE001
+            # One candidate failing to score must not discard the ones already
+            # scored, or the ones after it. The budget ceiling is the only thing
+            # that stops this loop.
+            scoring_errors += 1
+            log.warning("  ! could not score %s — %r", page.title[:40], exc)
+            if scoring_errors == 1:
+                run.notes.append(f"SCORING ERROR ({source.funder}): {exc!r}")
+            continue
+
+    if scoring_errors:
+        run.notes.append(f"{scoring_errors} opportunit(ies) could not be scored this run")
+
+    if per_kind is not None:
+        # Say so when a kind came up short. A balanced request that quietly returns
+        # fewer reads as "that is all there was", when the real cause is that the
+        # candidates existed and were rejected downstream.
+        short = {k.label: n for k, n in kinds.items() if n < per_kind}
+        if short:
+            run.notes.append(
+                "BALANCE NOT MET (asked for "
+                + f"{per_kind} of each): "
+                + ", ".join(f"{label} returned {n}" for label, n in short.items())
+                + " — the shortfall was rejected by triage or by the deadline guard, "
+                "not padded with weaker results."
+            )
 
     if run.stop_reason is None:
         run.stop_reason = StopReason.SOURCES_EXHAUSTED
@@ -224,6 +371,19 @@ def _report(cfg: Config, run: RunLog, opportunities: list[Opportunity]) -> None:
         for reason, count in sorted(run.rejected_by_filter.items(),
                                     key=lambda kv: kv[1], reverse=True):
             print(f"    {count:>4}  {reason}")
+
+    if run.source_health:
+        print("\n  SOURCE HEALTH")
+        marks = {"unreachable": "✗", "unparseable": "✗",
+                 "not_checked": "?", "no_results": "·", "ok": "✓"}
+        for h in sorted(run.source_health, key=lambda x: (not x.degraded, x.funder)):
+            mark = marks.get(h.status.value, "·")
+            line = f"    {mark} {h.funder[:34]:<34} {h.status.value:<13}"
+            if h.candidates:
+                line += f" {h.candidates:>3} kept"
+            print(line)
+            if h.detail:
+                print(f"        {h.detail[:88]}")
 
     for warning in cfg.warnings:
         print(f"\n  ⚠ {warning}")
@@ -273,6 +433,8 @@ async def main_async(args: argparse.Namespace) -> int:
         return 1
     if args.max_tier:
         cfg.max_tier = Tier(args.max_tier)
+    if args.balance:
+        cfg.per_kind_cap = args.balance
 
     # Step 0: the kill switch. Before anything else, before any network call (§8).
     if not cfg.enabled:
@@ -295,16 +457,20 @@ async def main_async(args: argparse.Namespace) -> int:
     budget = Budget(ceiling_usd=args.budget or cfg.weekly_budget_usd)
 
     log.info("Crawling tier ≤ %d…", cfg.max_tier)
+    opportunities: list[Opportunity] = []
+    failed = False
     try:
         survivors = await crawl(cfg, run, follow_links=not args.no_follow)
         log.info("%d candidates survived the free filters.", len(survivors))
         opportunities = evaluate(survivors, cfg, run, budget, use_llm=use_llm)
     except Exception as exc:  # noqa: BLE001
-        run.stop_reason = StopReason.ERROR
-        run.finished_at = datetime.now(timezone.utc)
+        # Whatever went wrong, Mauri still gets what we did find, plus a run log
+        # saying it was incomplete. A silent empty Sheet on Thursday morning is
+        # worse than a short one with an explanation on it.
+        failed = True
+        run.stop_reason = StopReason.PARTIAL if opportunities else StopReason.ERROR
         run.notes.append(f"ERROR: {exc!r}")
-        log.exception("Run failed")
-        return 1
+        log.exception("Run failed — writing whatever was collected before the failure")
 
     from sinks.base import split_sections
 
@@ -317,22 +483,40 @@ async def main_async(args: argparse.Namespace) -> int:
 
     if args.dry_run:
         print("--dry-run: nothing written.\n")
-        return 0
+        return 1 if failed else 0
 
-    if args.sink == "sheets":
-        from sinks.sheets import SheetsSink
+    try:
+        if args.sink == "sheets":
+            from sinks.sheets import SheetsSink
 
-        sink = SheetsSink()
-        sink.ensure_config_tab()
-    else:
-        from sinks.jsonl import JsonlSink
+            sink = SheetsSink()
+            sink.ensure_config_tab()
+        else:
+            from sinks.jsonl import JsonlSink
 
-        sink = JsonlSink(out_dir=args.out)
+            sink = JsonlSink(out_dir=args.out)
+    except Exception as exc:  # noqa: BLE001
+        log.error("Could not open the %s sink: %r", args.sink, exc)
+        return 1
 
-    written = sink.write_opportunities(opportunities)
-    sink.write_run_log(run)
+    written = 0
+    try:
+        written = sink.write_opportunities(opportunities, run)
+    except Exception as exc:  # noqa: BLE001
+        # Still write the run log below: a Runs row saying the write failed is how
+        # Mauri finds out, without calling anyone (§13).
+        failed = True
+        run.stop_reason = StopReason.PARTIAL
+        run.notes.append(f"WRITE FAILED: {exc!r}")
+        log.exception("Writing opportunities failed")
+
+    try:
+        sink.write_run_log(run)
+    except Exception as exc:  # noqa: BLE001
+        log.error("Could not write the run log: %r", exc)
+
     print(f"Wrote {written} records via the {sink.name} sink.\n")
-    return 0
+    return 1 if failed else 0
 
 
 def main() -> int:
@@ -347,6 +531,9 @@ def main() -> int:
                    help="override the weekly USD ceiling (default: 1.00, §8)")
     p.add_argument("--max-tier", type=int, choices=[1, 2, 3],
                    help="1=warm funders, 2=+intermediaries, 3=+government")
+    p.add_argument("--balance", type=int, metavar="N",
+                   help="take up to N from funder pages AND N from indexed databases, "
+                        "instead of one combined cap")
     p.add_argument("-v", "--verbose", action="store_true")
     return asyncio.run(main_async(p.parse_args()))
 

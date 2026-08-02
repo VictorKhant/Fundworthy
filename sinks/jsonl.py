@@ -24,7 +24,9 @@ class JsonlSink:
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
 
-    def write_opportunities(self, opportunities: list[Opportunity]) -> int:
+    def write_opportunities(
+        self, opportunities: list[Opportunity], run: RunLog | None = None
+    ) -> int:
         scored, not_stated = split_sections(opportunities)
         path = self.out_dir / f"opportunities-{self.stamp}.jsonl"
         with path.open("w", encoding="utf-8") as fh:

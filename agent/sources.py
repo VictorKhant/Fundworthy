@@ -21,6 +21,17 @@ from .models import Program
 
 
 class Tier(IntEnum):
+    """Crawl scope. `active_sources(max_tier)` takes everything at or below max_tier.
+
+    INDEXED is 0 so it is included at every scope, including the default. These are
+    complete published lists rather than one funder's marketing page: a single JSON
+    request each, no link-following, and they stay up for a structural reason (state
+    law, federal infrastructure) rather than because someone remembers to maintain
+    them. They are the cheapest and most reliable thing in the registry, so there is
+    no scope setting at which it makes sense to skip them.
+    """
+
+    INDEXED = 0       # complete lists behind a public API (see apis.py)
     WARM = 1          # the 8 funders Mauri confirmed warm (§7)
     INTERMEDIARY = 2  # networks and conveners that aggregate opportunities
     GOVERNMENT = 3    # public RFPs and procurement (§11 Q3 — doubles scope)
@@ -44,10 +55,51 @@ class Source:
     confidence: Confidence = Confidence.LIKELY
     warm: bool = False
     notes: str = ""
+    adapter: str | None = None   # key into apis.ADAPTERS; None means crawl the HTML
+
+    @property
+    def is_api(self) -> bool:
+        return self.adapter is not None
 
     @property
     def fetchable(self) -> bool:
         return self.url is not None and self.confidence >= Confidence.LIKELY
+
+
+# --- Tier 0: the two indexed lists (see apis.py) -------------------------------
+#
+# Two, not ten. Each additional API is another thing that can break on a Wednesday
+# night and another few seconds on the run clock; these two were chosen because
+# their uptime rests on statute and federal infrastructure rather than goodwill.
+
+INDEXED_SOURCES: list[Source] = [
+    Source(
+        name="California Grants Portal",
+        funder="State of California",
+        url="https://www.grants.ca.gov/",
+        tier=Tier.INDEXED,
+        programs=[Program.RULFP, Program.RESILIENCE, Program.ARTS],
+        adapter="ca_grants_portal",
+        notes=(
+            "Every CA state agency is required by AB 2252 (2019) to post grant "
+            "opportunities here, so this is the closest thing to a complete list of "
+            "state money that exists. Read via CKAN on data.ca.gov. One request."
+        ),
+    ),
+    Source(
+        name="Grants.gov — federal discretionary grants",
+        funder="U.S. Federal Government",
+        url="https://www.grants.gov/",
+        tier=Tier.INDEXED,
+        programs=[Program.RULFP, Program.RESILIENCE, Program.ARTS],
+        adapter="grants_gov",
+        notes=(
+            "The complete federal grant list. Searched once per active program (§7 "
+            "says never one search across all three), then a bounded number of detail "
+            "lookups to get award ceilings — the field MIN_AWARD actually filters on."
+        ),
+    ),
+]
 
 
 # --- Tier 1: the eight warm funders (§7, confirmed warm by Mauri) --------------
@@ -199,11 +251,16 @@ GOVERNMENT_SOURCES: list[Source] = [
 ]
 
 
-ALL_SOURCES: list[Source] = WARM_SOURCES + INTERMEDIARY_SOURCES + GOVERNMENT_SOURCES
+ALL_SOURCES: list[Source] = (
+    INDEXED_SOURCES + WARM_SOURCES + INTERMEDIARY_SOURCES + GOVERNMENT_SOURCES
+)
 
 
 def active_sources(max_tier: Tier = Tier.WARM) -> list[Source]:
-    """Sources to crawl this run. Defaults to tier 1 only (§12 Block 1)."""
+    """Sources to check this run. Defaults to the indexed lists plus the warm funders.
+
+    Tier 0 is always in scope — see the Tier docstring for why.
+    """
     return [s for s in ALL_SOURCES if s.tier <= max_tier and s.fetchable]
 
 
