@@ -325,3 +325,54 @@ def test_deleting_the_saved_key_admits_the_environment_still_scores(client, monk
     assert body["has_api_key"] is False
     assert body["key_available"] is True
     assert body["api_key_source"] == "environment"
+
+
+# --- the remove list ----------------------------------------------------------
+#
+# The stakeholder does not want opportunities from funders RISE already receives money
+# from — they get the cheque without reapplying. So warmth stopped being a priority
+# signal and became a reason to EXCLUDE, and the exclusion happens in the Python stage
+# where it costs nothing.
+
+def test_removing_a_funder_records_why(client):
+    funders = client.get("/api/funders").json()["funders"]
+    target = funders[0]
+    client.put(f"/api/funders/{target['id']}",
+               json={"active": False,
+                     "exclude_reason": "We already receive funding from them"})
+
+    after = {f["id"]: f for f in client.get("/api/funders").json()["funders"]}
+    assert after[target["id"]]["active"] is False
+    assert after[target["id"]]["exclude_reason"] == "We already receive funding from them"
+    assert target["id"] in after, "removed from the search, not from the record"
+
+
+def test_an_excluded_funder_is_never_fetched(client):
+    """Cheap half of the remove list: it never enters the source registry at all."""
+    from agent.sources import Tier, sources_from_db
+
+    before, _ = sources_from_db(Tier.GOVERNMENT, [])
+    target = next(f for f in client.get("/api/funders").json()["funders"] if f["url"])
+    client.put(f"/api/funders/{target['id']}", json={"active": False})
+
+    after, _ = sources_from_db(Tier.GOVERNMENT, [])
+    assert len(after) == len(before) - 1
+    assert target["name"] not in {s.funder for s in after}
+
+
+def test_an_excluded_funder_is_also_dropped_from_indexed_results(client):
+    """The other door. The public databases carry grants from every funder in the
+    state, so an excluded funder can still arrive via Grants.gov or the CA portal
+    unless we drop it on the way in."""
+    from agent.run import excluded_funders
+
+    target = client.get("/api/funders").json()["funders"][0]
+    client.put(f"/api/funders/{target['id']}", json={"active": False})
+
+    assert target["name"].casefold() in excluded_funders()
+
+
+def test_warmth_no_longer_orders_the_funder_list(client):
+    """'Partner first' was the ordering the stakeholder asked us to drop."""
+    names = [f["name"] for f in client.get("/api/funders").json()["funders"]]
+    assert names == sorted(names, key=str.casefold)

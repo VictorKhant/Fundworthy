@@ -188,7 +188,7 @@ def delete_program(conn, program_id: str) -> bool:
 # --- funders ------------------------------------------------------------------
 
 _FUNDER_FIELDS = ("name", "url", "sector", "funder_type", "warm", "active",
-                  "tier", "confidence", "programs", "notes")
+                  "tier", "confidence", "programs", "notes", "exclude_reason")
 
 
 def _funder_out(row) -> dict:
@@ -203,8 +203,25 @@ def list_funders(conn, *, active_only: bool = False) -> list[dict]:
     sql = "SELECT * FROM funders"
     if active_only:
         sql += " WHERE active=1"
-    sql += " ORDER BY warm DESC, name"
+    # Alphabetical. It used to be `warm DESC, name` — partners first — which is exactly
+    # the priority the stakeholder asked us to drop.
+    sql += " ORDER BY name"
     return [_funder_out(r) for r in conn.execute(sql)]
+
+
+def excluded_funder_names(conn) -> set[str]:
+    """Funders on the remove list, casefolded, for result-level filtering.
+
+    Skipping them at the crawl is the cheap half and catches most of it. But the two
+    indexed databases return grants from every funder in the state, so an excluded
+    funder can still arrive through Grants.gov or the CA portal — which would put
+    exactly the opportunity she said she does not want back on her list, by a different
+    door. Both doors have to be closed.
+    """
+    return {
+        str(r["name"]).strip().casefold()
+        for r in conn.execute("SELECT name FROM funders WHERE active=0")
+    }
 
 
 def get_funder(conn, funder_id: str) -> dict | None:
@@ -349,12 +366,19 @@ def list_opportunities(conn, *, month: str | None = None,
                        run_id: str | None = None) -> list[dict]:
     """Mauri's reading order, enforced in SQL so every surface agrees.
 
-    Three rules, in priority order:
-      1. Everything that does NOT need a human check comes first. She asked for this
-         explicitly — she wants to read the clean results before the ambiguous ones.
-      2. Then rows with a sourced award amount, ranked by score.
-      3. Rows with no stated amount are last within their block, since they have no
-         score to be ranked on.
+    Two rules now, and the second one used to be three:
+
+      1. Anything carrying a claim we could NOT verify against the page sinks to the
+         bottom. That is what needs_human_check means since it was tightened — a real
+         accuracy concern, not merely a field the funder left blank.
+      2. Everything else ranks by score, highest first. Full stop.
+
+    What was removed and why: the order used to put rows with a sourced award amount
+    above rows without one. That made sense when "no amount" meant "we never paid to
+    score it". Sonnet now scores every candidate, so the rule had quietly turned into
+    "rank by whether the funder happened to publish a number" — which put a score-18
+    opportunity above a score-65 in the last real run, because the 18 had a figure on
+    its page and the 65 did not.
     """
     where, params = [], []
     if month:
@@ -366,9 +390,7 @@ def list_opportunities(conn, *, month: str | None = None,
     sql = "SELECT * FROM opportunities"
     if where:
         sql += " WHERE " + " AND ".join(where)
-    sql += (" ORDER BY needs_human_check ASC,"
-            " CASE section WHEN 'scored' THEN 0 ELSE 1 END ASC,"
-            " score DESC, funder ASC")
+    sql += " ORDER BY needs_human_check ASC, score DESC, funder ASC"
     return [_opp_out(r) for r in conn.execute(sql, params)]
 
 

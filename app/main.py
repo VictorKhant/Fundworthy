@@ -98,9 +98,10 @@ class FunderIn(BaseModel):
     funder_type: str | None = None
     warm: bool | None = None
     active: bool | None = None
-    tier: int | None = Field(None, ge=1, le=3)
+    tier: int | None = Field(None, ge=0, le=3)
     programs: list[str] | None = None
     notes: str | None = None
+    exclude_reason: str | None = None
 
 
 class DraftIn(BaseModel):

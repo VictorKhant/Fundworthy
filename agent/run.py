@@ -98,6 +98,26 @@ def _discover_extra(cfg: Config, run: RunLog) -> list[Source]:
     return found
 
 
+def excluded_funders() -> set[str]:
+    """The remove list — funders Mauri has taken out of the search, casefolded.
+
+    Sources on it are never fetched (they are `active=0`, so `sources_from_db` does not
+    return them at all). This set closes the other door: the two indexed databases
+    return grants from every funder in the state, so an excluded funder can still reach
+    her through Grants.gov or the CA portal unless we drop it on the way in.
+    """
+    try:
+        from app.db import db_path, session
+        from app.repo import excluded_funder_names
+
+        if not db_path().exists():
+            return set()
+        with session() as conn:
+            return excluded_funder_names(conn)
+    except Exception:  # noqa: BLE001 — no database is a normal state
+        return set()
+
+
 async def crawl(cfg: Config, run: RunLog,
                 *, follow_links: bool = True,
                 already_seen: set[str] | None = None) -> list[tuple[ParsedPage, Source]]:
@@ -109,6 +129,12 @@ async def crawl(cfg: Config, run: RunLog,
     sources, skipped = resolve_sources(cfg, run)
     sources = sources + _discover_extra(cfg, run)
     already_seen = already_seen or set()
+    excluded = excluded_funders()
+    if excluded:
+        run.notes.append(
+            f"Remove list: {len(excluded)} funder(s) excluded from this search — "
+            "not fetched, not read, not scored."
+        )
 
     for s in skipped:
         run.record(SourceHealth(
@@ -123,6 +149,14 @@ async def crawl(cfg: Config, run: RunLog,
     def consider(page: ParsedPage, source: Source) -> None:
         run.candidates_parsed += 1
         if page.url in survivors:
+            return
+
+        # The remove list, second door. A source on it is never fetched — but the
+        # indexed databases carry grants from every funder in the state, so one can
+        # still arrive that way. Dropped here, before triage, so it costs nothing.
+        if source.funder.strip().casefold() in excluded:
+            key = "on_the_remove_list"
+            run.rejected_by_filter[key] = run.rejected_by_filter.get(key, 0) + 1
             return
 
         # Already shown to Mauri this month. Dropping it here — in the free tier,
@@ -282,8 +316,12 @@ def _rank_for_scoring(survivors: list[tuple[ParsedPage, Source]], cfg: Config) -
     """
     def key(item):
         page, source = item
+        # `1 if source.warm else 0` used to lead this tuple, so RISE's existing
+        # relationships always spent the scoring budget first. The stakeholder has since
+        # said they already receive money from those funders and do not want to reapply,
+        # so warmth is no longer a priority signal anywhere — a warm funder she wants
+        # skipped goes on the remove list and is never fetched at all.
         return (
-            1 if source.warm else 0,
             page.award_max or 0,
             1 if page.earliest_deadline else 0,
             len(page.text),

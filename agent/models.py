@@ -177,9 +177,20 @@ class Opportunity:
                 f"Opportunity {self.title!r} has no usable source_url. "
                 "CLAUDE.md §6: no URL, no record."
             )
-        # A missing amount or deadline is always a human-check, no exceptions.
-        if self.award_max is None or self.deadline is None:
-            self.needs_human_check = True
+        # NOTE: a missing amount or deadline used to force needs_human_check here.
+        # It no longer does, and that is a correction rather than a relaxation.
+        #
+        # Most funders simply do not publish an amount or a deadline — measured across
+        # 86 pages — so the flag fired on 5 of 5 results in the last real run. A flag
+        # that is always on is not a flag: it made the "clean" section permanently
+        # empty, and because the list also split on it, the ranking stopped meaning
+        # anything.
+        #
+        # `needs_human_check` now means one specific thing: **the model claimed a value
+        # we could not confirm against the page**. That is rare, it is alarming, and it
+        # is worth a separate block. A field the funder never stated is normal, is
+        # rendered as "not stated", and is already reflected in the score — Sonnet is
+        # told to mark down what it cannot source.
 
     @property
     def section(self) -> Section:

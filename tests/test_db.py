@@ -313,17 +313,40 @@ def test_human_check_rows_sort_last(db):
         "a 99-scoring row that needs a human check still comes after a clean 20"
 
 
-def test_scored_rows_outrank_amount_not_stated_within_a_block(db):
+def test_a_stated_award_amount_does_not_outrank_a_better_score(db):
+    """The ranking bug, exactly as it appeared in the last real run.
+
+    The order used to put rows with a sourced award amount above rows without one.
+    That was right when "no amount" meant "we never paid to score it". Sonnet now
+    scores every candidate, so the rule had quietly become "rank by whether the funder
+    happened to publish a number" — and a score-18 opportunity sat above a score-65
+    because the 18 had a figure on its page.
+    """
     with session(db) as conn:
         repo.save_opportunity(conn, _opp(
-            id="no-amount", title="No amount", source_url="https://example.invalid/n",
-            award_min=None, award_max=None, needs_human_check=True), run_id="r")
+            id="low-but-has-amount", title="Prebys Rooted and Rising",
+            source_url="https://example.invalid/prebys",
+            award_max=150_000, score=18), run_id="r")
         repo.save_opportunity(conn, _opp(
-            id="scored", title="Scored", source_url="https://example.invalid/s",
-            score=10, needs_human_check=True), run_id="r")
+            id="high-no-amount", title="City of SD — Apply for Funding",
+            source_url="https://example.invalid/sd",
+            award_min=None, award_max=None, score=65), run_id="r")
         rows = repo.list_opportunities(conn)
 
-    assert [r["id"] for r in rows] == ["scored", "no-amount"]
+    assert [r["id"] for r in rows] == ["high-no-amount", "low-but-has-amount"], \
+        "score must decide the order, not whether an amount happened to be published"
+
+
+def test_a_missing_amount_is_no_longer_a_human_check(db):
+    """Most funders never publish an amount — the flag fired on 5 of 5 results in the
+    last real run, which made it useless as a signal and emptied the 'clean' section.
+    It now means one thing: a claim we could not verify against the page."""
+    opp = _opp(award_min=None, award_max=None, deadline=None, needs_human_check=False)
+    assert opp.needs_human_check is False
+
+    with session(db) as conn:
+        repo.save_opportunity(conn, opp, run_id="r")
+        assert repo.list_opportunities(conn)[0]["needs_human_check"] is False
 
 
 def test_month_summary_counts(db):

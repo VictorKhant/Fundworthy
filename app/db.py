@@ -41,7 +41,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path("data/rise.db")
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # --- schema -------------------------------------------------------------------
 
@@ -81,8 +81,16 @@ CREATE TABLE IF NOT EXISTS funders (
     url         TEXT,
     sector      TEXT NOT NULL DEFAULT 'other',
     funder_type TEXT NOT NULL DEFAULT 'other',
-    warm        INTEGER NOT NULL DEFAULT 0,   -- an existing RISE relationship
-    active      INTEGER NOT NULL DEFAULT 1,   -- unticked = stopped funding us, keep the record
+    -- An existing RISE relationship. Kept as a LABEL only. It used to boost the score
+    -- and sort first; the stakeholder has since said the opposite — they already get
+    -- money from those funders consistently and do not want to reapply — so warmth is
+    -- now a reason to consider EXCLUDING, never a reason to rank higher.
+    warm        INTEGER NOT NULL DEFAULT 0,
+    -- The remove list. Unticked = never fetched, never triaged, never scored. This is
+    -- the whole point: excluding at the crawl stage costs nothing, where excluding
+    -- after scoring would have already spent the tokens.
+    active      INTEGER NOT NULL DEFAULT 1,
+    exclude_reason TEXT NOT NULL DEFAULT '',  -- why she took it off the list
     tier        INTEGER NOT NULL DEFAULT 1,
     confidence  INTEGER NOT NULL DEFAULT 1,   -- agent.sources.Confidence
     programs    TEXT NOT NULL DEFAULT '[]',   -- json array of program slugs
@@ -269,6 +277,16 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE opportunities ADD COLUMN source_kind "
                          "TEXT NOT NULL DEFAULT 'funder_page'")
         current = 3
+
+    if current < 4:
+        # v4 adds funders.exclude_reason — the remove list records WHY, because
+        # "we already get money from them" and "they stopped funding us" both mean
+        # don't search, and a year from now nobody will remember which was which.
+        funder_cols = {r["name"] for r in conn.execute("PRAGMA table_info(funders)")}
+        if "exclude_reason" not in funder_cols:
+            conn.execute("ALTER TABLE funders ADD COLUMN exclude_reason "
+                         "TEXT NOT NULL DEFAULT ''")
+        current = 4
 
     conn.execute(
         "INSERT INTO meta(key, value) VALUES('schema_version', ?) "

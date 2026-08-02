@@ -153,11 +153,19 @@ Score this opportunity 0-100 for RISE, write one sentence explaining the score i
 language the COO can act on, and fill in the funder profile she asked for.
 
 Weights (CLAUDE.md §7 — PROVISIONAL, pending Mauri's forced-rank in §11 Q5):
-  35  award size relative to the floor
-  25  program fit, weighted toward the programs listed above
-  20  funder warmth
+  45  award size relative to the floor
+  35  program fit, weighted toward the programs listed above
   15  effort vs the 10-hour cap
    5  deadline runway
+
+Funder warmth used to be worth 20 and is gone. RISE already receives money from the
+funders it has relationships with and does not want to reapply to them, so an existing
+relationship is now a reason to leave a funder OUT of the search entirely — not a
+reason to rank it higher. Those 20 points went to the two things that do decide this:
+how big the award is, and whether it fits a program.
+
+Judge every funder on the opportunity in front of you. You are not being told whether
+RISE knows them, because it should not change the score.
 
 There are two kinds of field below and they are held to different standards.
 
@@ -403,8 +411,10 @@ def score_one(candidate: RawCandidate, source: Source, cfg: Config,
     body = _text_block(
         f"Award floor for this run: ${cfg.min_award:,}\n"
         f"Today: {date.today().isoformat()}\n"
+        # The "[WARM — RISE has an existing relationship]" hint used to be appended
+        # here. Removed with the warmth weight: telling the model about a relationship
+        # it must not score on is just an invitation to score on it anyway.
         f"Funder: {candidate.funder}"
-        + ("  [WARM — RISE has an existing relationship]" if source.warm else "")
         + f"\nPage title: {candidate.title}\nURL: {candidate.source_url}\n\n"
         f"{candidate.text[:SCORING_TEXT_CAP]}"
     )

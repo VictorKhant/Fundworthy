@@ -36,8 +36,13 @@ export function Finding({ o }) {
   const range = awardRange(o);
   return (
     <article className={`opp ${o.needs_human_check ? "flagged" : ""}`}>
+      {/* Always show the score. This used to render "—" whenever the funder had not
+          published an award amount, which hid the score on 4 of 5 results in the last
+          real run — including the three highest-scoring ones. The score is a judgement
+          about the whole opportunity; whether the page happened to state a dollar
+          figure is a separate fact, shown below as its own chip. */}
       <div className="opp-score" title="Score out of 100">
-        {o.section === "scored" ? o.score : "—"}
+        {o.score}
       </div>
 
       <div className="opp-body">
@@ -55,7 +60,11 @@ export function Finding({ o }) {
           {o.funder_type && o.funder_type !== "unknown" && (
             <Inferred>{FUNDER_TYPE_LABELS[o.funder_type] || o.funder_type}</Inferred>
           )}
-          {o.needs_human_check && <span className="chip warn">Needs your eyes</span>}
+          {o.needs_human_check && (
+            <span className="chip warn" title="The AI reported something it could not confirm against the funder's page, so we removed it">
+              Unverified claim
+            </span>
+          )}
         </div>
 
         <div className="opp-title">{o.title}</div>
@@ -128,13 +137,14 @@ export default function Findings({ clear = [], needsCheck = [], emptyBody }) {
       <section className="panel">
         <h2>Worth a look — {clear.length}</h2>
         <p className="muted small">
-          Everything here cleared the award floor and the agent could source every number
-          it shows. Ranked best first.
+          Ranked best first, out of 100. Everything here cleared your award floor.
+          Where a funder did not publish an amount or a deadline, you will see "not
+          stated" rather than a guess — that is normal, and the score already accounts
+          for it.
         </p>
         {clear.length === 0 ? (
           <p className="muted">
-            Nothing came through clean this time. That can be a perfectly good week —
-            the list below is what needs a decision from you.
+            Nothing came through clean this time. That can be a perfectly good week.
           </p>
         ) : (
           <div className="opps">
@@ -149,9 +159,10 @@ export default function Findings({ clear = [], needsCheck = [], emptyBody }) {
         <section className="panel">
           <h2>Needs your eyes — {needsCheck.length}</h2>
           <p className="muted small">
-            The funder's page did not state something important, or the agent could not
-            verify it against the page it read. These are last on purpose. Nothing here
-            is a guess — a number it could not source is left blank rather than filled in.
+            For these, the AI reported something it could <strong>not</strong> confirm
+            against the funder's own page — so we removed the value rather than show it.
+            That is the one case worth opening the link yourself. It should be rare; if
+            it is not, tell us, because it means the reading step is drifting.
           </p>
           <div className="opps">
             {needsCheck.map((o) => (

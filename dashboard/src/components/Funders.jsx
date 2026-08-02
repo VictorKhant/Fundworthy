@@ -82,7 +82,7 @@ function Editor({ initial, sectors, onSave, onCancel }) {
 function Row({ funder, onToggle, onEdit, onDelete }) {
   return (
     <div className={`funder-row ${funder.active ? "" : "inactive"}`}>
-      <label className="funder-tick" title="Untick to stop searching them">
+      <label className="funder-tick" title="Untick to take them off the search">
         <input
           type="checkbox"
           checked={funder.active}
@@ -93,10 +93,16 @@ function Row({ funder, onToggle, onEdit, onDelete }) {
       <div className="funder-main">
         <div className="funder-name">
           {funder.name}
-          {funder.warm && <span className="chip warm">Partner</span>}
-          {!funder.active && <span className="chip muted">Not being searched</span>}
+          {/* "Partner" is a label now, not a ranking signal. RISE already receives
+              money from these and does not want to reapply, so a relationship is a
+              reason to consider removing a funder — never a reason to rank it up. */}
+          {funder.warm && <span className="chip">Existing relationship</span>}
+          {!funder.active && <span className="chip muted">On the remove list</span>}
           {!funder.url && <span className="chip muted">No page on file</span>}
         </div>
+        {!funder.active && funder.exclude_reason && (
+          <div className="muted small">Removed because: {funder.exclude_reason}</div>
+        )}
         {funder.url && (
           <a className="small" href={funder.url} target="_blank" rel="noopener noreferrer">
             {funder.url.replace(/^https?:\/\//, "").slice(0, 64)} ↗
@@ -136,7 +142,19 @@ export default function Funders({ funders, sectors, onChange }) {
     }
   };
 
-  const toggle = guard((f, active) => api.funders.update(f.id, { active }));
+  const toggle = guard((f, active) => {
+    if (active) return api.funders.update(f.id, { active: true, exclude_reason: "" });
+    // Ask why. "We already get money from them" and "they stopped funding us" both
+    // mean don't search, and in six months nobody will remember which this was.
+    const reason = window.prompt(
+      `Take ${f.name} off the search?\n\n` +
+        `They will not be fetched, read, or scored — so this costs nothing every week.\n\n` +
+        `Why? (optional, but it saves you guessing later)`,
+      "We already receive funding from them",
+    );
+    if (reason === null) return Promise.resolve();
+    return api.funders.update(f.id, { active: false, exclude_reason: reason });
+  });
   const remove = guard((f) => {
     if (
       !window.confirm(
@@ -154,9 +172,11 @@ export default function Funders({ funders, sectors, onChange }) {
     setEditing(null);
   });
 
-  const partners = funders.filter((f) => f.warm);
-  const others = funders.filter((f) => !f.warm);
-  const shown = showAll ? others : others.slice(0, 4);
+  // Split on what actually changes behaviour — searched vs removed — rather than on
+  // "partner vs everyone else", which no longer means anything for the search order.
+  const searched = funders.filter((f) => f.active);
+  const removed = funders.filter((f) => !f.active);
+  const shown = showAll ? searched : searched.slice(0, 8);
 
   return (
     <section className="panel">
@@ -167,8 +187,9 @@ export default function Funders({ funders, sectors, onChange }) {
         </button>
       </div>
       <p className="muted small">
-        Searched in this order: your partners first, then everyone else.{" "}
-        {funders.filter((f) => f.active).length} of {funders.length} are being searched.
+        Untick a funder to take it off the search. It will not be fetched, read, or
+        scored — so removing one costs nothing every week, rather than costing a little
+        every week. {searched.length} of {funders.length} are being searched.
       </p>
 
       {error && <div className="notice error">{error}</div>}
@@ -182,9 +203,9 @@ export default function Funders({ funders, sectors, onChange }) {
         />
       )}
 
-      <h3 className="sub">Partners — {partners.length}</h3>
+      <h3 className="sub">Being searched — {searched.length}</h3>
       <div className="funder-list">
-        {partners.map((f) =>
+        {shown.map((f) =>
           editing && editing !== "new" && editing.id === f.id ? (
             <Editor
               key={f.id}
@@ -198,37 +219,34 @@ export default function Funders({ funders, sectors, onChange }) {
           )
         )}
       </div>
+      {searched.length > 8 && (
+        <button className="ghost" onClick={() => setShowAll(!showAll)}>
+          {showAll ? "Show fewer" : `Show all ${searched.length}`}
+        </button>
+      )}
 
-      {others.length > 0 && (
-        <>
-          <h3 className="sub">Everyone else — {others.length}</h3>
-          <div className="funder-list">
-            {shown.map((f) =>
-              editing && editing !== "new" && editing.id === f.id ? (
-                <Editor
-                  key={f.id}
-                  initial={f}
-                  sectors={sectors}
-                  onSave={save}
-                  onCancel={() => setEditing(null)}
-                />
-              ) : (
-                <Row
-                  key={f.id}
-                  funder={f}
-                  onToggle={toggle}
-                  onEdit={setEditing}
-                  onDelete={remove}
-                />
-              )
-            )}
-          </div>
-          {others.length > 4 && (
-            <button className="ghost" onClick={() => setShowAll(!showAll)}>
-              {showAll ? "Show fewer" : `Show all ${others.length}`}
-            </button>
+      <h3 className="sub">Remove list — {removed.length}</h3>
+      {removed.length === 0 ? (
+        <p className="muted small">
+          Nobody removed yet. If you already receive funding from a funder and would not
+          reapply, untick it — every week after that, the agent skips it entirely.
+        </p>
+      ) : (
+        <div className="funder-list">
+          {removed.map((f) =>
+            editing && editing !== "new" && editing.id === f.id ? (
+              <Editor
+                key={f.id}
+                initial={f}
+                sectors={sectors}
+                onSave={save}
+                onCancel={() => setEditing(null)}
+              />
+            ) : (
+              <Row key={f.id} funder={f} onToggle={toggle} onEdit={setEditing} onDelete={remove} />
+            )
           )}
-        </>
+        </div>
       )}
     </section>
   );
