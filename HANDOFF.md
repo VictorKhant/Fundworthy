@@ -67,6 +67,21 @@ reads the page and fills the card in for you. **Read it over and fix anything wr
 A card can also have its own award floor, if one program will take smaller grants than
 the others.
 
+### Where it looks
+
+Two kinds of source, and results say which they came from:
+
+- **Funder pages** — the organisations RISE already has relationships with. These are
+  searched **first**, every run.
+- **Public grants databases** — the California Grants Portal (every state agency is
+  required by law to post its grants there) and Grants.gov (every federal grant).
+  These are complete public lists rather than one funder's page, so they are broader
+  but come with no relationship attached. They get whatever room is left after the
+  partners.
+
+A programme with an empty card contributes nothing to the database searches, and the
+run says so by name rather than quietly returning less.
+
 ### Funders
 
 The list of funders it watches. The important control is the **tick box on the left**:
@@ -217,8 +232,15 @@ Things we know are wrong or unfinished. Read these before trusting a result.
 8. **"Also look beyond the funders on my list" does nothing yet.** The checkbox is
    there and the plumbing behind it is built, but the piece that actually goes looking
    is still being written. A search with it ticked says so rather than pretending.
+   (This is separate from the two public grants databases, which *are* live.)
 
-9. **Some values on a result are the AI's opinion, not facts from the page.** Those
+9. **California only categorises grants for three of your programmes.** The state
+   portal sorts its grants into its own categories, and we have mapped those onto
+   Urban Leadership Fellows, Resilience & Renewal, and Arts. A programme outside those
+   three gets no California results — Grants.gov still covers it, and the run says so
+   by name each time rather than quietly returning less.
+
+10. **Some values on a result are the AI's opinion, not facts from the page.** Those
    carry a dashed outline and a small **AI** tag — funder type, service areas, the
    percentage fit, the hours estimate. Everything without that tag was read off the
    funder's own page or left blank.

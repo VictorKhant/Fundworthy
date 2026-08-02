@@ -45,6 +45,7 @@ The pipeline on its own, if you want it without the UI:
 | `app/assistant.py` | "Paste a link, get a program card" — so nobody writes a prompt |
 | `app/runner.py` | The Re-run button. A subprocess, so Stop actually stops. |
 | `agent/sources.py` | The shipped seed registry. The live list is in the database. |
+| `agent/apis.py` | The two indexed lists — CA Grants Portal (CKAN) and Grants.gov |
 | `agent/parse.py` | Page → candidate. The hard part. |
 | `agent/filters.py` | The §7 hard rejects. Free — they run before any model call. |
 | `agent/score.py` | Haiku triage → Sonnet scoring, behind a hard $1.00 ceiling |

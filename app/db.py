@@ -41,7 +41,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path("data/rise.db")
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # --- schema -------------------------------------------------------------------
 
@@ -121,6 +121,9 @@ CREATE TABLE IF NOT EXISTS opportunities (
     verified               INTEGER NOT NULL DEFAULT 0,
     needs_human_check      INTEGER NOT NULL DEFAULT 1,
     section                TEXT NOT NULL DEFAULT 'not_stated',
+    -- Funder page vs public grants database. Same accuracy rules either way, but very
+    -- different starting positions for a conversation, so Mauri gets to see which.
+    source_kind            TEXT NOT NULL DEFAULT 'funder_page',
     fetched_at             TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_opp_month ON opportunities(month_key);
@@ -256,6 +259,16 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute(
                 "ALTER TABLE runs ADD COLUMN source_health TEXT NOT NULL DEFAULT '[]'")
         current = 2
+
+    if current < 3:
+        # v3 adds opportunities.source_kind. Without it the sink silently discarded
+        # the provenance tag, so every record read back as a funder page regardless of
+        # where it actually came from.
+        opp_cols = {r["name"] for r in conn.execute("PRAGMA table_info(opportunities)")}
+        if "source_kind" not in opp_cols:
+            conn.execute("ALTER TABLE opportunities ADD COLUMN source_kind "
+                         "TEXT NOT NULL DEFAULT 'funder_page'")
+        current = 3
 
     conn.execute(
         "INSERT INTO meta(key, value) VALUES('schema_version', ?) "

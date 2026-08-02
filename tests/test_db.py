@@ -394,3 +394,39 @@ def test_credit_never_lands_on_an_unchecked_source():
     checked = next(h for h in run.source_health if h.name == "Grants.gov")
     assert unchecked.candidates == 0, "an unchecked source cannot have produced results"
     assert checked.candidates == 12
+
+
+def test_source_kind_survives_the_sink(db):
+    """Provenance was being dropped on the way into the database, so every record read
+    back as a funder page regardless of where it came from — and the dashboard could
+    not tell Mauri which results came from a public database rather than a partner."""
+    from agent.models import SourceKind
+
+    with session(db) as conn:
+        repo.save_opportunity(conn, _opp(
+            id="from-db", title="A state grant",
+            source_url="https://example.invalid/state",
+            source_kind=SourceKind.INDEXED_DATABASE), run_id="r")
+        repo.save_opportunity(conn, _opp(source_kind=SourceKind.FUNDER_PAGE), run_id="r")
+        rows = {o["id"]: o for o in repo.list_opportunities(conn)}
+
+    assert rows["from-db"]["source_kind"] == "indexed_database"
+    assert rows[stable_id("https://example.invalid/a", "A grant")]["source_kind"] \
+        == "funder_page"
+
+
+def test_sqlite_sink_creates_its_own_schema(tmp_path, monkeypatch):
+    """The sink is the last thing a multi-minute run does, so the database it opens at
+    the end need not be the one it read config from at the start. Losing a whole
+    scored run to `no such table` at the final step is the most expensive way to fail."""
+    monkeypatch.setenv("RISE_DB_PATH", str(tmp_path / "gone.db"))
+    monkeypatch.setenv("RISE_KEYFILE", str(tmp_path / ".fernet-key"))
+
+    from sinks.sqlite import SqliteSink
+
+    # No init_db() anywhere — the file does not exist at all.
+    sink = SqliteSink(run_id="r1")
+    assert sink.write_opportunities([_opp()]) == 1
+
+    with session() as conn:
+        assert len(repo.list_opportunities(conn)) == 1

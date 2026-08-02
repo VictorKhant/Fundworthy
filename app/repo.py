@@ -310,8 +310,8 @@ def save_opportunity(conn, opp, run_id: str | None = None) -> None:
                estimated_effort_hours, program_match, score, score_rationale,
                funder_type, service_areas, geography, form_990_available,
                confidence_pct, contact_note, verified, needs_human_check,
-               section, fetched_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               section, source_kind, fetched_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
            ON CONFLICT(id) DO UPDATE SET
                run_id=excluded.run_id, score=excluded.score,
                score_rationale=excluded.score_rationale,
@@ -326,7 +326,8 @@ def save_opportunity(conn, opp, run_id: str | None = None) -> None:
                confidence_pct=excluded.confidence_pct,
                contact_note=excluded.contact_note, verified=excluded.verified,
                needs_human_check=excluded.needs_human_check,
-               section=excluded.section, fetched_at=excluded.fetched_at""",
+               section=excluded.section, source_kind=excluded.source_kind,
+               fetched_at=excluded.fetched_at""",
         (
             d["id"], run_id, month_key(), d.get("found_on") or stamp[:10],
             d["title"], d["funder"], d["source_url"],
@@ -339,7 +340,7 @@ def save_opportunity(conn, opp, run_id: str | None = None) -> None:
             None if d.get("form_990_available") is None else int(d["form_990_available"]),
             d.get("confidence_pct"), d.get("contact_note"),
             int(d["verified"]), int(d["needs_human_check"]),
-            d["section"], d["fetched_at"],
+            d["section"], d.get("source_kind", "funder_page"), d["fetched_at"],
         ),
     )
 

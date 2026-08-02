@@ -1,0 +1,21 @@
+Config: read from the settings database (data/rise.db).
+Archive: 0 finding(s) already shown this month.
+Crawling tier ≤ 3…
+Skipping The Morales Fund — URL unknown. Likely a donor-advised or named fund rather than a fund with its own public grants page — possibly administered through a community foundation. ASK MAURI: does this fund publish an open call anywhere, or is it relationship-only? If relationship-only it should leave the crawl registry and move to the Funders tab as a warmth record.
+Skipping The Villegas Fund — URL unknown. Same question as The Morales Fund — ASK MAURI.
+Skipping U.S. Federal Government — JS-rendered search UI — needs the API, not the HTML. Real work, not a URL swap.
+Querying 2 indexed source(s)…
+  ✓ State of California                            46 of 173 active CA grants are on-mission
+  ✓ U.S. Federal Government                        12 federal opportunities with runway, from 67 hits
+  ✓ Alliance Healthcare Foundation                 0 amounts, 0 deadlines, 0 links
+  ✓ California Arts Council                        0 amounts, 0 deadlines, 11 links
+  ✓ City of San Diego Commission for Arts and Culture 0 amounts, 0 deadlines, 6 links
+  ✓ City of San Diego Economic Development         0 amounts, 0 deadlines, 8 links
+  ✓ Prebys Foundation                              1 amounts, 0 deadlines, 8 links
+  ✓ San Diego Foundation                           0 amounts, 0 deadlines, 0 links
+  ✗ County of San Diego                            ReadTimeout: 
+Following 24 program links…
+54 candidates survived the free filters.
+  scored  18  Prebys Foundation               2026 Rooted and Rising: Youth Leaders |   ($0.04462)
+  scored  58  California Arts Council         Grant Programs & Applications - Californ  ($0.02668)
+  scored  55  California Arts Council         Grants - California Arts Council  ($0.01964)

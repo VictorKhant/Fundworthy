@@ -31,14 +31,30 @@ class SqliteSink:
         self.run_id = run_id
         self.db_path = db_path
 
+    def _ready(self) -> None:
+        """Make sure the schema exists before writing.
+
+        The pipeline runs for minutes and the sink is the last thing it does, so the
+        database it opens at the end is not necessarily the one it read config from at
+        the start — it can be deleted, restored from a backup, or moved in between.
+        Without this, a whole scored run's results are lost at the final step to a
+        `no such table` error, which is the most expensive possible moment to fail.
+        (Learned the hard way: the file was deleted mid-run.)
+        """
+        from app.db import init_db
+
+        init_db(self.db_path, seed=False)
+
     def write_opportunities(self, opportunities: list[Opportunity],
                             run: RunLog | None = None) -> int:
+        self._ready()
         with session(self.db_path) as conn:
             for opp in opportunities:
                 repo.save_opportunity(conn, opp, run_id=self.run_id)
         return len(opportunities)
 
     def write_run_log(self, run: RunLog) -> None:
+        self._ready()
         d = run.to_dict()
         with session(self.db_path) as conn:
             if self.run_id is None or repo.get_run(conn, self.run_id) is None:

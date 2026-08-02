@@ -29,6 +29,7 @@ PUBLIC_FIELDS = (
     "score_rationale", "funder_type", "service_areas", "geography",
     "form_990_available", "confidence_pct", "contact_note",
     "source_url", "verified", "needs_human_check", "found_on", "section",
+    "source_kind",
 )
 
 

@@ -43,6 +43,15 @@ export function Finding({ o }) {
       <div className="opp-body">
         <div className="opp-head">
           <span className="opp-funder">{o.funder}</span>
+          {/* Where it came from. A funder page is an organisation RISE already knows,
+              read directly; a database row is a complete public list nobody curated.
+              Same accuracy rules either way, but very different starting positions for
+              a conversation, so it belongs on the row rather than inferred later. */}
+          {o.source_kind === "indexed_database" && (
+            <span className="chip" title="Found in a public grants database, not on a funder's own page">
+              Public database
+            </span>
+          )}
           {o.funder_type && o.funder_type !== "unknown" && (
             <Inferred>{FUNDER_TYPE_LABELS[o.funder_type] || o.funder_type}</Inferred>
           )}
