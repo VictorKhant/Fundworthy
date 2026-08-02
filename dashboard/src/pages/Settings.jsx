@@ -78,12 +78,29 @@ export default function Settings({ state, onChange }) {
           limit you set on the main page.
         </p>
 
-        {state.has_api_key ? (
+        {/* Three states, not two. "Nothing saved here" and "nothing anywhere" look
+            identical on this page but behave completely differently: with a .env on the
+            machine the agent scores regardless, and a page that only says "no key
+            saved" would flatly contradict what the run then does. */}
+        {state.has_api_key && (
           <div className="notice">
             A key is saved: <code>{state.api_key_hint}</code>. It is encrypted on this
             computer and this page cannot show you the rest of it — that is on purpose.
           </div>
-        ) : (
+        )}
+
+        {!state.has_api_key && state.api_key_source === "environment" && (
+          <div className="notice">
+            <strong>No key is saved here</strong> — but the agent is using one
+            (<code>{state.env_key_hint}</code>) from a <code>.env</code> file on this
+            computer, so searches will still be scored.
+            <br />
+            That file is for developers. Saving a key here takes priority over it, and
+            is the one RISE should rely on.
+          </div>
+        )}
+
+        {!state.key_available && (
           <div className="notice">
             No key saved yet. Without one the agent can still find and filter pages, but
             it cannot read or score them.

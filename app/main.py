@@ -122,16 +122,33 @@ def _set(model: BaseModel) -> dict[str, Any]:
 
 # --- settings -----------------------------------------------------------------
 
+def _key_state(conn) -> dict:
+    """What the browser is allowed to know about the API key.
+
+    Three facts, no secret: is one saved *here*, is one reaching the pipeline at all,
+    and which of the two is actually in play. That last one matters because a `.env`
+    on the machine makes the pipeline score whether or not Settings holds anything —
+    without saying so, the page would imply a key is saved when it is not.
+    """
+    stored = secrets.read_api_key(conn)
+    effective, source = secrets.resolve_api_key(conn)
+    return {
+        # A hint, never the key. There is no path that returns the secret.
+        "api_key_hint": secrets.mask(stored),
+        "has_api_key": bool(stored),          # saved in Settings
+        "key_available": bool(effective),     # the pipeline can score
+        "api_key_source": source,             # "settings" | "environment" | None
+        "env_key_hint": secrets.mask(effective) if source == "environment" else None,
+    }
+
+
 @api.get("/settings")
 def read_settings() -> dict:
     with session() as conn:
-        stored = secrets.read_api_key(conn)
         return {
             "settings": repo.get_settings(conn),
-            # A hint, never the key. There is no path that returns the secret.
-            "api_key_hint": secrets.mask(stored),
-            "has_api_key": bool(stored),
             "sectors_available": list(SECTORS),
+            **_key_state(conn),
         }
 
 
@@ -151,15 +168,17 @@ def save_api_key(body: ApiKeyIn) -> dict:
     key = body.api_key.strip()
     with session() as conn:
         secrets.store_api_key(conn, key)
-    log.info("API key saved (%s)", secrets.mask(key))
-    return {"has_api_key": True, "api_key_hint": secrets.mask(key)}
+        log.info("API key saved (%s)", secrets.mask(key))
+        return _key_state(conn)
 
 
 @api.delete("/settings/api-key")
 def delete_api_key() -> dict:
     with session() as conn:
         secrets.clear_api_key(conn)
-    return {"has_api_key": False, "api_key_hint": None}
+        # Reports honestly if an environment key is still in play — otherwise deleting
+        # here looks like it stopped the agent scoring when it did not.
+        return _key_state(conn)
 
 
 @api.post("/settings/api-key/test")
@@ -346,12 +365,10 @@ def state() -> dict:
     """Everything the main page needs. One request instead of six, so the dashboard
     cannot render itself half-populated while the rest arrives."""
     with session() as conn:
-        stored = secrets.read_api_key(conn)
         rows = repo.list_opportunities(conn, month=month_key())
         return {
             "settings": repo.get_settings(conn),
-            "has_api_key": bool(stored),
-            "api_key_hint": secrets.mask(stored),
+            **_key_state(conn),
             "sectors_available": list(SECTORS),
             "programs": repo.list_programs(conn),
             "funders": repo.list_funders(conn),

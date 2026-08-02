@@ -23,10 +23,18 @@ export default function Dashboard({ state, onChange }) {
         </p>
       </header>
 
-      {!state.has_api_key && (
+      {!state.key_available && (
         <div className="notice">
           No Claude API key is saved yet, so searches will find and filter pages but will
           not read or score them. Add one on the <strong>Settings</strong> page.
+        </div>
+      )}
+
+      {!state.has_api_key && state.api_key_source === "environment" && (
+        <div className="notice">
+          Scoring is running on a key from a <code>.env</code> file on this computer, not
+          one saved in <strong>Settings</strong>. Fine for development — but RISE should
+          save a key on the Settings page so it does not depend on that file.
         </div>
       )}
 

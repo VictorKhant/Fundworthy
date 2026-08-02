@@ -29,7 +29,7 @@ from pathlib import Path
 
 from . import repo
 from .db import db_path, dumps, session
-from .secrets import effective_api_key
+from .secrets import SOURCE_ENVIRONMENT, resolve_api_key
 
 log = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ class RunManager:
                 run_id = repo.create_run(conn)
                 repo.update_run(conn, run_id, progress=dumps(
                     {"phase": "starting", "message": "Starting the search…"}))
-                key = effective_api_key(conn)
+                key, key_source = resolve_api_key(conn)
 
             cmd = [sys.executable, "-m", "agent.run", "--sink", "db", "--run-id", run_id]
             if no_llm or not key:
@@ -95,11 +95,17 @@ class RunManager:
                 env.pop("ANTHROPIC_API_KEY", None)
 
             self._lines.clear()
-            self._lines.append(
-                "Starting the search…"
-                + ("" if key else "  (No API key saved, so this run will not score "
-                                  "anything — add one on the Settings page.)")
-            )
+            if not key:
+                opener = ("Starting the search…  (No API key, so this run will not "
+                          "score anything — add one on the Settings page.)")
+            elif key_source == SOURCE_ENVIRONMENT:
+                # Say it out loud. Otherwise a .env on the machine makes the run score
+                # while the Settings page shows no key, and the two look contradictory.
+                opener = ("Starting the search…  (Using a key from a .env file on this "
+                          "computer, not one saved in Settings.)")
+            else:
+                opener = "Starting the search…"
+            self._lines.append(opener)
             self._proc = subprocess.Popen(
                 cmd, cwd=str(REPO_ROOT), env=env,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

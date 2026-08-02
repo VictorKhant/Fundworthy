@@ -270,3 +270,58 @@ def test_the_kill_switch_blocks_the_rerun_button(client):
 def test_archive_endpoint_shape(client):
     body = client.get("/api/archive").json()
     assert "current_month" in body and "months_available" in body
+
+
+# --- which key is actually in play -------------------------------------------
+#
+# A .env on the machine makes the pipeline score whether or not Settings holds
+# anything, so "no key saved" and "no key anywhere" are different states that used to
+# render identically. The page would say no key was saved while the run scored happily.
+
+ENV_KEY = "sk-ant-api03-FROM-THE-ENVIRONMENT-NOT-REAL-1aAa"
+
+
+def test_reports_settings_as_the_source_when_a_key_is_saved(client):
+    client.post("/api/settings/api-key", json={"api_key": FAKE_KEY})
+    body = client.get("/api/settings").json()
+    assert body["has_api_key"] is True
+    assert body["key_available"] is True
+    assert body["api_key_source"] == "settings"
+    assert body["env_key_hint"] is None
+
+
+def test_reports_the_environment_when_nothing_is_saved(client, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", ENV_KEY)
+    body = client.get("/api/settings").json()
+    assert body["has_api_key"] is False, "nothing is saved in Settings"
+    assert body["key_available"] is True, "but the pipeline can still score"
+    assert body["api_key_source"] == "environment"
+    assert body["env_key_hint"] == "sk-ant-…1aAa"
+    assert ENV_KEY not in client.get("/api/settings").text
+
+
+def test_settings_wins_over_the_environment(client, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", ENV_KEY)
+    client.post("/api/settings/api-key", json={"api_key": FAKE_KEY})
+
+    assert client.get("/api/settings").json()["api_key_source"] == "settings"
+    with session() as conn:
+        assert secrets.effective_api_key(conn) == FAKE_KEY
+
+
+def test_no_key_anywhere_is_its_own_state(client):
+    body = client.get("/api/state").json()
+    assert body["has_api_key"] is False
+    assert body["key_available"] is False
+    assert body["api_key_source"] is None
+
+
+def test_deleting_the_saved_key_admits_the_environment_still_scores(client, monkeypatch):
+    """Otherwise Remove looks like it stopped the agent scoring when it did not."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", ENV_KEY)
+    client.post("/api/settings/api-key", json={"api_key": FAKE_KEY})
+
+    body = client.delete("/api/settings/api-key").json()
+    assert body["has_api_key"] is False
+    assert body["key_available"] is True
+    assert body["api_key_source"] == "environment"

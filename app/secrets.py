@@ -120,17 +120,27 @@ def read_api_key(conn) -> str | None:
     return decrypt(row["value"])
 
 
-def effective_api_key(conn=None) -> str | None:
-    """The key the pipeline should use.
+SOURCE_SETTINGS = "settings"
+SOURCE_ENVIRONMENT = "environment"
+
+
+def resolve_api_key(conn=None) -> tuple[str | None, str | None]:
+    """(key, where it came from) — 'settings', 'environment', or (None, None).
 
     Settings wins over the environment: the point of the Settings page is that RISE can
     change the key without anyone touching a file. `ANTHROPIC_API_KEY` stays as the
     fallback so the CLI, the tests, and the GitHub Actions run all keep working.
+
+    The *source* is returned, not just the key, because the fallback is quietly
+    confusing on a developer's machine: with a `.env` present the pipeline scores
+    whether or not anything is saved in Settings, so it is easy to conclude the
+    Settings box works when what you are actually watching is the file. Surfacing which
+    one is in play costs one string and removes the ambiguity for good.
     """
     if conn is not None:
         stored = read_api_key(conn)
         if stored:
-            return stored
+            return stored, SOURCE_SETTINGS
     else:
         from .db import session
 
@@ -138,7 +148,14 @@ def effective_api_key(conn=None) -> str | None:
             with session() as c:
                 stored = read_api_key(c)
             if stored:
-                return stored
+                return stored, SOURCE_SETTINGS
         except Exception as exc:  # noqa: BLE001 — no DB yet is a normal CLI state
             log.debug("no settings database available (%s)", exc)
-    return os.environ.get("ANTHROPIC_API_KEY") or None
+
+    from_env = os.environ.get("ANTHROPIC_API_KEY") or None
+    return (from_env, SOURCE_ENVIRONMENT) if from_env else (None, None)
+
+
+def effective_api_key(conn=None) -> str | None:
+    """The key the pipeline should use. See `resolve_api_key` for where it came from."""
+    return resolve_api_key(conn)[0]
