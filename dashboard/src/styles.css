@@ -537,6 +537,15 @@ tbody tr:last-child td { border-bottom: none; }
   display: block; font-size: 10px; font-weight: 400; letter-spacing: .08em;
   text-transform: uppercase; color: var(--muted);
 }
+/* The rank. Deliberately quieter than the fit numeral above it — it explains the
+   ordering rather than competing to be read first — but present, because a sorted list
+   with no visible sort key reads as arbitrary. Solid, not dashed: unlike fit, the score
+   is computed from the funder's own page against weights the COO set. */
+.opp-rank {
+  display: block; margin-top: 5px; font-size: 12.5px; font-weight: 500;
+  color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.opp-rank-unit { font-size: 10px; opacity: .7; }
 .opp-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .opp-funder { font-weight: 600; font-size: 15.5px; }
 .opp-title { font-size: 14px; color: var(--body); margin: 2px 0 8px; }

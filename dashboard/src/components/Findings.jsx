@@ -66,6 +66,16 @@ export function Finding({ o }) {
         >
           {o.confidence_pct != null ? `${o.confidence_pct}%` : "—"}
           <span className="opp-score-tag">fit · AI</span>
+          {/* The rank, back on the collapsed row.
+              The list says "ranked best first" and is sorted by score — but once the
+              card collapsed to four facts, the score moved behind "More details" and the
+              only visible number became fit. On real data that reads 12%, 18%, 3% down
+              the page, so the ordering looks arbitrary and the first question anyone
+              asks is why 12 is above 18. A list whose order has no visible cause reads
+              as broken; this is the cheapest possible way to give it one. */}
+          <span className="opp-rank" title="Score out of 100 — what this list is ranked by">
+            {o.score}<span className="opp-rank-unit">/100</span>
+          </span>
         </div>
 
         <div className="opp-body">
