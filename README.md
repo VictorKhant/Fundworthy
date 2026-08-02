@@ -57,6 +57,8 @@ The pipeline on its own, if you want it without the UI:
 | `dashboard/src/` | The React UI — sidebar, dashboard, archive, settings |
 | `tests/calibration.py` | The §10 test. "The only test that matters." |
 | `HANDOFF.md` | For RISE. Plain language, no developer required. |
+| `docs/handoff/Fundworthy-guide-for-RISE.pdf` | The same thing as a printed guide, with screenshots. What Mauri actually gets. |
+| `docs/DEPLOY-ORACLE.md` | Putting it on an Oracle free-tier VM, step by step |
 | `STAKEHOLDER.md` | Open questions, answers, commitments |
 | `evidence/` | What we ran, what broke, what we corrected |
 
