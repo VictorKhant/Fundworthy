@@ -111,15 +111,15 @@ function Row({ funder, onToggle, onEdit, onDelete }) {
         {funder.notes && <div className="muted small clamp">{funder.notes}</div>}
       </div>
 
-      <div className="funder-sector muted small">
+      <div className="funder-sector muted">
         {SECTOR_LABELS[funder.sector] || funder.sector}
       </div>
 
       <div className="row">
-        <button className="ghost" onClick={() => onEdit(funder)}>
+        <button className="text" onClick={() => onEdit(funder)}>
           Edit
         </button>
-        <button className="ghost danger" onClick={() => onDelete(funder)}>
+        <button className="text danger" onClick={() => onDelete(funder)}>
           Remove
         </button>
       </div>
@@ -181,15 +181,13 @@ export default function Funders({ funders, sectors, onChange }) {
   return (
     <section className="panel">
       <div className="panel-head">
-        <h2>Funders we watch</h2>
-        <button className="primary" onClick={() => setEditing("new")}>
-          Add a funder
-        </button>
+        <h2>Funders it watches</h2>
+        <button onClick={() => setEditing("new")}>+ Add</button>
       </div>
       <p className="muted small">
-        Untick a funder to take it off the search. It will not be fetched, read, or
-        scored — so removing one costs nothing every week, rather than costing a little
-        every week. {searched.length} of {funders.length} are being searched.
+        {searched.length} searched weekly · {removed.length} on the remove list. Unticking
+        one costs nothing every week, rather than costing a little every week — it is not
+        fetched, read, or scored.
       </p>
 
       {error && <div className="notice error">{error}</div>}
@@ -204,7 +202,7 @@ export default function Funders({ funders, sectors, onChange }) {
       )}
 
       <h3 className="sub">Being searched — {searched.length}</h3>
-      <div className="funder-list">
+      <div className="funder-list compact">
         {shown.map((f) =>
           editing && editing !== "new" && editing.id === f.id ? (
             <Editor
@@ -220,8 +218,8 @@ export default function Funders({ funders, sectors, onChange }) {
         )}
       </div>
       {searched.length > 8 && (
-        <button className="ghost" onClick={() => setShowAll(!showAll)}>
-          {showAll ? "Show fewer" : `Show all ${searched.length}`}
+        <button className="text funder-more" onClick={() => setShowAll(!showAll)}>
+          {showAll ? "Show fewer" : `Show all ${searched.length} →`}
         </button>
       )}
 
@@ -229,10 +227,10 @@ export default function Funders({ funders, sectors, onChange }) {
       {removed.length === 0 ? (
         <p className="muted small">
           Nobody removed yet. If you already receive funding from a funder and would not
-          reapply, untick it — every week after that, the agent skips it entirely.
+          reapply, untick it — every week after that, the researcher skips it entirely.
         </p>
       ) : (
-        <div className="funder-list">
+        <div className="funder-list compact">
           {removed.map((f) =>
             editing && editing !== "new" && editing.id === f.id ? (
               <Editor
