@@ -1,9 +1,9 @@
 {
-  "name": "rise-funding-dashboard",
+  "name": "fundworthy-dashboard",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Read-only run history for the RISE San Diego funding agent.",
+  "description": "Fundworthy \u2014 local control surface for the weekly grant researcher.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

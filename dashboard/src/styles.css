@@ -1,37 +1,55 @@
-/* Plain, legible, light and dark. Deliberately unstyled beyond "clear and usable" —
-   the visual pass comes later. What is NOT cosmetic and should survive a redesign:
+/* Fundworthy — warm paper, sage, clay. (UI-ROADMAP.md, Phase 1)
+
+   What is NOT cosmetic and must survive any future restyle. These are correctness
+   requirements from CLAUDE.md §6, not preferences:
 
      .chip.inferred    marks a value the AI judged rather than read off the funder's
-                       page. If that distinction stops being visible, the page starts
-                       asserting things CLAUDE.md §6 says we must never assert.
-     .opp.flagged      the needs-a-human block. Mauri asked for these last, not hidden.
-     .costbar          spend against the ceiling. §8 only works if she can see it. */
+                       page. Dashed --dash border + a visible "AI" mark. If that
+                       distinction stops being visible, the page starts asserting
+                       things §6 says we must never assert. It must never be restyled
+                       to look like .chip.strong (solid, sage) which means "sourced".
+     .opp-score        the fit numeral. The largest, most confident-looking number on
+                       the row — and entirely an AI judgement. Carries the same dashed
+                       rule for the same reason.
+     .opp.flagged      the needs-a-human block. Clay border, listed last, never hidden.
+     .costbar          spend against the ceiling. §8 only works if she can see it.
+
+   Dark mode: deliberately dropped in this pass. The old cool-grey dark palette would
+   have clashed with the warm light one, and shipping a half-converted dark theme is
+   worse than shipping none. See UI-ROADMAP.md Phase 1. */
 
 :root {
-  --bg: #ffffff;
-  --fg: #1a1a1a;
-  --muted: #666666;
-  --line: #e2e2e2;
-  --panel: #fafafa;
-  --ok: #1a7f4b;
-  --warn: #a35c00;
-  --off: #a11b1b;
-  --accent: #2b5fa8;
-  --sidebar: 15rem;
-}
+  --bg: #F7F5F1;          /* warm paper */
+  --panel: #FCFBF8;       /* raised surfaces / sidebar */
+  --card: #FFFFFF;
+  --fg: #33312C;          /* ink */
+  --body: #55524A;        /* secondary text */
+  --muted: #8A8578;
+  --line: #E5E1D8;
+  --line-soft: #F1EFEA;
+  --accent: #4C7A5E;      /* sage — primary actions, sourced-good */
+  --accent-deep: #3A6149;
+  --accent-soft: #EDF2EE; /* sage tint bg */
+  --accent-line: #D5E0D8;
+  --clay: #A06B4F;        /* secondary accent — warnings-lite, numerals */
+  --clay-deep: #9C5A34;
+  --clay-soft: #F5E9E0;   /* urgent-deadline chip bg */
+  --clay-line: #E8D9C8;
+  --dash: #C9C4B6;        /* dashed borders on AI-inferred marks */
+  --nav-active: #EDEAE2;
+  --shadow: 0 18px 40px rgba(51, 49, 44, .06);
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #16181c;
-    --fg: #ececec;
-    --muted: #9a9a9a;
-    --line: #2c2f36;
-    --panel: #1d2026;
-    --ok: #4fbf85;
-    --warn: #e0a44a;
-    --off: #e56a6a;
-    --accent: #6fa3e8;
-  }
+  /* Older selectors still name these. Kept as aliases rather than chased through the
+     JSX, so a component written against the previous palette cannot render an
+     unstyled control. */
+  --ok: var(--accent);
+  --warn: var(--clay-deep);
+  --off: var(--clay-deep);
+
+  --sidebar: 236px;
+  --display: "Newsreader", ui-serif, Georgia, "Times New Roman", serif;
+  --ui: "Albert Sans", ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 * { box-sizing: border-box; }
@@ -40,8 +58,12 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font: 15px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font: 15px/1.6 var(--ui);
+  -webkit-font-smoothing: antialiased;
 }
+
+a { color: var(--accent); }
+a:hover { color: var(--accent-deep); }
 
 /* --- shell + sidebar ------------------------------------------------------- */
 
@@ -49,11 +71,12 @@ body {
 .shell.with-sidebar .page { margin-left: var(--sidebar); }
 
 .sidebar-toggle {
-  position: fixed; top: .75rem; left: .75rem; z-index: 30;
-  width: 2.25rem; height: 2.25rem; border-radius: .4rem;
-  border: 1px solid var(--line); background: var(--panel); color: var(--fg);
-  font-size: 1rem; cursor: pointer;
+  position: fixed; top: 14px; left: 14px; z-index: 30;
+  width: 36px; height: 36px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--card); color: var(--fg);
+  font-size: 15px; cursor: pointer; line-height: 1;
 }
+.sidebar-toggle:hover { border-color: var(--dash); }
 
 .sidebar {
   position: fixed; inset: 0 auto 0 0; z-index: 25;
@@ -62,222 +85,693 @@ body {
   transition: transform .18s ease;
   background: var(--panel);
   border-right: 1px solid var(--line);
-  padding: 3.5rem .75rem 1rem;
-  display: flex; flex-direction: column; gap: .25rem;
+  padding: 60px 14px 16px;
+  display: flex; flex-direction: column; gap: 4px;
+  overflow-y: auto;
 }
 .sidebar.open { transform: none; }
 
-.sidebar-brand {
-  font-weight: 700; letter-spacing: .12em; color: var(--muted);
-  padding: 0 .5rem .75rem;
+/* The wordmark: text plus a 6px clay dot. No image asset anywhere in this app. */
+.brandmark {
+  display: flex; align-items: baseline; gap: 7px;
+  padding: 2px 10px 16px;
+  font-family: var(--display); font-size: 20px; font-weight: 500;
+  letter-spacing: -.01em; color: var(--fg);
+  text-decoration: none;
 }
+.brand-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--clay); display: inline-block; flex-shrink: 0;
+}
+
+/* The sidebar is open by default at ≥900px and the toggle would just sit on top of it.
+   Hiding it while open rather than at a breakpoint means someone who closes the sidebar
+   on a wide screen still gets it back. */
+.shell.with-sidebar .sidebar-toggle { display: none; }
 
 .sidebar-link {
-  display: flex; align-items: center; gap: .6rem;
-  padding: .55rem .6rem; border-radius: .4rem;
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px; border-radius: 10px;
   border: 0; background: none; color: var(--fg);
-  font: inherit; text-align: left; cursor: pointer; width: 100%;
+  font: inherit; font-size: 14.5px; text-align: left; cursor: pointer; width: 100%;
 }
-.sidebar-link:hover { background: rgba(127, 127, 127, .12); }
-.sidebar-link.current { background: rgba(127, 127, 127, .18); font-weight: 600; }
-.sidebar-icon { width: 1.1rem; text-align: center; opacity: .75; }
-.sidebar-foot { margin-top: auto; padding: .75rem .6rem; }
+.sidebar-link:hover { background: var(--nav-active); }
+.sidebar-link.current { background: var(--nav-active); font-weight: 600; }
+.sidebar-icon { width: 16px; text-align: center; opacity: .7; font-size: 13px; }
+.sidebar-foot { margin-top: auto; padding: 14px 10px 4px; border-top: 1px solid var(--line); }
 
-.scrim { position: fixed; inset: 0; z-index: 20; background: rgba(0, 0, 0, .3); }
+/* --- org switcher + user chip (both behind VITE_SHOW_AUTH) ----------------- */
+
+.orgswitch { position: relative; margin-bottom: 14px; }
+.orgswitch-btn {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; padding: 10px 12px; border-radius: 12px;
+  border: 1px solid var(--line); background: var(--card);
+  font: inherit; font-size: 14px; text-align: left; cursor: pointer;
+}
+.orgswitch-label { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.orgswitch-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.orgswitch-caret { color: var(--muted); font-size: 11px; flex-shrink: 0; }
+.orgswitch-avatar {
+  width: 26px; height: 26px; border-radius: 8px; flex-shrink: 0;
+  background: var(--accent-soft); color: var(--accent);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 13px;
+}
+.orgswitch-avatar.alt { background: var(--clay-soft); color: var(--clay); }
+
+.orgswitch-menu {
+  position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 40;
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: var(--shadow); padding: 6px;
+}
+.orgswitch-item {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 8px 10px; border-radius: 8px; border: 0; background: none;
+  font: inherit; font-size: 13.5px; text-align: left; cursor: pointer;
+}
+.orgswitch-item:hover:not(:disabled) { background: var(--line-soft); border-color: transparent; }
+.orgswitch-item.current { background: var(--line-soft); }
+.orgswitch-item.add { color: var(--accent); }
+.orgswitch-item .orgswitch-avatar { width: 22px; height: 22px; border-radius: 6px; font-size: 11px; }
+.orgswitch-rule { height: 1px; background: var(--line); margin: 5px 4px; }
+
+.userchip { display: flex; align-items: center; gap: 10px; }
+.avatar {
+  width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+  background: #E9E5DC; color: var(--body);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-weight: 600; font-size: 12.5px;
+}
+.userchip-text { min-width: 0; }
+.userchip-name {
+  display: block; font-size: 13.5px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.userchip-out { font-size: 12px; color: var(--muted); }
+.userchip-out:hover:not(:disabled) { color: var(--fg); }
+
+.scrim { position: fixed; inset: 0; z-index: 20; background: rgba(51, 49, 44, .28); }
 @media (min-width: 900px) { .scrim { display: none; } }
 
-.page { max-width: 1100px; margin: 0 auto; padding: 3.5rem 1.25rem 4rem; }
+.page { max-width: 980px; margin: 0 auto; padding: 36px 40px 60px; }
+@media (max-width: 700px) { .page { padding-left: 20px; padding-right: 20px; } }
+
+/* The menu button is fixed at the top-left and only renders while the sidebar is shut,
+   so that is exactly when the page needs room for it — otherwise it sits on top of the
+   h1. Keyed off the shell class rather than a breakpoint, because "is the toggle
+   visible" is the real condition and it is not a function of width alone. */
+.shell:not(.with-sidebar) .page { padding-top: 64px; }
+
+/* Below the breakpoint the sidebar overlays rather than pushing. The open state is
+   decided once, from window width at mount — so a window resized down from wide keeps
+   the sidebar open, and without this the page sat 236px off the right edge. Overlaying
+   is also the correct behaviour for a drawer: the scrim is already there to close it. */
+@media (max-width: 880px) {
+  .shell.with-sidebar .page { margin-left: 0; }
+}
 
 /* --- type ------------------------------------------------------------------ */
 
-h1 { font-size: 1.5rem; margin: 0 0 .35rem; }
-h2 { font-size: 1.05rem; margin: 0 0 .5rem; }
-h3.sub { font-size: .8rem; text-transform: uppercase; letter-spacing: .06em;
-         color: var(--muted); margin: 1.25rem 0 .5rem; }
-header { margin-bottom: 1.5rem; }
+h1 {
+  font-family: var(--display); font-weight: 500; font-size: 30px;
+  letter-spacing: -.01em; margin: 0 0 4px; line-height: 1.2;
+}
+h2 {
+  font-family: var(--display); font-weight: 500; font-size: 20px;
+  letter-spacing: -.01em; margin: 0 0 6px; line-height: 1.25;
+}
+h3.sub {
+  font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--muted); font-weight: 600; margin: 20px 0 8px;
+}
+header { margin-bottom: 20px; }
 .muted { color: var(--muted); }
-.small { font-size: .85rem; }
-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; }
+.small { font-size: 13px; }
+p { text-wrap: pretty; }
+code { font-family: var(--mono); font-size: .9em; background: var(--line-soft);
+       padding: 1px 5px; border-radius: 4px; }
 
 /* --- panels + forms -------------------------------------------------------- */
 
 .panel {
-  border: 1px solid var(--line); border-radius: .5rem;
-  background: var(--panel); padding: 1rem 1.1rem; margin-bottom: 1.25rem;
+  border: 1px solid var(--line); border-radius: 14px;
+  background: var(--panel); padding: 18px 20px; margin-bottom: 16px;
 }
-.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-
-.field { display: block; margin: .85rem 0; }
-.field > span { display: block; font-weight: 600; font-size: .9rem; margin-bottom: .3rem; }
-.field.inline { display: flex; align-items: flex-start; gap: .5rem; }
-.field.inline > span { font-weight: 400; margin: 0; }
-.field small { display: block; margin-top: .3rem; }
-
-input[type="text"], input[type="number"], input[type="password"], input:not([type]),
-textarea, select {
-  width: 100%; padding: .45rem .6rem;
-  border: 1px solid var(--line); border-radius: .35rem;
-  background: var(--bg); color: var(--fg); font: inherit;
+.panel.raised { background: var(--card); padding: 22px 24px; }
+.panel-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
 }
-textarea { resize: vertical; }
 
-.knobs { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 0 1rem; }
-.checks { display: flex; flex-wrap: wrap; gap: .5rem .9rem; margin: .3rem 0; }
-.check { display: flex; align-items: center; gap: .4rem; font-size: .9rem; }
+.field { display: block; margin: 14px 0; }
+.field > span { display: block; font-weight: 600; font-size: 13px; margin-bottom: 5px; }
+.field.inline { display: flex; align-items: flex-start; gap: 8px; }
+.field.inline > span { font-weight: 400; font-size: 13.5px; margin: 0; }
+.field small { display: block; margin-top: 4px; font-size: 12.5px; }
 
-.row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
-.row.end { justify-content: flex-end; margin-top: .75rem; }
+input[type="text"], input[type="number"], input[type="password"], input[type="email"],
+input:not([type]), textarea, select {
+  width: 100%; padding: 9px 12px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--panel); color: var(--fg); font: inherit; font-size: 14px;
+}
+.panel input[type="text"], .panel input[type="number"], .panel input[type="password"],
+.panel input:not([type]), .panel textarea, .panel select { background: var(--card); }
+input:focus-visible, textarea:focus-visible, select:focus-visible {
+  outline: 2px solid var(--accent-line); outline-offset: 1px; border-color: var(--accent);
+}
+textarea { resize: vertical; line-height: 1.5; }
+input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; }
+
+.knobs { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 4px 20px; }
+.checks { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 4px 0; }
+.check { display: flex; align-items: center; gap: 7px; font-size: 13.5px; cursor: pointer; }
+
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.row.end { justify-content: flex-end; margin-top: 14px; }
 
 /* a.button is the download link. It has to be an <a download> rather than a button so
    the browser saves the file natively, but it should be indistinguishable from the
    buttons beside it — hence the shared declaration. */
 button, a.button {
-  padding: .45rem .8rem; border-radius: .35rem;
-  border: 1px solid var(--line); background: var(--bg); color: var(--fg);
-  font: inherit; cursor: pointer;
+  padding: 9px 16px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--card); color: var(--fg);
+  font: inherit; font-size: 14px; cursor: pointer; line-height: 1.4;
 }
 a.button { text-decoration: none; white-space: nowrap; display: inline-block; }
-button:hover:not(:disabled), a.button:hover { border-color: var(--muted); }
+button:hover:not(:disabled), a.button:hover { border-color: var(--dash); color: var(--fg); }
 button:disabled { opacity: .5; cursor: not-allowed; }
-button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-button.danger  { background: var(--off); border-color: var(--off); color: #fff; }
-button.ghost   { background: none; border-color: transparent; color: var(--muted); }
-button.ghost:hover:not(:disabled) { color: var(--fg); }
-button.ghost.danger { background: none; color: var(--off); border-color: transparent; }
+
+button.primary {
+  background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 500;
+}
+button.primary:hover:not(:disabled) { background: var(--accent-deep); border-color: var(--accent-deep); }
+
+/* The dark variant. Used where a second filled button would fight the sage one —
+   "Save settings" inside the search panel, the selected month in the archive. */
+button.dark { background: var(--fg); border-color: var(--fg); color: var(--bg); font-weight: 500; }
+button.dark:hover:not(:disabled) { background: #4a473f; border-color: #4a473f; }
+
+button.danger { background: none; border-color: var(--line); color: var(--clay-deep); }
+button.danger:hover:not(:disabled) { border-color: var(--clay-line); }
+
+button.ghost { background: none; border-color: transparent; color: var(--accent); padding: 9px 10px; }
+button.ghost:hover:not(:disabled) { background: none; color: var(--accent-deep); }
+button.ghost.danger { background: none; color: var(--clay-deep); border-color: transparent; }
+
+/* A button that reads as a link — the "Adjust search settings" / "More details"
+   affordance. Still a real <button>, because it toggles rather than navigates. */
+button.text {
+  border: 0; background: none; color: var(--accent);
+  font: inherit; font-size: 13.5px; padding: 0; cursor: pointer;
+}
+button.text:hover:not(:disabled) { color: var(--accent-deep); }
 
 .notice {
-  border: 1px solid var(--line); border-left: 3px solid var(--accent);
-  border-radius: .35rem; padding: .6rem .8rem; margin: .75rem 0;
-  background: var(--bg); font-size: .9rem;
+  border: 1px solid var(--accent-line); background: var(--accent-soft);
+  border-radius: 11px; padding: 11px 15px; margin: 12px 0;
+  font-size: 13.5px; color: var(--accent-deep);
 }
-.notice.error { border-left-color: var(--off); color: var(--off); }
-.notice.small { font-size: .85rem; }
+.notice.error { border-color: var(--clay-line); background: var(--clay-soft); color: var(--clay-deep); }
+.notice.plain { border-color: var(--line); background: var(--panel); color: var(--body); }
+.notice.small { font-size: 13px; }
+
+/* --- "this week": header, helper, status strip, knobs ---------------------- */
+
+.page-head {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 16px; margin-bottom: 20px; flex-wrap: wrap;
+}
+.page-head p { margin: 0; }
+
+/* First-run orientation. Dismissed permanently, in localStorage — a banner that comes
+   back every Thursday is noise, and this one has nothing to say after the first read. */
+.helper {
+  display: flex; gap: 12px; align-items: flex-start;
+  background: var(--accent-soft); border: 1px solid var(--accent-line);
+  border-radius: 14px; padding: 14px 18px; margin-bottom: 18px;
+}
+.helper p { margin: 0; flex: 1; font-size: 14px; color: var(--accent-deep); }
+.helper-mark { font-family: var(--display); font-size: 18px; color: var(--accent); line-height: 1.3; }
+.helper-dismiss { color: var(--accent-deep); font-size: 13px; flex-shrink: 0; }
+.helper-dismiss:hover:not(:disabled) { color: var(--fg); }
+
+/* Always visible, never collapsible: the on/off state, when it last ran, and what it
+   spent against the ceiling. See the .costbar note at the top of this file. */
+.statusstrip {
+  display: flex; align-items: center; gap: 14px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+  padding: 13px 18px; margin-bottom: 26px; flex-wrap: wrap;
+  font-size: 13.5px; color: var(--body);
+}
+.status-state { display: inline-flex; align-items: center; gap: 7px; color: var(--accent-deep); }
+.status-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent); display: inline-block; flex-shrink: 0;
+}
+.status-state.off { color: var(--clay-deep); }
+.status-state.off .status-dot { background: var(--clay); }
+.status-sep { color: var(--line); }
+.status-item { display: inline-flex; align-items: center; gap: 8px; }
+.status-actions { margin-left: auto; }
+.status-note { margin: -18px 0 26px; }
+
+.minibar {
+  width: 64px; height: 5px; border-radius: 999px; background: #E9E5DC;
+  display: inline-block; overflow: hidden; margin-bottom: 0; flex-shrink: 0;
+}
+.minibar-fill { display: block; height: 100%; background: var(--accent); }
+
+/* Pulled up under the strip so the two read as one control, not two stacked panels. */
+.searchpanel {
+  background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+  padding: 20px 22px; margin: -14px 0 26px;
+}
+.searchpanel-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line-soft);
+  flex-wrap: wrap;
+}
+
+/* Programs and funders, side by side at the bottom of the page. */
+.paircols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+@media (max-width: 880px) { .paircols { grid-template-columns: 1fr; } }
+
+/* --- program rows ---------------------------------------------------------- */
+
+.proglist { display: flex; flex-direction: column; gap: 8px; }
+.progrow {
+  display: flex; align-items: flex-start; gap: 10px;
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: 11px; padding: 11px 13px;
+}
+.progrow.active { border-color: var(--accent-line); }
+.progrow-tick { display: flex; align-items: flex-start; gap: 10px; flex: 1;
+                min-width: 0; cursor: pointer; }
+.progrow-tick > input { margin-top: 3px; flex-shrink: 0; }
+.progrow-main { min-width: 0; }
+.progrow-title {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  font-weight: 600; font-size: 14px; overflow-wrap: anywhere;
+}
+.progrow-sub {
+  display: block; font-size: 12.5px; color: var(--muted); margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+/* An empty card is not neutral — until it is filled in, the researcher has to guess
+   what the programme needs. Clay, so it reads as unfinished rather than as a caption.
+   Named "unfilled" rather than "empty" because .empty is the page-level no-results
+   block, and the two composed into a 40px dashed box inside every program row. */
+.progrow-sub.unfilled { color: var(--clay); }
+.progrow-actions { display: flex; gap: 10px; flex-shrink: 0; padding-top: 2px; }
 
 /* --- program cards --------------------------------------------------------- */
 
-.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: .85rem; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; }
 .card {
-  border: 1px solid var(--line); border-radius: .45rem;
-  padding: .75rem .85rem; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 11px;
+  padding: 13px 15px; background: var(--card);
 }
-.card.active { border-color: var(--accent); }
-.card.editing { grid-column: 1 / -1; }
-.card-tick { display: flex; align-items: center; gap: .5rem; cursor: pointer; }
-.card-title { font-weight: 600; }
-.card-summary { margin: .5rem 0; font-size: .9rem; }
-.card-meta { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .5rem; }
-.tags { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .4rem; }
+.card.active { border-color: var(--accent-line); }
+.card.editing { grid-column: 1 / -1; padding: 18px 20px; }
+.card-tick { display: flex; align-items: center; gap: 9px; cursor: pointer; }
+.card-title { font-weight: 600; font-size: 14px; }
+.card-summary { margin: 6px 0; font-size: 13px; color: var(--body); }
+.card-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; font-size: 12.5px; }
+.tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
 
 /* --- funders --------------------------------------------------------------- */
 
 .funder-list { display: flex; flex-direction: column; }
 .funder-row {
   display: grid; grid-template-columns: auto 1fr auto auto;
-  gap: .75rem; align-items: center;
-  padding: .55rem 0; border-bottom: 1px solid var(--line);
+  gap: 10px; align-items: center;
+  padding: 8px 2px; border-bottom: 1px solid var(--line-soft);
 }
 .funder-row.inactive { opacity: .55; }
-.funder-name { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; font-weight: 500; }
-.funder-sector { white-space: nowrap; }
+.funder-name { display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+               font-weight: 500; font-size: 14px; }
+.funder-sector { white-space: nowrap; font-size: 12px; }
 .clamp { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
 @media (max-width: 760px) {
   .funder-row { grid-template-columns: auto 1fr; }
   .funder-sector { grid-column: 2; }
 }
 
+/* The list now lives in a half-width column, so the four-across row cannot fit at any
+   viewport. A container query would be the right tool; this list is the only thing that
+   needs one, so an explicit modifier is cheaper than adopting the syntax for one rule.
+
+   Two lines: tick + name on top, then a footer line carrying the sector on the left and
+   Edit/Remove on the right. Both footer items claim the same grid area and justify to
+   opposite ends — they are short enough never to meet, and it keeps the row two lines
+   tall instead of three. */
+.funder-list.compact .funder-row {
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas: "tick main" "foot foot";
+  row-gap: 3px; align-items: start;
+}
+.funder-list.compact .funder-tick { grid-area: tick; padding-top: 3px; }
+.funder-list.compact .funder-main { grid-area: main; min-width: 0; }
+.funder-list.compact .funder-sector { grid-area: foot; justify-self: start; }
+.funder-list.compact .funder-row > .row { grid-area: foot; justify-self: end; gap: 12px; }
+.funder-list.compact .funder-name { font-size: 13.5px; }
+/* A grants URL has no break opportunity and wrapped to three lines in this column. */
+.funder-list.compact .funder-main a {
+  display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.funder-more { padding: 10px 0 0; }
+
 /* --- tables ---------------------------------------------------------------- */
 /* Wide content scrolls inside its own container — the page never scrolls sideways. */
 .tablewrap { overflow-x: auto; }
-table { border-collapse: collapse; width: 100%; font-size: .87rem; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
 th, td {
-  text-align: left;
-  padding: .5rem .65rem;
-  border-bottom: 1px solid var(--line);
-  white-space: nowrap;
+  text-align: left; padding: 8px 10px;
+  border-bottom: 1px solid var(--line-soft); white-space: nowrap;
 }
-th { font-weight: 600; color: var(--muted); font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; }
+th { font-weight: 600; color: var(--muted); font-size: 12px;
+     text-transform: uppercase; letter-spacing: .06em; }
 tbody tr:last-child td { border-bottom: none; }
 
-/* --- run panel ------------------------------------------------------------- */
+/* --- run cost + log -------------------------------------------------------- */
 
-.runbar { margin-top: 1rem; }
-.costbar { height: .45rem; border-radius: 999px; background: var(--line); overflow: hidden; margin-bottom: .4rem; }
-.costbar-fill { height: 100%; background: var(--ok); }
+.runbar { margin-top: 14px; }
+.costbar {
+  height: 5px; border-radius: 999px; background: #E9E5DC;
+  overflow: hidden; margin-bottom: 6px;
+}
+.costbar-fill { height: 100%; background: var(--accent); }
 
-.runlog { margin-top: .85rem; }
+.runlog { margin-top: 14px; }
 .runlog pre {
-  margin: .3rem 0 0; padding: .6rem .7rem; max-height: 15rem; overflow: auto;
-  border: 1px solid var(--line); border-radius: .35rem; background: var(--bg);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: .78rem; line-height: 1.45; white-space: pre-wrap; word-break: break-word;
+  margin: 5px 0 0; padding: 11px 13px; max-height: 15rem; overflow: auto;
+  border: 1px solid var(--line); border-radius: 11px; background: var(--card);
+  font-family: var(--mono);
+  font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
 }
 
 /* --- findings -------------------------------------------------------------- */
 
-.opps { display: flex; flex-direction: column; gap: .6rem; }
+.findings { margin-bottom: 30px; }
+.findings h2 { font-size: 21px; margin: 0 0 4px; }
+.findings-note { margin: 0 0 14px; color: var(--muted); font-size: 13.5px; }
+
+.opps { display: flex; flex-direction: column; gap: 12px; }
 .opp {
-  /* 4.25rem, not 3rem: the badge carries a "fit · AI" label under the number, and the
-     label is wider than the number it describes. At 3rem it spilled past the card. */
-  display: grid; grid-template-columns: 4.25rem minmax(0, 1fr); gap: .85rem;
-  border: 1px solid var(--line); border-radius: .45rem;
-  padding: .75rem .85rem; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 14px;
+  padding: 16px 18px; background: var(--card);
 }
-/* A grid column defaults to min-width:auto, so it refuses to shrink below its widest
+.opp-row { display: flex; gap: 16px; align-items: flex-start; }
+/* A flex item defaults to min-width:auto, so it refuses to shrink below its widest
    unbreakable word. Funder URLs and long grant titles have no break opportunity, so the
-   column grew past the card border instead of wrapping. minmax(0, 1fr) above and this
-   min-width let it shrink; overflow-wrap then breaks the long token itself. */
-.opp-body { min-width: 0; }
+   body grew past the card border instead of wrapping. min-width:0 lets it shrink;
+   overflow-wrap then breaks the long token itself. */
+.opp-body { flex: 1; min-width: 0; }
 .opp-title, .opp-why, .opp-funder, .opp-meta a { overflow-wrap: anywhere; }
-.opp.flagged { border-left: 3px solid var(--warn); }
+
+/* The flagged block reads as a whole card, not a card with a stripe. The 3px
+   left-border-accent pattern is retired — a full clay border says "this one is
+   different" without implying a severity ramp we do not have. */
+.opp.flagged { border-color: var(--clay-line); }
+
+.opp-toggle { flex-shrink: 0; white-space: nowrap; padding: 4px 0; font-size: 13px; }
+.opp-detail {
+  margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line-soft);
+  display: flex; flex-direction: column; gap: 10px;
+}
+.opp-detail .opp-meta { margin-top: 0; }
+.opp-why-label { font-family: var(--display); font-style: italic; color: var(--muted); }
+.opp-links { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; font-size: 13.5px; }
+.opp-links .strong-link { font-weight: 500; }
+.opp-links .muted-link { color: var(--muted); }
+.opp-links .muted-link:hover { color: var(--body); }
+
+/* Narrow windows: the toggle drops under the body rather than squeezing the title. */
+@media (max-width: 620px) {
+  .opp-row { flex-wrap: wrap; }
+  .opp-toggle { margin-left: 68px; }
+}
+
 .opp-score {
-  font-size: 1.35rem; font-weight: 700; text-align: center;
-  color: var(--accent); line-height: 1.2;
+  font-family: var(--display); font-size: 26px; font-weight: 500;
+  text-align: center; color: var(--accent); line-height: 1.1;
+  min-width: 52px; padding-top: 2px; flex-shrink: 0;
 }
 /* The badge holds the AI's fit estimate, which is a judgement and not a figure read off
    the funder's page. It is the biggest number on the row, so the inferred marking has to
-   be unmistakable: muted rather than accent-coloured, and a dashed rule under it echoing
-   .chip.inferred. Same correctness requirement as that class — see the top of this file. */
-.opp-score.inferred {
-  color: var(--muted);
-  border-bottom: 1px dashed var(--line);
-  padding-bottom: .15rem;
+   be unmistakable — a dashed rule under it echoing .chip.inferred. Same correctness
+   requirement as that class; see the top of this file. */
+.opp-score.inferred .opp-score-tag {
+  border-top: 1px dashed var(--dash);
+  margin-top: 3px; padding-top: 3px;
 }
+.opp.flagged .opp-score { color: var(--clay); }
 .opp-score-tag {
-  display: block; font-size: .6rem; font-weight: 600; letter-spacing: .02em;
-  text-transform: uppercase; color: var(--muted); margin-top: .1rem;
+  display: block; font-size: 10px; font-weight: 400; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--muted);
 }
-.opp-head { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
-.opp-funder { font-weight: 600; }
-.opp-title { margin: .15rem 0; }
-.opp-why { margin: .35rem 0 .5rem; }
-.opp-meta { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin-top: .35rem; }
-.opp-meta a { color: var(--accent); }
+.opp-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.opp-funder { font-weight: 600; font-size: 15.5px; }
+.opp-title { font-size: 14px; color: var(--body); margin: 2px 0 8px; }
+.opp-why { margin: 6px 0 8px; font-size: 13.5px; color: var(--body); max-width: 70ch; }
+.opp-meta { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; margin-top: 8px; }
+.opp-meta a { color: var(--accent); font-size: 13.5px; }
+
+/* --- chips ----------------------------------------------------------------- */
 
 .chip {
-  display: inline-flex; align-items: center; gap: .3rem;
-  padding: .1rem .45rem; border-radius: 999px;
-  border: 1px solid var(--line); background: var(--panel);
-  font-size: .8rem;
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 10px; border-radius: 999px;
+  border: 1px solid transparent; background: var(--line-soft);
+  color: var(--body); font-size: 12.5px;
   /* Was nowrap. Most chips are short enough that flex-wrap moves them to the next line
      before their text ever needs to break — but service areas and contact notes are
      free text, and one long one was riding out past the card edge with nowrap set. */
   white-space: normal; overflow-wrap: anywhere; max-width: 100%;
 }
-.chip.strong { font-weight: 700; border-color: var(--ok); color: var(--ok); }
-.chip.warn { border-color: var(--warn); color: var(--warn); }
-.chip.warm { border-color: var(--accent); color: var(--accent); }
+/* Sourced, and good news: an amount the funder's own page stated. Solid sage — the
+   visual opposite of .chip.inferred, on purpose. */
+.chip.strong { background: var(--accent-soft); color: var(--accent-deep); font-weight: 600; }
+.chip.warn { background: var(--clay-soft); color: var(--clay-deep); }
+.chip.warm { background: var(--accent-soft); color: var(--accent-deep); }
 .chip.muted { color: var(--muted); }
 
 /* An AI judgement, not a quote from the funder's page. This distinction is a
    correctness requirement, not decoration — see the note at the top of this file. */
-.chip.inferred { border-style: dashed; }
+.chip.inferred {
+  background: none; border: 1px dashed var(--dash); color: var(--muted); padding: 2px 10px;
+}
+/* nowrap because the chip itself wraps: service areas run long, and without this the
+   two letters of the tag broke onto separate lines as "A / I". */
 .chip-tag {
-  font-size: .62rem; font-weight: 700; letter-spacing: .04em;
-  padding: 0 .2rem; border-radius: .2rem;
-  background: var(--line); color: var(--muted);
+  font-size: 10px; font-weight: 600; letter-spacing: .06em; white-space: nowrap;
+  padding: 1px 4px; border-radius: 4px;
+  background: var(--line-soft); color: var(--muted);
+}
+.chip.inferred .chip-tag { background: var(--line-soft); }
+
+.empty {
+  border: 1px dashed var(--dash); border-radius: 14px;
+  padding: 40px 20px; text-align: center; background: var(--panel);
+}
+.empty h3 { font-family: var(--display); font-weight: 500; font-size: 19px; margin: 0 0 6px; }
+.empty p { margin: 0; color: var(--muted); font-size: 13.5px; }
+
+footer {
+  margin-top: 40px; padding-top: 16px;
+  border-top: 1px solid var(--line); font-size: 13px; color: var(--muted);
 }
 
-.empty { border: 1px dashed var(--line); border-radius: .5rem; padding: 2rem 1rem; text-align: center; }
-.empty h3 { margin: 0 0 .35rem; }
+/* --- past findings --------------------------------------------------------- */
 
-footer { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+.archive-months { margin-bottom: 18px; gap: 8px; }
+/* Dashed, because it explains a deletion. A solid panel would read as another section
+   of results; this is a note about why some are missing. */
+.archive-note {
+  background: var(--panel); border: 1px dashed #D9D4C8; border-radius: 14px;
+  padding: 16px 20px; margin-bottom: 18px;
+  font-size: 13.5px; color: var(--muted); max-width: 74ch;
+}
+
+/* --- settings -------------------------------------------------------------- */
+
+.settings-lede { margin: 0 0 16px; color: var(--body); font-size: 14px; max-width: 64ch; }
+
+/* The key walkthrough. Clay numerals, because "go to console.anthropic.com" is not
+   instructions to someone who has never been there. */
+.steps { list-style: none; margin: 0 0 18px; padding: 0;
+         display: flex; flex-direction: column; gap: 10px; }
+.steps li { display: flex; gap: 12px; align-items: baseline; font-size: 14px; color: var(--body); }
+.step-n { font-family: var(--display); color: var(--clay); font-size: 17px; min-width: 18px; }
+
+.keyrow { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.keyrow .field { flex: 1; min-width: 240px; margin: 0; }
+.notice-action { color: inherit; font-weight: 600; font-size: inherit; }
+.notice-action:hover:not(:disabled) { text-decoration: underline; }
+
+/* --- landing page ---------------------------------------------------------- */
+/* Public, marketing, no API. Runs a notch larger than the app: 16px against 15px,
+   because it is read once at arm's length rather than scanned weekly. */
+
+.lp { font-size: 16px; }
+.lp h2, .lp p { margin: 0; }
+.lp-nav {
+  display: flex; align-items: center; justify-content: space-between; gap: 24px;
+  max-width: 1080px; margin: 0 auto; padding: 22px 28px;
+}
+.lp-brand { padding: 0; font-size: 23px; }
+.lp-navlinks { display: flex; align-items: center; gap: 26px; font-size: 14.5px; }
+.lp-navlinks a { color: var(--body); text-decoration: none; }
+.lp-navlinks a:hover { color: var(--fg); }
+.lp-signin { color: var(--body); font-size: 14.5px; }
+.lp-signin:hover:not(:disabled) { color: var(--fg); }
+
+.lp-hero {
+  max-width: 1080px; margin: 0 auto; padding: 72px 28px 56px;
+  display: grid; grid-template-columns: 1.05fr .95fr; gap: 56px; align-items: center;
+}
+.lp-eyebrow {
+  margin: 0 0 18px !important; font-size: 13px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--muted); font-weight: 600;
+}
+.lp-h1 {
+  font-family: var(--display); font-weight: 500; font-size: 52px; line-height: 1.12;
+  margin: 0 0 20px; letter-spacing: -.015em;
+}
+.lp-h1 em { color: var(--accent); }
+.lp-lede { margin: 0 0 30px !important; font-size: 18px; color: var(--body); max-width: 44ch; }
+.lp-cta { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.lp-cta-center { justify-content: center; margin-top: 36px; }
+.lp-bigbtn { padding: 13px 26px; font-size: 16px; }
+.lp-ghostlink { color: var(--body); text-decoration: none; padding: 13px 10px; font-size: 16px; }
+.lp-fineprint { margin: 26px 0 0 !important; font-size: 13.5px; color: var(--muted); }
+
+.lp-mock {
+  background: var(--card); border: 1px solid var(--line); border-radius: 18px;
+  padding: 22px; box-shadow: var(--shadow);
+}
+.lp-mock-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin-bottom: 14px;
+}
+.lp-mock-title {
+  font-size: 13px; font-weight: 600; color: var(--muted);
+  letter-spacing: .1em; text-transform: uppercase;
+}
+.lp-mock-row {
+  border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+  display: flex; gap: 14px; align-items: flex-start;
+}
+.lp-mock-score { font-size: 22px; min-width: 44px; }
+.lp-mock-foot { margin: 14px 2px 0 !important; font-size: 12.5px; color: var(--muted); }
+
+.lp-section { max-width: 1080px; margin: 0 auto; padding: 64px 28px; }
+.lp-centered { text-align: center; }
+.lp-centered .lp-sub { margin-left: auto; margin-right: auto; }
+.lp-h2 {
+  font-family: var(--display); font-weight: 500; font-size: 34px;
+  margin: 0 0 10px; letter-spacing: -.01em;
+}
+.lp-sub { color: var(--body); max-width: 56ch; margin-bottom: 36px !important; }
+.lp-em { font-family: var(--display); font-style: italic; }
+
+.lp-three { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+.lp-card {
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: 16px; padding: 26px 24px;
+}
+.lp-card p { font-size: 15px; color: var(--body); }
+.lp-step { font-family: var(--display); font-size: 20px; color: var(--clay); margin-bottom: 12px; }
+
+.lp-band { background: var(--card); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.lp-band-inner {
+  max-width: 1080px; margin: 0 auto; padding: 56px 28px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: center;
+}
+.lp-band-inner .lp-sub { margin-bottom: 0 !important; max-width: 48ch; }
+.lp-principles { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.lp-principles li { display: flex; gap: 12px; align-items: baseline; font-size: 15.5px; }
+.lp-principles li > span:first-child { color: var(--accent); font-weight: 700; }
+
+.lp-stats {
+  display: inline-flex; gap: 40px; background: var(--card);
+  border: 1px solid var(--line); border-radius: 16px; padding: 28px 44px;
+}
+.lp-stat { font-family: var(--display); font-size: 36px; color: var(--accent); line-height: 1.2; }
+.lp-statlabel { font-size: 13px; color: var(--muted); }
+.lp-statrule { width: 1px; background: var(--line); }
+
+.lp-footer {
+  max-width: 1080px; margin: 0 auto; padding: 28px;
+  display: flex; justify-content: space-between; align-items: center; gap: 20px;
+  border-top: 1px solid var(--line); color: var(--muted); font-size: 13.5px;
+}
+.lp-footmark { font-family: var(--display); font-size: 17px; color: var(--body); }
+
+@media (max-width: 880px) {
+  .lp-hero, .lp-band-inner { grid-template-columns: 1fr; gap: 36px; }
+  .lp-three { grid-template-columns: 1fr; }
+  .lp-h1 { font-size: 38px; }
+  .lp-nav { flex-wrap: wrap; gap: 14px; }
+  .lp-stats { flex-direction: column; gap: 20px; padding: 24px 32px; }
+  .lp-statrule { width: auto; height: 1px; }
+  .lp-footer { flex-direction: column; align-items: flex-start; }
+}
+
+/* --- sign in / create account (placeholder, see auth.js) ------------------- */
+
+.authwrap {
+  min-height: 100vh; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; padding: 32px 20px;
+}
+button.authbrand {
+  padding: 0; margin-bottom: 28px; font-size: 24px;
+  border: 0; background: none; cursor: pointer;
+}
+button.authbrand:hover { border-color: transparent; }
+.authcard {
+  background: var(--card); border: 1px solid var(--line); border-radius: 18px;
+  padding: 34px 34px 28px; width: 100%; max-width: 400px; box-shadow: var(--shadow);
+}
+.auth-h1 { font-family: var(--display); font-weight: 500; font-size: 26px;
+           margin: 0 0 6px; letter-spacing: -.01em; }
+.auth-sub { margin: 0 0 22px; color: var(--muted); font-size: 14.5px; }
+
+.auth-oauth { display: flex; flex-direction: column; gap: 10px; }
+.oauth-btn {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  width: 100%; padding: 11px; border-radius: 10px; font-size: 15px; font-weight: 500;
+}
+/* Disabled, because there is no OAuth flow behind them — but not at the .5 opacity the
+   base rule uses, which reads as "this broke" rather than "this isn't connected yet".
+   The tooltip says which. */
+.oauth-btn:disabled { opacity: .7; }
+/* Neutral marks, not the real logos. Google and Microsoft both publish branding rules
+   for sign-in buttons, and a button wearing a real logo would claim an integration that
+   does not exist. Proper branded buttons when a real OAuth flow is behind them. */
+.oauth-mark.g { font-weight: 700; color: var(--accent); font-family: var(--display); font-size: 17px; }
+.oauth-mark.grid {
+  display: inline-grid; grid-template-columns: 7px 7px; grid-template-rows: 7px 7px; gap: 1.5px;
+}
+.oauth-mark.grid > span:nth-child(1) { background: #B4826A; }
+.oauth-mark.grid > span:nth-child(2) { background: #7FA98D; }
+.oauth-mark.grid > span:nth-child(3) { background: #8B9DB8; }
+.oauth-mark.grid > span:nth-child(4) { background: #C9B36A; }
+
+.auth-divider { display: flex; align-items: center; gap: 12px; margin: 20px 0; }
+.auth-divider > span:first-child, .auth-divider > span:last-child { flex: 1; height: 1px; background: var(--line); }
+.auth-divider-text { font-size: 12.5px; color: var(--muted); flex: none !important; height: auto !important; }
+
+.authcard .field { margin: 0 0 14px; }
+.authcard input { background: var(--panel); padding: 11px 13px; font-size: 15px; }
+.auth-forgot { text-align: right; margin-bottom: 16px; }
+.auth-forgot .text { font-size: 13px; }
+.auth-cta { width: 100%; padding: 12px; font-size: 15.5px; margin-top: 2px; }
+.auth-switch { margin: 20px 0 0; text-align: center; font-size: 14px; color: var(--muted); }
+.auth-switch .text { font-weight: 500; font-size: 14px; color: var(--accent); }
+.auth-foot {
+  margin: 22px 0 0; font-size: 13px; color: var(--muted);
+  max-width: 380px; text-align: center;
+}

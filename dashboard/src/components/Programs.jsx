@@ -62,7 +62,7 @@ function Editor({ initial, onSave, onCancel, globalFloor }) {
           <input
             value={url}
             onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://www.risesandiego.org/programs/…"
+            placeholder="https://your-organization.org/programs/…"
           />
           <button onClick={draft} disabled={drafting || !url}>
             {drafting ? "Reading the page…" : "Read this page for me"}
@@ -79,7 +79,7 @@ function Editor({ initial, onSave, onCancel, globalFloor }) {
 
       <label className="field">
         <span>Program name</span>
-        <input value={form.name} onChange={set("name")} placeholder="RISE Arts" />
+        <input value={form.name} onChange={set("name")} placeholder="Arts &amp; Cultural Equity" />
       </label>
 
       <label className="field">
@@ -145,60 +145,58 @@ function Editor({ initial, onSave, onCancel, globalFloor }) {
   );
 }
 
-function Card({ program, globalFloor, onToggle, onEdit, onDelete }) {
+// A compact row, not a card. Programs live at the bottom of the page now, in a column
+// half the width they used to have — so the row carries the two facts that decide
+// whether to tick it (what it is, what it costs to bother) and everything else lives one
+// click away in the editor.
+//
+// The checkbox and the text share one <label> so the whole block is a tick target. Edit
+// and Remove sit outside it: nesting a button inside a label makes clicking that button
+// also toggle the checkbox.
+function Row({ program, globalFloor, onToggle, onEdit, onDelete }) {
   const empty = !program.summary && program.keywords.length === 0;
+  const floor = program.min_award != null ? program.min_award : globalFloor;
+  const searches = program.search_queries?.length || 0;
+
   return (
-    <div className={`card ${program.active ? "active" : ""}`}>
-      <label className="card-tick">
+    <div className={`progrow ${program.active ? "active" : ""}`}>
+      <label className="progrow-tick">
         <input
           type="checkbox"
           checked={program.active}
           onChange={(e) => onToggle(program, e.target.checked)}
         />
-        <span className="card-title">{program.name}</span>
+        <span className="progrow-main">
+          <span className="progrow-title">
+            {program.name}
+            {program.drafted_by_ai && !program.reviewed_by_human && (
+              <span className="chip inferred" title="Drafted by the assistant and not yet checked by a person">
+                AI draft — review it
+              </span>
+            )}
+          </span>
+          <span className={`progrow-sub ${empty ? "unfilled" : ""}`}>
+            {empty
+              ? "Empty card — paste the program's web page and the assistant fills it in"
+              : [
+                  program.summary,
+                  searches > 0 && `${searches} ${searches === 1 ? "search" : "searches"}`,
+                  `floor ${money(floor)}`,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+          </span>
+        </span>
       </label>
 
-      {program.summary && <p className="card-summary">{program.summary}</p>}
-
-      {empty && (
-        <p className="notice small">
-          This card is empty. Press Edit and paste the program's page — the assistant will
-          fill it in. Until then the agent has to guess what this program needs.
-        </p>
-      )}
-
-      {program.keywords?.length > 0 && (
-        <div className="tags">
-          {program.keywords.slice(0, 6).map((k) => (
-            <span className="chip" key={k}>
-              {k}
-            </span>
-          ))}
-        </div>
-      )}
-
-      <div className="card-meta muted small">
-        {program.search_queries?.length > 0 && (
-          <span>{program.search_queries.length} search(es)</span>
-        )}
-        <span>
-          Floor {program.min_award != null ? money(program.min_award) : money(globalFloor)}
-        </span>
-        {program.drafted_by_ai && !program.reviewed_by_human && (
-          <span className="chip inferred">
-            AI draft<span className="chip-tag">unreviewed</span>
-          </span>
-        )}
-      </div>
-
-      <div className="row end">
-        <button className="ghost" onClick={() => onEdit(program)}>
+      <span className="progrow-actions">
+        <button className="text" onClick={() => onEdit(program)}>
           Edit
         </button>
-        <button className="ghost danger" onClick={() => onDelete(program)}>
+        <button className="text danger" onClick={() => onDelete(program)}>
           Remove
         </button>
-      </div>
+      </span>
     </div>
   );
 }
@@ -235,14 +233,11 @@ export default function Programs({ programs, globalFloor, onChange }) {
   return (
     <section className="panel">
       <div className="panel-head">
-        <h2>Programs to find funding for</h2>
-        <button className="primary" onClick={() => setEditing("new")}>
-          Add a program
-        </button>
+        <h2>Your programs</h2>
+        <button onClick={() => setEditing("new")}>+ Add</button>
       </div>
       <p className="muted small">
-        Tick the programs you want searched this week. {activeCount} of {programs.length}{" "}
-        ticked.
+        Tick the ones to search for this week. {activeCount} of {programs.length} ticked.
         {activeCount === 0 && " Nothing is ticked, so a search would have nothing to look for."}
       </p>
 
@@ -257,7 +252,7 @@ export default function Programs({ programs, globalFloor, onChange }) {
         />
       )}
 
-      <div className="cards">
+      <div className="proglist">
         {programs.map((p) =>
           editing && editing !== "new" && editing.id === p.id ? (
             <Editor
@@ -268,7 +263,7 @@ export default function Programs({ programs, globalFloor, onChange }) {
               onCancel={() => setEditing(null)}
             />
           ) : (
-            <Card
+            <Row
               key={p.id}
               program={p}
               globalFloor={globalFloor}

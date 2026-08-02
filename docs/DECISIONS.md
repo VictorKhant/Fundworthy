@@ -67,6 +67,44 @@ Full reasoning in `docs/PLAN.md` §0. The decisions, and what each one cost:
 | C8 | **`needs_human_check` means "we could not confirm a claim", not "information is missing".** | It fired on 5 of 5 results, then 10 of 12 — a flag that is always on is not a flag, and because the list also split on it, the ranking stopped meaning anything. | The broader "check everything" reading. Missing information is now carried by the score instead, which is where it belongs. |
 | C9 | **The rationale is checked against the page, deterministically.** | The quote gate protected the fields and not the prose — and the prose is what she reads. A result with `award_max = None` and "~$80k inferred from public announcements" in its sentence is worse than either failure alone. | Nothing. §6 never said "except in prose"; we had been reading it that way by omission. |
 
+## v4 — the Fundworthy visual pass (UI-ROADMAP.md)
+
+`styles.css` opened with "the visual pass comes later." This was it. Six phases, each
+committed separately, backend and `agent/` untouched except for the two settings in D4.
+
+| # | Decision | Rationale | What we gave up |
+|---|---|---|---|
+| D1 | **Dark mode dropped, not converted.** | The old palette was cool grey; the new one is warm paper, sage and clay. Shipping both would have been two unrelated designs sharing a stylesheet, and a half-converted dark theme reads as a bug rather than a preference. | Dark mode, until someone derives warm-dark values. Named explicitly at the top of `styles.css` so it is a decision, not a gap. |
+| D2 | **Findings collapse to four facts; nothing is deleted.** | Fit, amount, deadline, effort are what answer "is this worth ten hours". Everything else — rationale, prep time, time-to-funds, rank score, 990, geography, service areas — moved into "More details" with tooltips intact. | The rank score is no longer on the collapsed row. It is what the list is *ordered* by, so it is one click down rather than gone: a list whose order has no visible cause reads as arbitrary. |
+| D3 | **Auth is a placeholder behind a build flag, and the flag is off.** | CLAUDE.md §3 rules out accounts, and the local-only design is what makes storing an API key honest. A sign-in wall in front of a single-user localhost app is theatre, and a "Sign out" that signs you out of nothing is a lie told in the furniture. | Nothing real. `/welcome` and `/signin` stay reachable by URL with the flag off so they can be reviewed and demoed; `auth.js` is the one file that changes when accounts land. |
+| D4 | **`org_name` / `org_location` are real settings, not visual-only.** | The de-brand sweep needed somewhere for the name to live, and a field that does not persist is a worse lie than a hardcoded string. Two plain-string defaults in `DEFAULT_SETTINGS` and two fields on `SettingsIn`; `_coerce` passes strings through untouched. | Nothing. 128 tests still pass. |
+| D5 | **Blank org name renders "your organization", never a guess.** | Same rule §6 applies to award amounts, applied to the one fact the app knows least about. | Nothing. |
+| D6 | **Neutral marks on the OAuth buttons, and they are disabled.** | Google and Microsoft both publish branding rules for sign-in buttons. A button wearing a real logo claims an integration that does not exist. | Fidelity to the mock's look, in exchange for not misrepresenting an integration. Proper branded buttons when a real flow is behind them. |
+
+### Departures from the design mock, and why
+
+- **The flagged section keeps its source link on the collapsed row** (the mock hides it
+  behind nothing because those cards do not collapse at all). Opening the funder's own
+  page is the entire reason that section exists.
+- **Flagged rows keep the "More details" toggle the mock omits**, so one component renders
+  both sections and they cannot drift apart.
+- **Spend keeps four decimals** where the mock shows two. A run that cost $0.0043 rendered
+  as "$0.00" reads as free, and the point of showing spend is that she can watch the real
+  number move.
+
+### Corrections we made to our own work, v4
+
+- **`.progrow-sub.empty` composed with the page-level `.empty` block**, drawing a 40px
+  dashed box inside every program row. Caught by opening the page, not by reading the
+  diff — the build was clean and the class name was plausible.
+- **The compact funder rows needed an explicit two-line grid.** The existing responsive
+  rule keyed off *viewport* width, and the list had moved into a half-width column that no
+  viewport size would ever trigger it for.
+- **`.chip-tag` broke "AI" across two lines** inside the wide service-area chips — the one
+  mark CLAUDE.md §6 requires to always be legible.
+- **The fixed menu button sat on top of the `h1`** whenever the sidebar was shut, and the
+  page sat 236px off the right edge on a window resized down from wide.
+
 ### Corrections we made to our own work, v3
 
 - **We shipped a ranking that sorted by whether a funder published a number.** The

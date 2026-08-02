@@ -199,6 +199,11 @@ DEFAULT_SETTINGS: dict[str, str] = {
         ["warm_partner", "foundation", "government", "arts_agency"]
     ),
     "search_beyond_partners": "0",  # lights up once the discovery provider lands
+    # Who this install is for. Empty by default and shown as "Your organization" until
+    # someone fills it in — the UI used to say "RISE" in a dozen places, which is wrong
+    # for anyone else and was never a fact the code should have been asserting.
+    "org_name": "",
+    "org_location": "",
 }
 
 # Seeded onto the REMOVE LIST, with the reason recorded. RISE already receives money
