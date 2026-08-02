@@ -332,3 +332,65 @@ def test_month_summary_counts(db):
         summary = archive.month_summary(conn)
     assert summary["current_month"] == month_key()
     assert summary["months"][0]["total"] == 1
+
+
+# --- regression: two registry entries sharing a funder name -------------------
+#
+# Grants.gov and SAM.gov are both funder="U.S. Federal Government" in sources.py.
+# Hashing the seed id on name alone collapsed them into a single row, so SAM.gov
+# disappeared from the registry with no error anywhere — the seed overwrote itself.
+# Found while merging the indexed-source branch.
+
+def test_sources_sharing_a_funder_name_get_separate_rows(db):
+    from agent.sources import ALL_SOURCES
+
+    with session(db) as conn:
+        seeded = repo.list_funders(conn)
+
+    assert len(seeded) == len(ALL_SOURCES), (
+        f"{len(ALL_SOURCES)} registry entries seeded {len(seeded)} rows — "
+        "two entries collapsed into one"
+    )
+    federal = [f for f in seeded if f["name"] == "U.S. Federal Government"]
+    assert len(federal) == 2, "Grants.gov and SAM.gov must both survive seeding"
+    assert {f["adapter"] for f in federal} == {"grants_gov", None}
+
+
+def test_indexed_adapters_survive_the_round_trip(db):
+    """A source that loses its adapter stops being read as an API and silently
+    becomes an ordinary web page — a whole class of funding disappearing quietly."""
+    from agent.sources import Tier, sources_from_db
+
+    fetchable, _ = sources_from_db(
+        Tier.GOVERNMENT, ["warm_partner", "foundation", "government", "arts_agency"])
+    apis = sorted(s.adapter for s in fetchable if s.is_api)
+    assert apis == ["ca_grants_portal", "grants_gov"]
+
+
+def test_unticking_a_sector_also_stops_its_indexed_sources(db):
+    """The CA Grants Portal and Grants.gov are government money. If Mauri unticks
+    government funding, not searching the government's own databases is what she
+    asked for — the tick has to mean the same thing everywhere."""
+    from agent.sources import Tier, sources_from_db
+
+    fetchable, _ = sources_from_db(Tier.GOVERNMENT, ["warm_partner"])
+    assert [s for s in fetchable if s.is_api] == []
+
+
+def test_credit_never_lands_on_an_unchecked_source():
+    """Grants.gov and SAM.gov share funder="U.S. Federal Government"; SAM.gov is
+    NOT_CHECKED. Crediting by name alone reported the federal source as unchecked
+    while displaying the twelve grants it had just returned."""
+    from agent.models import RunLog, SourceHealth, SourceStatus
+
+    run = RunLog(started_at=datetime.now(timezone.utc))
+    run.record(SourceHealth(name="SAM.gov", funder="U.S. Federal Government",
+                            status=SourceStatus.NOT_CHECKED))
+    run.record(SourceHealth(name="Grants.gov", funder="U.S. Federal Government",
+                            status=SourceStatus.OK))
+    run.credit("U.S. Federal Government", 12)
+
+    unchecked = next(h for h in run.source_health if h.name == "SAM.gov")
+    checked = next(h for h in run.source_health if h.name == "Grants.gov")
+    assert unchecked.candidates == 0, "an unchecked source cannot have produced results"
+    assert checked.candidates == 12

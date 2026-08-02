@@ -49,7 +49,8 @@ class WebJsonSink:
         self.out_path.parent.mkdir(parents=True, exist_ok=True)
         self._opportunities: list[Opportunity] = []
 
-    def write_opportunities(self, opportunities: list[Opportunity]) -> int:
+    def write_opportunities(self, opportunities: list[Opportunity],
+                            run: RunLog | None = None) -> int:
         # Held until write_run_log so the whole page is one atomic file write.
         self._opportunities = list(opportunities)
         return len(opportunities)

@@ -41,7 +41,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path("data/rise.db")
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # --- schema -------------------------------------------------------------------
 
@@ -86,6 +86,10 @@ CREATE TABLE IF NOT EXISTS funders (
     tier        INTEGER NOT NULL DEFAULT 1,
     confidence  INTEGER NOT NULL DEFAULT 1,   -- agent.sources.Confidence
     programs    TEXT NOT NULL DEFAULT '[]',   -- json array of program slugs
+    -- Key into agent/apis.py ADAPTERS. NULL means "crawl the HTML". Stored rather
+    -- than re-derived, because a source that loses its adapter silently becomes an
+    -- ordinary web page and stops being read at all.
+    adapter     TEXT,
     notes       TEXT NOT NULL DEFAULT '',
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL
@@ -139,6 +143,9 @@ CREATE TABLE IF NOT EXISTS runs (
     purged_rows        INTEGER NOT NULL DEFAULT 0,
     duplicates_skipped INTEGER NOT NULL DEFAULT 0,
     notes              TEXT NOT NULL DEFAULT '[]',
+    -- Per-source outcome. Without this a broken funder and a genuinely quiet week
+    -- look identical on the dashboard, which is the one ambiguity that costs trust.
+    source_health      TEXT NOT NULL DEFAULT '[]',
     progress           TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_runs_started ON runs(started_at DESC);
@@ -234,6 +241,21 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if current < 1:
         # v1 is the base schema, already applied by executescript above.
         current = 1
+
+    if current < 2:
+        # v2 lands both halves of the merge with the indexed-source work:
+        #   funders.adapter    so the CA Grants Portal and Grants.gov survive the
+        #                      round trip and keep being read as APIs, not web pages
+        #   runs.source_health so "a funder broke" and "a quiet week" stay distinct
+        # CREATE TABLE above has both on a fresh install; these are for a v1 database.
+        funder_cols = {r["name"] for r in conn.execute("PRAGMA table_info(funders)")}
+        if "adapter" not in funder_cols:
+            conn.execute("ALTER TABLE funders ADD COLUMN adapter TEXT")
+        run_cols = {r["name"] for r in conn.execute("PRAGMA table_info(runs)")}
+        if "source_health" not in run_cols:
+            conn.execute(
+                "ALTER TABLE runs ADD COLUMN source_health TEXT NOT NULL DEFAULT '[]'")
+        current = 2
 
     conn.execute(
         "INSERT INTO meta(key, value) VALUES('schema_version', ?) "
@@ -415,21 +437,36 @@ def seed_funders(conn: sqlite3.Connection) -> None:
         conn.execute(
             """INSERT INTO funders(
                    id, name, url, sector, funder_type, warm, active, tier,
-                   confidence, programs, notes, created_at, updated_at)
-               VALUES(?,?,?,?,?,?,1,?,?,?,?,?,?)
-               ON CONFLICT(id) DO NOTHING""",
+                   confidence, programs, adapter, notes, created_at, updated_at)
+               VALUES(?,?,?,?,?,?,1,?,?,?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET
+                   -- Only ever backfill the adapter. Everything else on an existing
+                   -- row is Mauri's, and a re-seed must not overwrite her edits.
+                   adapter=COALESCE(funders.adapter, excluded.adapter)""",
             (
-                _funder_id(s.funder), s.funder, s.url, sector_for(s),
+                _funder_id(s.funder, s.url), s.funder, s.url, sector_for(s),
                 _funder_type_for(s), int(s.warm), int(s.tier), int(s.confidence),
-                dumps([p.value for p in s.programs]), s.notes, stamp, stamp,
+                dumps([p.value for p in s.programs]), s.adapter, s.notes, stamp, stamp,
             ),
         )
 
 
-def _funder_id(name: str) -> str:
+def _funder_id(name: str, url: str | None = None) -> str:
+    """Seed identity for a registry entry: name AND url.
+
+    Name alone is not unique. Grants.gov and SAM.gov are both `funder="U.S. Federal
+    Government"` in sources.py, so hashing the name collapsed them into one row and
+    SAM.gov vanished from the registry with no error anywhere — the seed just wrote
+    over itself. Including the URL keeps distinct entries distinct.
+
+    (`create_funder` still keys on name alone, deliberately: when Mauri types a funder
+    that is already on her list, updating that row is what she means, not adding a
+    second one with the same name.)
+    """
     import hashlib
 
-    return hashlib.sha256(name.strip().casefold().encode()).hexdigest()[:16]
+    payload = f"{name.strip().casefold()}|{(url or '').strip().rstrip('/')}"
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
 def _funder_type_for(source) -> str:

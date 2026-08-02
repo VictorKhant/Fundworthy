@@ -136,6 +136,53 @@ class Fetcher:
 
             return FetchResult(url=url, status=None, html=None, error=last_error or "unknown")
 
+    async def fetch_json(
+        self,
+        url: str,
+        *,
+        method: str = "GET",
+        params: dict | None = None,
+        json_body: dict | None = None,
+    ) -> tuple[dict | list | None, str | None]:
+        """One request against a JSON API. Returns (payload, error).
+
+        Deliberately not routed through get(): these are published programmatic
+        endpoints, so there is no robots.txt question and no HTML to size-cap. The
+        per-host lock still applies — politeness is not conditional on the format.
+
+        Never raises. A broken API returns (None, reason) so the caller can record
+        it as one unhealthy source and carry on with the others.
+        """
+        assert self._client is not None, "use `async with Fetcher() as f`"
+        host = urlparse(url).netloc
+
+        async with self._lock_for(host):
+            last_error: str | None = None
+            for attempt in range(MAX_RETRIES + 1):
+                try:
+                    resp = await self._client.request(
+                        method,
+                        url,
+                        params=params,
+                        json=json_body,
+                        headers={"Accept": "application/json"},
+                    )
+                    if resp.status_code in (429, 503) and attempt < MAX_RETRIES:
+                        await asyncio.sleep(PER_HOST_DELAY_SECONDS * (2 ** attempt))
+                        continue
+                    if resp.status_code >= 400:
+                        return None, f"http_{resp.status_code}"
+                    return resp.json(), None
+                except (httpx.TimeoutException, httpx.TransportError) as exc:
+                    last_error = f"{type(exc).__name__}: {exc}"
+                    if attempt < MAX_RETRIES:
+                        await asyncio.sleep(PER_HOST_DELAY_SECONDS * (2 ** attempt))
+                        continue
+                except ValueError as exc:  # JSON decode — the endpoint changed shape
+                    return None, f"bad_json: {exc}"
+
+            return None, last_error or "unknown"
+
     async def get_many(self, urls: list[str]) -> list[FetchResult]:
         """Concurrent across hosts, serialized within a host by the per-host lock."""
         results = await asyncio.gather(*(self.get(u) for u in urls), return_exceptions=True)

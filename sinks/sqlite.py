@@ -31,7 +31,8 @@ class SqliteSink:
         self.run_id = run_id
         self.db_path = db_path
 
-    def write_opportunities(self, opportunities: list[Opportunity]) -> int:
+    def write_opportunities(self, opportunities: list[Opportunity],
+                            run: RunLog | None = None) -> int:
         with session(self.db_path) as conn:
             for opp in opportunities:
                 repo.save_opportunity(conn, opp, run_id=self.run_id)
@@ -58,4 +59,5 @@ class SqliteSink:
                 purged_rows=getattr(run, "purged_rows", 0),
                 duplicates_skipped=getattr(run, "duplicates_skipped", 0),
                 notes=dumps(d["notes"]),
+                source_health=dumps(d.get("source_health") or []),
             )

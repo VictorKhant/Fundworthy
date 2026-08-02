@@ -23,7 +23,8 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 
 from .config import Config
-from .models import (DeadlineType, FunderType, Opportunity, RawCandidate, stable_id)
+from .models import (DeadlineType, FunderType, Opportunity, RawCandidate,
+                     SourceKind, stable_id)
 from .sources import Source
 from .verify import quote_on_page, year_in_quote
 
@@ -520,6 +521,8 @@ def score_one(candidate: RawCandidate, source: Source, cfg: Config,
         confidence_pct=confidence_pct,
         contact_note=contact_note,
         found_on=date.today(),
+        source_kind=(SourceKind.INDEXED_DATABASE if source.is_api
+                     else SourceKind.FUNDER_PAGE),
     )
     log.info("  scored %3d  %-30s  %s  ($%.5f)",
              opp.score, opp.funder[:30], opp.title[:40], cost)

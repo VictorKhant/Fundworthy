@@ -11,6 +11,7 @@ gspread==6.1.4             # Google Sheets sink
 google-auth==2.35.0        # service-account credentials
 
 anthropic==0.120.2         # Block 2 — Haiku triage / Sonnet scoring (needs output_config + adaptive thinking)
+python-dotenv==1.0.1       # local .env for dev runs; a no-op in CI, where secrets are real env vars
 
 # --- the local control surface (docs/PLAN.md §1) -----------------------------
 fastapi==0.141.1           # the REST API the dashboard calls

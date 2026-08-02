@@ -181,6 +181,19 @@ button.ghost.danger { background: none; color: var(--off); border-color: transpa
   .funder-sector { grid-column: 2; }
 }
 
+/* --- tables ---------------------------------------------------------------- */
+/* Wide content scrolls inside its own container — the page never scrolls sideways. */
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; }
+th, td {
+  text-align: left;
+  padding: .5rem .65rem;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+th { font-weight: 600; color: var(--muted); font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; }
+tbody tr:last-child td { border-bottom: none; }
+
 /* --- run panel ------------------------------------------------------------- */
 
 .runbar { margin-top: 1rem; }

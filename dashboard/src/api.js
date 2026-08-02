@@ -82,6 +82,31 @@ export function awardRange(o) {
   return hi || lo || null;
 }
 
+// Run timestamps are stored in UTC and must be READ in Pacific. This is not cosmetic
+// for this product: the agent is specified to run "Wednesday 11:00 PM PT" (§9), and
+// 23:00 PT is already Thursday in UTC — so rendering the stored value verbatim makes
+// every on-time run look like it fired on the wrong day.
+//
+// The zone label comes from Intl rather than a constant, because Pacific is PDT from
+// March to November; hardcoding "PST" would be an hour wrong for most of the year.
+// The stored value stays UTC — only the display is converted, so the log keeps saying
+// exactly what it recorded.
+export function pacificStamp(value) {
+  if (!value) return "never";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Los_Angeles",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+    timeZoneName: "short",
+  }).formatToParts(d);
+  const get = (t) => parts.find((p) => p.type === t)?.value ?? "";
+
+  return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")} ${get("timeZoneName")}`;
+}
+
 export const SECTOR_LABELS = {
   warm_partner: "Partners we already work with",
   foundation: "Foundations",

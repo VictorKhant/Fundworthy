@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, money, SECTOR_LABELS } from "../api";
+import { api, money, pacificStamp, SECTOR_LABELS } from "../api";
 
 // The weekly knobs and the "Re-run search pipeline" button.
 //
@@ -233,12 +233,27 @@ export default function RunPanel({ settings, sectors, latestRun, running, onChan
           />
         </div>
         <div className="muted small">
-          Last search cost <strong>${spent.toFixed(4)}</strong> of the ${ceiling.toFixed(2)}{" "}
-          limit.
+          Last search ran <strong>{pacificStamp(run?.started_at)}</strong> and cost{" "}
+          <strong>${spent.toFixed(4)}</strong> of the ${ceiling.toFixed(2)} limit.
           {run?.stop_reason && ` ${STOP_REASONS[run.stop_reason] || run.stop_reason}`}
           {run?.duplicates_skipped > 0 &&
             ` Skipped ${run.duplicates_skipped} you have already seen this month, for free.`}
         </div>
+
+        {/* One broken funder and a genuinely quiet week both produce a short list.
+            Saying which is the difference between a list she can trust and one she
+            has to double-check by hand. */}
+        {run?.source_health?.some((h) => h.status === "unreachable" || h.status === "unparseable") && (
+          <div className="notice">
+            Some funders could not be checked this time, so this list may be short for
+            that reason rather than because there was nothing to find:{" "}
+            {run.source_health
+              .filter((h) => h.status === "unreachable" || h.status === "unparseable")
+              .map((h) => h.funder)
+              .join(", ")}
+            .
+          </div>
+        )}
       </div>
 
       {(isRunning || live.log?.length > 0) && (
