@@ -175,7 +175,21 @@ a:hover { color: var(--accent-deep); }
 @media (min-width: 900px) { .scrim { display: none; } }
 
 .page { max-width: 980px; margin: 0 auto; padding: 36px 40px 60px; }
-@media (max-width: 700px) { .page { padding: 60px 20px 48px; } }
+@media (max-width: 700px) { .page { padding-left: 20px; padding-right: 20px; } }
+
+/* The menu button is fixed at the top-left and only renders while the sidebar is shut,
+   so that is exactly when the page needs room for it — otherwise it sits on top of the
+   h1. Keyed off the shell class rather than a breakpoint, because "is the toggle
+   visible" is the real condition and it is not a function of width alone. */
+.shell:not(.with-sidebar) .page { padding-top: 64px; }
+
+/* Below the breakpoint the sidebar overlays rather than pushing. The open state is
+   decided once, from window width at mount — so a window resized down from wide keeps
+   the sidebar open, and without this the page sat 236px off the right edge. Overlaying
+   is also the correct behaviour for a drawer: the scrim is already there to close it. */
+@media (max-width: 880px) {
+  .shell.with-sidebar .page { margin-left: 0; }
+}
 
 /* --- type ------------------------------------------------------------------ */
 
