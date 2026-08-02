@@ -433,6 +433,38 @@ Each was invisible to a green suite and each would have reached Mauri.
 the system and reading what it produced. The test suite was green throughout — it went
 66 → 126 tests, and every one of those tests was written *after* the bug, not before.
 
+### E20 — What the remove list costs, measured
+**When:** 2026-08-02, after RISE confirmed the eight funders to remove
+**Method:** same registry, same settings, remove list active. Compared against the run
+immediately before it.
+
+| | before | after |
+|---|---|---|
+| Funders searched | 60 | **52** (9 on the remove list) |
+| Sources tried | 31 | 25 |
+| Pages parsed | 138 | 110 |
+| Cost | $0.60 | **$0.51** |
+| Results | 12 | **8** |
+| Results from removed funders | 4 | **0** ✓ |
+| Stop reason | `target_met` | **`sources_exhausted`** |
+
+**The stop reason is the finding.** Before, the run hit the 12-result cap with budget
+to spare. After, it ran out of candidates at 8. Removing the eight took roughly a
+quarter of the crawl surface with it, and what remained did not refill the cap.
+
+Two honest readings, and the difference matters:
+
+- **By §8's design this is fine.** "Six good results is a good week. Do not treat a low
+  count as failure." The eight that came back are all funders RISE has no relationship
+  with — Nathan Cummings, the NEA, Warhol, Kellogg, Parker, Doris Duke — which is
+  exactly what the change was for.
+- **But the registry is now the binding constraint, not the budget.** $0.49 of the
+  $1.00 ceiling went unspent because there was nothing left to score. More sources
+  would convert directly into more results; more budget would not.
+
+That is a concrete next step rather than a worry: the 44 researched funders were a
+first pass, and the same method extends.
+
 ---
 
 ## What is NOT evidenced yet

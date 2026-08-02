@@ -49,3 +49,86 @@ Looking up 990 filings for 52 funder(s) (one time each)…
   scored  38  The Parker Foundation           Grant Making – The Parker Foundation  ($0.02096)
   scored  25  Doris Duke Foundation — Perfor  Letter of Inquiry | Doris Duke Foundatio  ($0.02735)
   scored  35  National Endowment for the Art  Priorities | National Endowment for the   ($0.01816)
+  scored  18  S. Mark Taper Foundation        S. Mark Taper Foundation  ($0.01877)
+  dropped (deadline 2026-02-04 passed): S. Mark Taper Foundation
+
+==============================================================================
+RUN SUMMARY
+==============================================================================
+  sources tried      25
+  fetched OK         20
+  fetch failed       5
+  pages parsed       110
+  award amount found 1
+  amount not stated  7
+  cost               $0.5102
+  stop reason        sources_exhausted
+
+  rejected before any model call (232 — free):
+      84  ca_category_off_mission
+      69  triage_not_an_opportunity
+      33  ca_not_open_to_nonprofits
+      17  deadline_too_soon
+      12  thin_landing_page
+      10  ca_loan_not_grant
+       3  deadline_passed
+       2  geography_excludes_rise
+       2  not_a_funding_opportunity
+
+  SOURCE HEALTH
+    ✗ California Board of State and Comm unreachable  
+        ConnectError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get 
+    ✗ County of San Diego                unreachable  
+        ReadTimeout: 
+    ✗ County of San Diego — Community En unreachable  
+        ReadTimeout: 
+    ✗ Hearst Foundations                 unreachable  
+        http_403
+    ✗ The NAMM Foundation — Music Progra unreachable  
+        unreadable_content_type:application/pdf
+    ✓ California Department of Health Ca ok              2 kept
+    · California Department of Social Se no_results   
+    ✓ City of San Diego — Community Proj ok              1 kept
+    ✓ Doris Duke Foundation — Performing ok              2 kept
+    ✓ Grossmont Healthcare District      ok              2 kept
+    ✓ Imperial County — Community Benefi ok              1 kept
+    ✓ Nathan Cummings Foundation         ok              1 kept
+    ✓ National Endowment for the Arts —  ok              3 kept
+    ✓ Port of San Diego — Tidelands Acti ok              1 kept
+    ✓ Robert Wood Johnson Foundation     ok              3 kept
+    ✓ Rosenberg Foundation               ok              1 kept
+    ✓ S. Mark Taper Foundation           ok              1 kept
+    ✓ SANDAG — Grant Programs            ok              7 kept
+    ✓ San Diego County District Attorney ok              1 kept
+    ✓ State of California                ok             25 kept
+        46 of 173 active CA grants are on-mission
+    ✓ The Andy Warhol Foundation for the ok              6 kept
+    ✓ The Kresge Foundation (Health Prog ok              6 kept
+    ✓ The Parker Foundation              ok              3 kept
+    ? U.S. Federal Government            not_checked  
+        no confirmed web address on file
+    ✓ U.S. Federal Government            ok             12 kept
+        12 federal opportunities with runway, from 67 hits
+    ✓ W.K. Kellogg Foundation            ok              2 kept
+
+  notes:
+    · Sources: 25 from the funders list (sectors: warm_partner, foundation, government, arts_agency)
+    · Remove list: 9 funder(s) excluded from this search — not fetched, not read, not scored.
+    · MATCHING FUNDS mentioned on 29 opportunit(ies) — 2027 Department of Pesticide Regulation Sustainable Pest Man; Extreme Heat and Community Resilience Program Round 2; Technical Assistance Program (TAP) 2026-2027 and 26 more. Not filtered: §11 Q4 is unanswered.
+    · 990 lookup: checked 52 funder(s), found filings for 21. Government bodies and tribal nations file none, which is expected.
+
+  RANKED — award amount stated
+     50  $           250,000  Nathan Cummings Foundation  Become a Partner | Nathan Cummings F
+         RULFP has credible alignment with NCF's racial and economic justice focus areas, but RESILIENCE 
+
+  AMOUNT NOT STATED — needs a human look, not ranked
+      —                    —  City of San Diego — Commun  Community Projects, Programs, and Se
+      —                    —  Doris Duke Foundation — Pe  Letter of Inquiry | Doris Duke Found
+      —                    —  National Endowment for the  Priorities | National Endowment for 
+      —                    —  The Andy Warhol Foundation  Application Guidelines – The Andy Wa
+      —                    —  The Parker Foundation       Application Process – Online Submiss
+      —                    —  The Parker Foundation       Grant Making – The Parker Foundation
+      —                    —  W.K. Kellogg Foundation     Grantseekers - W.K. Kellogg Foundati
+
+Wrote 8 records via: sqlite, web.
+
