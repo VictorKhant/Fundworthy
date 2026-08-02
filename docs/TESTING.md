@@ -1,161 +1,244 @@
-# Manual test guide — is the prototype actually working?
+# Test guide — is this actually working?
 
-Run these in order on your machine. Everything through §3 needs **no API key and no
-money**; §4 is the first real spend (~$0.20). By the end you'll know exactly what works,
-with your own eyes — and you'll have the screenshots the rubric rewards.
+Copy-paste, in order. Steps 1–4 need **no API key and cost nothing**. Step 5 is the
+first real spend (~$0.25). About 20 minutes end to end.
 
-Branch: **`phyo-build`**. Time: ~15 minutes.
+Branch: **`phyo-build`**. Every command runs from the repo root.
 
-Legend: ✅ = what a pass looks like · ⚠️ = expected caveat, not a bug.
-
----
-
-## 0. Prerequisites
-
-- Python 3.11+, Node 18+, git.
-- Network (the free-tier run fetches real funder pages).
-- Optional until §4: an Anthropic API key.
-- A Google account is **not** needed for any step here.
+Legend: ✅ what a pass looks like · ⚠️ expected, not a bug · 🔎 what to actually look at
 
 ---
 
-## 1. Start it (~2 min the first time)
+## 0. Get set up
+
+```bash
+cd ~/PROJECTS/Rise-Fund-Finder
+git checkout phyo-build
+git pull
+```
+
+You need Python 3.11+ and Node 18+. Nothing else.
+
+---
+
+## 1. Start it (~1 min first time, instant after)
 
 ```bash
 ./start.sh
 ```
 
-✅ It installs what it needs, builds the dashboard, and prints
-`RISE Fund Finder → http://localhost:8000`. Open that.
+✅ It prints `RISE Fund Finder → http://localhost:8000`. Open that in a browser.
 
-✅ You should see the main dashboard with:
-- **This week's search** — the knobs, with the award floor showing **$10,000**
+🔎 **What you should see on the main dashboard:**
+- **This week's search** — award floor showing **$10,000**, runway 14 days, cap 12,
+  spend limit $1.00, four sector checkboxes ticked
 - **Programs to find funding for** — 7 cards, 3 ticked (Arts, Resilience, RULFP)
-- **Funders we watch** — 8 partners plus 6 others
-- a banner saying no API key is saved yet
+- **Funders we watch** — 8 partners + 8 others, each with a tick box
+- A banner saying no API key is saved yet
 
-⚠️ On a fresh clone the findings list is empty. That is correct — nothing has run.
+⚠️ The findings list is empty on a fresh database. Correct — nothing has run.
+
+Leave this running. Open a **second terminal** for everything below.
 
 ---
 
-## 2. Offline tests — no key, no network, no cost (~5 sec)
+## 2. The test suite — offline, no key, ~1 second
 
 ```bash
 .venv/bin/python -m pytest tests/ -q
 ```
 
-✅ `66 passed`. That covers:
+✅ `84 passed`
 
-| File | What it proves |
-|---|---|
-| `test_accuracy_gate.py` | A fabricated award, a paraphrased quote, and an invented deadline year are all rejected. Only a value whose verbatim sentence is literally on the fetched page survives. Includes the regression for split-across-elements amounts (evidence E12). |
-| `test_db.py` | Dedup hits and misses, the purge boundary in both directions, funder deactivation keeping the record, and the reading order Mauri asked for. |
-| `test_api.py` | Every endpoint, and — the ones that matter — that **no endpoint returns the API key**, that it is not in the `.db` in plaintext, and that a corrupt key file degrades instead of 500-ing. |
-
-**The one worth reading the assertion for:**
-
-```python
-def test_api_key_is_never_returned_by_any_endpoint(client):
-    for path in ("/api/settings", "/api/state", "/api/programs", ...):
-        assert FAKE_KEY not in client.get(path).text
-```
-
-**Calibration — filter sanity** (fixtures, deterministic, free):
+🔎 **The four that matter most**, if you want to read one thing:
 
 ```bash
-.venv/bin/python -m tests.calibration --dry-run
+.venv/bin/python -m pytest tests/ -q -k "api_key_is_never_returned or plaintext or human_check_rows_sort_last or budget_is_customizable" -v
 ```
 
-✅ `5/10 killed by free filters; no YES wrongly filtered.`
-⚠️ It says the fixtures are **not Mauri's**, on every run. That is the point — a pass
-proves the pipeline ranks, not that it is calibrated. It also has not been re-checked
-since the floor moved from $25,000 to $10,000.
+- `test_api_key_is_never_returned_by_any_endpoint` — sweeps every GET endpoint asserting
+  the key does not appear. If this ever fails, the key is one screenshot from public.
+- `test_key_is_not_stored_in_plaintext_on_disk` — greps the actual `.db` file.
+- `test_human_check_rows_sort_last` — a 99-scoring row needing a human check still sorts
+  below a clean 20. Mauri asked for that directly.
+- `test_the_run_budget_is_customizable_end_to_end` — the ceiling she types on the
+  dashboard is the ceiling the run refuses to spend past. Three hops, each of which has
+  broken silently before.
 
 ---
 
-## 3. A free run against real funder pages (~2 min, $0.00)
+## 3. A free run against real funder pages (~3 min, $0.00)
 
 ```bash
 .venv/bin/python -m agent.run --no-llm
 ```
 
-✅ 6 of 7 sources fetch (County of San Diego frequently times out — their site is slow).
-✅ ~28 pages parsed, ~17 survive, everything else rejected **before any model call**.
-✅ `cost $0.0000`.
+🔎 **Watch for, in order:**
 
-**Now run it a second time.** This is the dedup test:
+```
+Querying 2 indexed source(s)…
+  ✓ State of California        46 of 173 active CA grants are on-mission
+  ✓ U.S. Federal Government    12 federal opportunities with runway, from 67 hits
+  ✓ Prebys Foundation          1 amounts, 0 deadlines, 8 links
+  ✗ County of San Diego        ReadTimeout:
+54 candidates survived the free filters.
+```
+
+✅ 8 of 9 sources answer. ✅ `cost $0.0000`.
+⚠️ County of San Diego times out most runs — their site is slow, not missing. It is
+reported as `unreachable`, which is the point: a broken source never looks like a quiet
+week.
+
+🔎 **Scroll to `rejected before any model call`.** That block is the whole cost thesis —
+~200 candidates killed for nothing, before a single model call.
+
+### Now run it a second time. This is the dedup test.
 
 ```bash
 .venv/bin/python -m agent.run --no-llm
 ```
 
-✅ `0 candidates survived` and `17 already_seen_this_month` in the reject table.
-✅ Still `$0.0000`. The repeat cost nothing because dedup runs in the free tier.
-⚠️ The findings on the dashboard do **not** disappear — `run.json` and the database keep
-the month's results. (That was a bug, found by running this exact test; see E13.)
+✅ `0 candidates survived` and `already_seen_this_month` in the reject table.
+✅ Still `$0.0000` — the repeat cost nothing because dedup runs in the free tier.
+⚠️ **The dashboard does not go blank.** Refresh it — this month's findings are still
+there. (That was a real bug, found by running exactly this test.)
 
 To see repeats again: `.venv/bin/python -m agent.run --no-llm --no-archive`
 
 ---
 
-## 4. The paid tiers — the first real spend (~3 min, ~$0.20)
+## 4. The kill switch
 
-Put a key in on the **Settings** page, press **Check it works** (✅ *"That key works."*),
-then press **Re-run search pipeline** on the main page.
-
-✅ The log streams live under the button, and **Stop the search** genuinely stops it.
-✅ Cost lands around **$0.18** against the $1.00 ceiling.
-✅ Haiku triage kills ~11 more candidates that got past the free filters.
-
-**Watch for lines like this — they are the guarantee working:**
-
-```
-⚠ award unverified (quote not on page) — nulling None/250000
-⚠ geography_stated unverified (quote not on page) — dropping 'San Diego'
-```
-
-That is a value the model reported being **thrown away** because the sentence backing it
-was not on the page. Do not treat those as failures. And do not treat them as wins
-either without checking the page — that is exactly the mistake E12 records.
-
-On the dashboard:
-✅ Results with a sourced amount sort above results without one.
-✅ **Needs your eyes** is its own block, at the bottom.
-✅ Values with a dashed outline and an **AI** tag are the model's judgement; everything
-else was read off the funder's page.
-
----
-
-## 5. The card assistant (~30 sec, ~$0.015)
-
-Programs → any empty card (ILIA, RISE Now, On the RISE, Nonprofit Partnerships
-Training) → **Edit** → the link is already filled in → **Read this page for me**.
-
-✅ The card fills in: summary, what it funds, keywords, search queries, funder types.
-✅ It tells you what it could **not** find and how useful it thought the page was.
-✅ Nothing is saved until you press Save.
-
-That flow is the answer to CLAUDE.md §2 — she never writes a prompt, she corrects a
-draft about her own programme.
-
----
-
-## 6. The kill switch
-
-Untick **"The agent is switched on"** → Save → press **Re-run search pipeline**.
+On the dashboard, untick **"The agent is switched on"** → **Save these settings** →
+press **Re-run search pipeline**.
 
 ✅ It refuses: *"The agent is switched off. Turn it back on in Settings first."*
 ✅ No network call is made.
 
-For the pipeline itself, the same switch is read at step 0 — verified previously with a
-socket guard that raises on any outbound connection (evidence E7).
+Tick it back on before continuing.
+
+---
+
+## 5. The paid tiers — first real spend (~4 min, ~$0.25)
+
+**On the dashboard → Settings**, paste a Claude API key, press **Save key**, then
+**Check it works**.
+
+✅ *"That key works."*
+✅ The page shows only `sk-ant-…4f2a`. There is **no** way to make it show the rest —
+that is deliberate, and step 2 has a test asserting it.
+
+Back on the main page, press **Re-run search pipeline**.
+
+🔎 **Watch the live log under the button.** Three things to look for:
+
+```
+  scored  65  City of San Diego Commission f  Apply for Funding …  ($0.02379)
+  ⚠ geography_stated unverified (quote not on page) — dropping 'San Diego'
+```
+
+1. **Warm partners score first.** That ordering is deliberate — RISE's own
+   relationships get the budget before the public databases do.
+2. **The ⚠ lines are the accuracy gate working.** A value the model reported, thrown
+   away because the sentence backing it was not on the page. Do not treat those as
+   failures — and do not treat them as wins either without checking the page. See
+   `evidence/README.md` E12 for why that distinction cost us a real $150,000 grant.
+3. **Cost lands around $0.23** against the $1.00 ceiling.
+
+✅ **Stop the search** genuinely stops it mid-run (it is a subprocess, not a thread).
+
+🔎 **On the results:**
+- Clean results first, **Needs your eyes** as its own block at the bottom.
+- Values with a **dashed outline and an AI tag** are the model's judgement — funder
+  type, service areas, % fit, hours estimate. Everything without that tag was read off
+  the funder's own page or left blank.
+- A **Public database** chip marks anything from CA Grants Portal / Grants.gov.
+
+⚠️ **Expect most results to say "Needs your eyes."** Most funders do not put an award
+amount or deadline in plain text — we checked across 86 pages. That is a fact about
+them, not a fault here.
+
+---
+
+## 6. The card assistant (~30 sec, ~$0.015)
+
+Programs → **ILIA** (or any empty card) → **Edit**. The link is already filled in.
+Press **Read this page for me**.
+
+✅ The card fills in: summary, what it funds, keywords, search queries, funder types.
+✅ It reports what it could **not** find, and how useful it thought the page was.
+✅ Nothing is saved until you press **Save**.
+
+🔎 That flow is the answer to `CLAUDE.md` §2 — *"Mauri never writes a prompt."* She
+corrects a draft about her own programme instead of composing an instruction she has no
+basis to check.
+
+### The empty-card warning
+
+Tick **ILIA** *without* filling it in, then run:
+
+```bash
+.venv/bin/python -m agent.run --no-llm 2>&1 | grep "⚠"
+```
+
+✅ Two warnings, in plain language:
+
+```
+⚠ Nothing was searched for ILIA — that program card is still empty. Open it,
+  press Edit, and paste the program's page to fill it in.
+⚠ California was searched for ARTS, RESILIENCE, RULFP only. ILIA has no California
+  funding category on file, so nothing was searched for it there…
+```
+
+🔎 This is the fix for the worst defect the branch merge produced: ticking a program
+outside the original three used to make both databases search *everything*, silently.
+
+---
+
+## 7. Everything else worth clicking
+
+| Try this | Should happen |
+|---|---|
+| Untick a funder | Drops out of the next search; the row stays (relationship preserved) |
+| **Remove** a funder | Confirm dialog that steers you to unticking instead |
+| Set a program's own award floor to 5000 | The crawl filters at $5,000, not $10,000 |
+| Change the spend limit to 0.25 and re-run | The run stops itself and says *"Hit the spending limit"* |
+| **Archived findings** in the sidebar | This month's results, grouped by month |
+| Stop the server, refresh the page | *"Could not reach the app. Is it still running? Start it again with ./start.sh"* |
 
 ---
 
 ## What this guide does NOT prove
 
-- That Mauri can use it. Nobody at RISE has opened it.
-- That the scores match her judgment. The calibration fixtures are ours.
-- That the scheduled GitHub Actions run works. It has never executed, and it reads
-  config from a different place than the dashboard — see the note at the top of
-  `.github/workflows/weekly.yml`.
+- **That Mauri can use it.** Nobody at RISE has opened it.
+- **That the scores match her judgment.** The calibration fixtures are ours, not hers,
+  and were written against the old $25,000 floor.
+
+  ```bash
+  .venv/bin/python -m tests.calibration --dry-run
+  ```
+
+  ✅ `5/10 killed by free filters; no YES wrongly filtered` — and it says on every run
+  that a pass proves the pipeline ranks, not that it is calibrated.
+- **That the public grant databases are worth their cost.** One scored run, 37
+  candidates from them, **zero** survived relevance triage (`evidence/README.md` E15).
+- **That the scheduled GitHub Actions run works.** Never executed, and it reads config
+  from a different place than the dashboard — see the note at the top of `weekly.yml`.
+
+---
+
+## If something breaks
+
+```bash
+# Start clean — deletes settings, programs, funders, findings and the saved key
+rm -rf data && ./start.sh
+
+# See what the last run actually did
+.venv/bin/python -c "
+from app.db import session; from app import repo
+with session() as c:
+    r = repo.latest_run(c)
+    print({k: r[k] for k in ('status','stop_reason','usd_spent','opportunities_scored')})
+    for h in r['source_health']: print(' ', h['status'], h['funder'])
+"
+```
