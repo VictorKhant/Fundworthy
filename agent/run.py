@@ -264,6 +264,8 @@ async def main_async(args: argparse.Namespace) -> int:
         return 1
     if args.max_tier:
         cfg.max_tier = Tier(args.max_tier)
+    if args.max_opportunities:
+        cfg.max_opportunities = args.max_opportunities
 
     # Step 0: the kill switch. Before anything else, before any network call (§8).
     if not cfg.enabled:
@@ -315,6 +317,10 @@ async def main_async(args: argparse.Namespace) -> int:
 
         sink = SheetsSink()
         sink.ensure_config_tab()
+    elif args.sink == "web":
+        from sinks.webjson import WebJsonSink
+
+        sink = WebJsonSink(out_path=args.web_out)
     else:
         from sinks.jsonl import JsonlSink
 
@@ -328,8 +334,10 @@ async def main_async(args: argparse.Namespace) -> int:
 
 def main() -> int:
     p = argparse.ArgumentParser(description="RISE San Diego funding opportunity agent")
-    p.add_argument("--sink", choices=["jsonl", "sheets"], default="jsonl")
+    p.add_argument("--sink", choices=["web", "jsonl", "sheets"], default="web")
     p.add_argument("--out", default="out", help="output dir for the jsonl sink")
+    p.add_argument("--web-out", default="dashboard/public/run.json",
+                   help="output path for the web sink (the file the dashboard reads)")
     p.add_argument("--dry-run", action="store_true", help="crawl and report, write nothing")
     p.add_argument("--no-follow", action="store_true", help="do not follow program links")
     p.add_argument("--no-llm", action="store_true",
@@ -338,6 +346,8 @@ def main() -> int:
                    help="override the weekly USD ceiling (default: 1.00, §8)")
     p.add_argument("--max-tier", type=int, choices=[1, 2, 3],
                    help="1=warm funders, 2=+intermediaries, 3=+government")
+    p.add_argument("--max-opportunities", type=int,
+                   help="cap how many to score this run (overrides Config — handy for a fast test)")
     p.add_argument("-v", "--verbose", action="store_true")
     return asyncio.run(main_async(p.parse_args()))
 

@@ -109,3 +109,27 @@ tbody tr:last-child td { border-bottom: none; }
 .empty p { margin: 0; color: var(--muted); }
 
 footer { margin-top: 2.5rem; padding-top: 1.25rem; border-top: 1px solid var(--line); }
+
+/* Opportunity cards (results view) */
+.opps { display: flex; flex-direction: column; gap: .6rem; }
+.opp {
+  display: flex; gap: .9rem; align-items: flex-start;
+  border: 1px solid var(--line); border-radius: 10px; padding: .8rem .9rem; background: var(--bg);
+}
+.opp-score {
+  flex: 0 0 auto; min-width: 2.6rem; text-align: center;
+  font-size: 1.35rem; font-weight: 700; color: var(--accent);
+  border-radius: 8px; padding: .25rem .3rem; background: var(--panel);
+}
+.opp-body { flex: 1 1 auto; min-width: 0; }
+.opp-head { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+.opp-funder { font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.opp-title { font-weight: 600; margin: .1rem 0 .25rem; }
+.opp-why { font-size: .92rem; margin-bottom: .45rem; }
+.opp-meta { display: flex; gap: .9rem; flex-wrap: wrap; font-size: .85rem; color: var(--muted); }
+.opp-meta a { color: var(--accent); text-decoration: none; }
+.opp-meta a:hover { text-decoration: underline; }
+.badge {
+  font-size: .72rem; text-transform: uppercase; letter-spacing: .03em;
+  padding: .1rem .4rem; border-radius: 6px; border: 1px solid var(--warn); color: var(--warn);
+}
