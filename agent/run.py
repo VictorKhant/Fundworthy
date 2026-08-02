@@ -226,8 +226,15 @@ def _report(cfg: Config, run: RunLog, opportunities: list[Opportunity]) -> None:
     if scored:
         print("\n  RANKED — award amount stated")
         for o in scored[:15]:
-            rng = (f"{o.award_min:,}–{o.award_max:,}"
-                   if o.award_min != o.award_max else f"{o.award_max:,}")
+            lo, hi = o.award_min, o.award_max
+            if lo is not None and hi is not None:
+                rng = f"{lo:,}–{hi:,}" if lo != hi else f"{hi:,}"
+            elif hi is not None:
+                rng = f"{hi:,}"
+            elif lo is not None:
+                rng = f"{lo:,}"
+            else:
+                rng = "—"
             print(f"    {o.score:>3}  ${rng:>18}  {o.funder[:26]:<26}  {o.title[:36]}")
             if o.score_rationale:
                 print(f"         {o.score_rationale[:96]}")
