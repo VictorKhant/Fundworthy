@@ -22,6 +22,32 @@ class Program(str, Enum):
     ARTS = "ARTS"              # RISE Arts
 
 
+class FunderType(str, Enum):
+    """What kind of funder this is. Mauri asked for this column explicitly.
+
+    This is an AI *judgement*, not something copied off the page, and the UI labels it
+    as one. Getting it wrong costs her a moment of confusion; getting an award amount
+    wrong costs her ten hours. The two are held to different standards on purpose.
+    """
+
+    PRIVATE_FOUNDATION = "private_foundation"
+    CORPORATE = "corporate"
+    COMMUNITY = "community"
+    GOVERNMENT = "government"
+    PUBLIC_AGENCY = "public_agency"
+    OTHER = "other"
+    UNKNOWN = "unknown"
+
+
+class DeadlineType(str, Enum):
+    """Mauri asked to distinguish "rolling / multiple deadlines" from one fixed date —
+    they mean completely different things for planning a 10-hour application."""
+
+    FIXED = "fixed"        # one specific date, sourced from the page
+    ROLLING = "rolling"    # accepted on an ongoing basis / multiple cycles
+    UNKNOWN = "unknown"    # the page didn't say
+
+
 class Section(str, Enum):
     """Which block of the Sheet a record belongs in.
 
@@ -32,6 +58,12 @@ class Section(str, Enum):
 
     SCORED = "scored"                 # award amount sourced, ranked by score
     AMOUNT_NOT_STATED = "not_stated"  # no amount on the page — needs a human look
+
+
+def _enum_value(value) -> str:
+    """Accept either the enum or a bare string, emit the string. Keeps `to_dict`
+    honest when a record is rebuilt from the database rather than from the pipeline."""
+    return value.value if isinstance(value, Enum) else str(value)
 
 
 def stable_id(source_url: str, title: str) -> str:
@@ -86,6 +118,33 @@ class Opportunity:
     needs_human_check: bool      # ambiguous deadline/amount → flag, don't guess
     fetched_at: datetime
 
+    # --- the columns Mauri asked for, added after the follow-up conversation.
+    #
+    # Two classes of field, and the distinction is load-bearing:
+    #
+    #   SOURCED   award_typical, geography, deadline_type, contact_note — each one is
+    #             only ever populated when the model returns the verbatim sentence it
+    #             read the value from AND that sentence is a literal substring of the
+    #             page we fetched (agent/verify.py). Otherwise it stays None and
+    #             needs_human_check goes up. This is §6, extended to the new columns
+    #             rather than relaxed for them.
+    #
+    #   INFERRED  funder_type, service_areas, confidence_pct — these are the model's
+    #             read, not quotes off a page, and the UI marks them as such. A wrong
+    #             "Private Foundation" label is a shrug; a wrong deadline is fatal.
+    #
+    # form_990_available is neither: it is a deterministic property of the funder, and
+    # is left None until something has actually checked.
+    award_typical: int | None = None          # what they actually tend to give
+    deadline_type: DeadlineType = DeadlineType.UNKNOWN
+    funder_type: FunderType = FunderType.UNKNOWN
+    service_areas: list[str] = field(default_factory=list)
+    geography: str | None = None
+    form_990_available: bool | None = None
+    confidence_pct: int | None = None         # AI judgement, labelled as one
+    contact_note: str | None = None
+    found_on: date = field(default_factory=date.today)
+
     def __post_init__(self) -> None:
         if not self.source_url or not self.source_url.startswith(("http://", "https://")):
             raise ValueError(
@@ -114,15 +173,24 @@ class Opportunity:
             "funder": self.funder,
             "award_min": self.award_min,
             "award_max": self.award_max,
+            "award_typical": self.award_typical,
             "deadline": self.deadline.isoformat() if self.deadline else None,
+            "deadline_type": _enum_value(self.deadline_type),
             "estimated_effort_hours": self.estimated_effort_hours,
-            "program_match": [p.value for p in self.program_match],
+            "program_match": [_enum_value(p) for p in self.program_match],
             "score": self.score,
             "score_rationale": self.score_rationale,
+            "funder_type": _enum_value(self.funder_type),
+            "service_areas": list(self.service_areas),
+            "geography": self.geography,
+            "form_990_available": self.form_990_available,
+            "confidence_pct": self.confidence_pct,
+            "contact_note": self.contact_note,
             "source_url": self.source_url,
             "verified": self.verified,
             "needs_human_check": self.needs_human_check,
             "fetched_at": self.fetched_at.isoformat(),
+            "found_on": self.found_on.isoformat(),
             "section": self.section.value,
         }
 

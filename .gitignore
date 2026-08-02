@@ -20,3 +20,10 @@ dashboard/public/run.json
 
 # os
 .DS_Store
+
+# local control surface — the database and its encryption key never leave the machine
+data/
+*.db
+*.db-wal
+*.db-shm
+.fernet-key

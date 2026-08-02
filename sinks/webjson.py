@@ -24,9 +24,11 @@ from .base import split_sections
 # Fields safe to publish. Kept explicit so any future Opportunity field is opt-in here,
 # never leaked by default. (Opportunity carries no internal Funders-tab data today.)
 PUBLIC_FIELDS = (
-    "id", "title", "funder", "award_min", "award_max", "deadline",
-    "estimated_effort_hours", "program_match", "score", "score_rationale",
-    "source_url", "verified", "needs_human_check", "section",
+    "id", "title", "funder", "award_min", "award_max", "award_typical", "deadline",
+    "deadline_type", "estimated_effort_hours", "program_match", "score",
+    "score_rationale", "funder_type", "service_areas", "geography",
+    "form_990_available", "confidence_pct", "contact_note",
+    "source_url", "verified", "needs_human_check", "found_on", "section",
 )
 
 

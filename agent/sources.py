@@ -44,10 +44,34 @@ class Source:
     confidence: Confidence = Confidence.LIKELY
     warm: bool = False
     notes: str = ""
+    sector: str = ""   # blank => derived by sector_for(); see STAKEHOLDER.md Q10
 
     @property
     def fetchable(self) -> bool:
         return self.url is not None and self.confidence >= Confidence.LIKELY
+
+
+def sector_for(source: "Source") -> str:
+    """Which funding sector this source belongs to.
+
+    Mauri named four sectors she wants funding found in but we do not yet have the
+    list (STAKEHOLDER.md Q10). Rather than guess at four names, every source carries a
+    sector tag derived from what we already know, and the dashboard exposes them as
+    checkboxes. When she gives us the real four, this function and the labels change —
+    no pipeline code does.
+    """
+    if source.sector:
+        return source.sector
+    if source.warm:
+        return "warm_partner"
+    if source.tier == Tier.GOVERNMENT:
+        return "government"
+    if source.tier == Tier.INTERMEDIARY:
+        return "intermediary"
+    name = source.funder.casefold()
+    if "arts" in name or "culture" in name:
+        return "arts_agency"
+    return "foundation"
 
 
 # --- Tier 1: the eight warm funders (§7, confirmed warm by Mauri) --------------
