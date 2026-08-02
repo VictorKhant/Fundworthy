@@ -1,3 +1,4 @@
+import { api } from "../api";
 import Findings from "../components/Findings";
 import Funders from "../components/Funders";
 import Programs from "../components/Programs";
@@ -12,11 +13,26 @@ import RunPanel from "../components/RunPanel";
 export default function Dashboard({ state, onChange }) {
   const clear = state.clear || [];
   const needsCheck = state.needs_check || [];
+  const total = clear.length + needsCheck.length;
 
   return (
     <>
       <header>
-        <h1>RISE funding finder</h1>
+        <div className="panel-head">
+          <h1>RISE funding finder</h1>
+          {/* Top of the page, not down with the results. The findings list sits below
+              the run panel, the programs and the funders, so a download button beside
+              it is three screens from where someone goes looking for one.
+
+              A plain <a download>, not a button with an onClick: the browser saves the
+              file natively, so it still works if JavaScript fails elsewhere on the
+              page, and there is no spinner state to get stuck in. */}
+          {total > 0 && (
+            <a className="button" href={api.exportUrl()} download>
+              Download as a spreadsheet
+            </a>
+          )}
+        </div>
         <p className="muted">
           Every opportunity here cleared your award floor. Nothing shows a number the
           agent could not find on the funder's own page.

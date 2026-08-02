@@ -55,7 +55,16 @@ export default function Archive() {
   return (
     <>
       <header>
-        <h1>Archived findings</h1>
+        <div className="panel-head">
+          <h1>Archived findings</h1>
+          {/* Downloads the month currently selected below, not today's — otherwise
+              picking August and getting July's file is a silent wrong answer. */}
+          {rows.length > 0 && (
+            <a className="button" href={api.exportUrl(month)} download>
+              Download as a spreadsheet
+            </a>
+          )}
+        </div>
         <p className="muted">
           Everything found this month, including what you have already reviewed.
         </p>
