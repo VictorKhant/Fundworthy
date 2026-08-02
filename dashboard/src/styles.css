@@ -1,37 +1,55 @@
-/* Plain, legible, light and dark. Deliberately unstyled beyond "clear and usable" —
-   the visual pass comes later. What is NOT cosmetic and should survive a redesign:
+/* Fundworthy — warm paper, sage, clay. (UI-ROADMAP.md, Phase 1)
+
+   What is NOT cosmetic and must survive any future restyle. These are correctness
+   requirements from CLAUDE.md §6, not preferences:
 
      .chip.inferred    marks a value the AI judged rather than read off the funder's
-                       page. If that distinction stops being visible, the page starts
-                       asserting things CLAUDE.md §6 says we must never assert.
-     .opp.flagged      the needs-a-human block. Mauri asked for these last, not hidden.
-     .costbar          spend against the ceiling. §8 only works if she can see it. */
+                       page. Dashed --dash border + a visible "AI" mark. If that
+                       distinction stops being visible, the page starts asserting
+                       things §6 says we must never assert. It must never be restyled
+                       to look like .chip.strong (solid, sage) which means "sourced".
+     .opp-score        the fit numeral. The largest, most confident-looking number on
+                       the row — and entirely an AI judgement. Carries the same dashed
+                       rule for the same reason.
+     .opp.flagged      the needs-a-human block. Clay border, listed last, never hidden.
+     .costbar          spend against the ceiling. §8 only works if she can see it.
+
+   Dark mode: deliberately dropped in this pass. The old cool-grey dark palette would
+   have clashed with the warm light one, and shipping a half-converted dark theme is
+   worse than shipping none. See UI-ROADMAP.md Phase 1. */
 
 :root {
-  --bg: #ffffff;
-  --fg: #1a1a1a;
-  --muted: #666666;
-  --line: #e2e2e2;
-  --panel: #fafafa;
-  --ok: #1a7f4b;
-  --warn: #a35c00;
-  --off: #a11b1b;
-  --accent: #2b5fa8;
-  --sidebar: 15rem;
-}
+  --bg: #F7F5F1;          /* warm paper */
+  --panel: #FCFBF8;       /* raised surfaces / sidebar */
+  --card: #FFFFFF;
+  --fg: #33312C;          /* ink */
+  --body: #55524A;        /* secondary text */
+  --muted: #8A8578;
+  --line: #E5E1D8;
+  --line-soft: #F1EFEA;
+  --accent: #4C7A5E;      /* sage — primary actions, sourced-good */
+  --accent-deep: #3A6149;
+  --accent-soft: #EDF2EE; /* sage tint bg */
+  --accent-line: #D5E0D8;
+  --clay: #A06B4F;        /* secondary accent — warnings-lite, numerals */
+  --clay-deep: #9C5A34;
+  --clay-soft: #F5E9E0;   /* urgent-deadline chip bg */
+  --clay-line: #E8D9C8;
+  --dash: #C9C4B6;        /* dashed borders on AI-inferred marks */
+  --nav-active: #EDEAE2;
+  --shadow: 0 18px 40px rgba(51, 49, 44, .06);
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #16181c;
-    --fg: #ececec;
-    --muted: #9a9a9a;
-    --line: #2c2f36;
-    --panel: #1d2026;
-    --ok: #4fbf85;
-    --warn: #e0a44a;
-    --off: #e56a6a;
-    --accent: #6fa3e8;
-  }
+  /* Older selectors still name these. Kept as aliases rather than chased through the
+     JSX, so a component written against the previous palette cannot render an
+     unstyled control. */
+  --ok: var(--accent);
+  --warn: var(--clay-deep);
+  --off: var(--clay-deep);
+
+  --sidebar: 236px;
+  --display: "Newsreader", ui-serif, Georgia, "Times New Roman", serif;
+  --ui: "Albert Sans", ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 * { box-sizing: border-box; }
@@ -40,8 +58,12 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font: 15px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font: 15px/1.6 var(--ui);
+  -webkit-font-smoothing: antialiased;
 }
+
+a { color: var(--accent); }
+a:hover { color: var(--accent-deep); }
 
 /* --- shell + sidebar ------------------------------------------------------- */
 
@@ -49,11 +71,12 @@ body {
 .shell.with-sidebar .page { margin-left: var(--sidebar); }
 
 .sidebar-toggle {
-  position: fixed; top: .75rem; left: .75rem; z-index: 30;
-  width: 2.25rem; height: 2.25rem; border-radius: .4rem;
-  border: 1px solid var(--line); background: var(--panel); color: var(--fg);
-  font-size: 1rem; cursor: pointer;
+  position: fixed; top: 14px; left: 14px; z-index: 30;
+  width: 36px; height: 36px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--card); color: var(--fg);
+  font-size: 15px; cursor: pointer; line-height: 1;
 }
+.sidebar-toggle:hover { border-color: var(--dash); }
 
 .sidebar {
   position: fixed; inset: 0 auto 0 0; z-index: 25;
@@ -62,123 +85,175 @@ body {
   transition: transform .18s ease;
   background: var(--panel);
   border-right: 1px solid var(--line);
-  padding: 3.5rem .75rem 1rem;
-  display: flex; flex-direction: column; gap: .25rem;
+  padding: 60px 14px 16px;
+  display: flex; flex-direction: column; gap: 4px;
+  overflow-y: auto;
 }
 .sidebar.open { transform: none; }
 
-.sidebar-brand {
-  font-weight: 700; letter-spacing: .12em; color: var(--muted);
-  padding: 0 .5rem .75rem;
+/* The wordmark: text plus a 6px clay dot. No image asset anywhere in this app. */
+.brandmark {
+  display: flex; align-items: baseline; gap: 7px;
+  padding: 2px 10px 16px;
+  font-family: var(--display); font-size: 20px; font-weight: 500;
+  letter-spacing: -.01em; color: var(--fg);
+  text-decoration: none;
+}
+.brand-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--clay); display: inline-block; flex-shrink: 0;
 }
 
 .sidebar-link {
-  display: flex; align-items: center; gap: .6rem;
-  padding: .55rem .6rem; border-radius: .4rem;
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px; border-radius: 10px;
   border: 0; background: none; color: var(--fg);
-  font: inherit; text-align: left; cursor: pointer; width: 100%;
+  font: inherit; font-size: 14.5px; text-align: left; cursor: pointer; width: 100%;
 }
-.sidebar-link:hover { background: rgba(127, 127, 127, .12); }
-.sidebar-link.current { background: rgba(127, 127, 127, .18); font-weight: 600; }
-.sidebar-icon { width: 1.1rem; text-align: center; opacity: .75; }
-.sidebar-foot { margin-top: auto; padding: .75rem .6rem; }
+.sidebar-link:hover { background: var(--nav-active); }
+.sidebar-link.current { background: var(--nav-active); font-weight: 600; }
+.sidebar-icon { width: 16px; text-align: center; opacity: .7; font-size: 13px; }
+.sidebar-foot { margin-top: auto; padding: 14px 10px 4px; border-top: 1px solid var(--line); }
 
-.scrim { position: fixed; inset: 0; z-index: 20; background: rgba(0, 0, 0, .3); }
+.scrim { position: fixed; inset: 0; z-index: 20; background: rgba(51, 49, 44, .28); }
 @media (min-width: 900px) { .scrim { display: none; } }
 
-.page { max-width: 1100px; margin: 0 auto; padding: 3.5rem 1.25rem 4rem; }
+.page { max-width: 980px; margin: 0 auto; padding: 36px 40px 60px; }
+@media (max-width: 700px) { .page { padding: 60px 20px 48px; } }
 
 /* --- type ------------------------------------------------------------------ */
 
-h1 { font-size: 1.5rem; margin: 0 0 .35rem; }
-h2 { font-size: 1.05rem; margin: 0 0 .5rem; }
-h3.sub { font-size: .8rem; text-transform: uppercase; letter-spacing: .06em;
-         color: var(--muted); margin: 1.25rem 0 .5rem; }
-header { margin-bottom: 1.5rem; }
+h1 {
+  font-family: var(--display); font-weight: 500; font-size: 30px;
+  letter-spacing: -.01em; margin: 0 0 4px; line-height: 1.2;
+}
+h2 {
+  font-family: var(--display); font-weight: 500; font-size: 20px;
+  letter-spacing: -.01em; margin: 0 0 6px; line-height: 1.25;
+}
+h3.sub {
+  font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--muted); font-weight: 600; margin: 20px 0 8px;
+}
+header { margin-bottom: 20px; }
 .muted { color: var(--muted); }
-.small { font-size: .85rem; }
-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; }
+.small { font-size: 13px; }
+p { text-wrap: pretty; }
+code { font-family: var(--mono); font-size: .9em; background: var(--line-soft);
+       padding: 1px 5px; border-radius: 4px; }
 
 /* --- panels + forms -------------------------------------------------------- */
 
 .panel {
-  border: 1px solid var(--line); border-radius: .5rem;
-  background: var(--panel); padding: 1rem 1.1rem; margin-bottom: 1.25rem;
+  border: 1px solid var(--line); border-radius: 14px;
+  background: var(--panel); padding: 18px 20px; margin-bottom: 16px;
 }
-.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-
-.field { display: block; margin: .85rem 0; }
-.field > span { display: block; font-weight: 600; font-size: .9rem; margin-bottom: .3rem; }
-.field.inline { display: flex; align-items: flex-start; gap: .5rem; }
-.field.inline > span { font-weight: 400; margin: 0; }
-.field small { display: block; margin-top: .3rem; }
-
-input[type="text"], input[type="number"], input[type="password"], input:not([type]),
-textarea, select {
-  width: 100%; padding: .45rem .6rem;
-  border: 1px solid var(--line); border-radius: .35rem;
-  background: var(--bg); color: var(--fg); font: inherit;
+.panel.raised { background: var(--card); padding: 22px 24px; }
+.panel-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
 }
-textarea { resize: vertical; }
 
-.knobs { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 0 1rem; }
-.checks { display: flex; flex-wrap: wrap; gap: .5rem .9rem; margin: .3rem 0; }
-.check { display: flex; align-items: center; gap: .4rem; font-size: .9rem; }
+.field { display: block; margin: 14px 0; }
+.field > span { display: block; font-weight: 600; font-size: 13px; margin-bottom: 5px; }
+.field.inline { display: flex; align-items: flex-start; gap: 8px; }
+.field.inline > span { font-weight: 400; font-size: 13.5px; margin: 0; }
+.field small { display: block; margin-top: 4px; font-size: 12.5px; }
 
-.row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
-.row.end { justify-content: flex-end; margin-top: .75rem; }
+input[type="text"], input[type="number"], input[type="password"], input[type="email"],
+input:not([type]), textarea, select {
+  width: 100%; padding: 9px 12px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--panel); color: var(--fg); font: inherit; font-size: 14px;
+}
+.panel input[type="text"], .panel input[type="number"], .panel input[type="password"],
+.panel input:not([type]), .panel textarea, .panel select { background: var(--card); }
+input:focus-visible, textarea:focus-visible, select:focus-visible {
+  outline: 2px solid var(--accent-line); outline-offset: 1px; border-color: var(--accent);
+}
+textarea { resize: vertical; line-height: 1.5; }
+input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; }
+
+.knobs { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 4px 20px; }
+.checks { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 4px 0; }
+.check { display: flex; align-items: center; gap: 7px; font-size: 13.5px; cursor: pointer; }
+
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.row.end { justify-content: flex-end; margin-top: 14px; }
 
 /* a.button is the download link. It has to be an <a download> rather than a button so
    the browser saves the file natively, but it should be indistinguishable from the
    buttons beside it — hence the shared declaration. */
 button, a.button {
-  padding: .45rem .8rem; border-radius: .35rem;
-  border: 1px solid var(--line); background: var(--bg); color: var(--fg);
-  font: inherit; cursor: pointer;
+  padding: 9px 16px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--card); color: var(--fg);
+  font: inherit; font-size: 14px; cursor: pointer; line-height: 1.4;
 }
 a.button { text-decoration: none; white-space: nowrap; display: inline-block; }
-button:hover:not(:disabled), a.button:hover { border-color: var(--muted); }
+button:hover:not(:disabled), a.button:hover { border-color: var(--dash); color: var(--fg); }
 button:disabled { opacity: .5; cursor: not-allowed; }
-button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-button.danger  { background: var(--off); border-color: var(--off); color: #fff; }
-button.ghost   { background: none; border-color: transparent; color: var(--muted); }
-button.ghost:hover:not(:disabled) { color: var(--fg); }
-button.ghost.danger { background: none; color: var(--off); border-color: transparent; }
+
+button.primary {
+  background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 500;
+}
+button.primary:hover:not(:disabled) { background: var(--accent-deep); border-color: var(--accent-deep); }
+
+/* The dark variant. Used where a second filled button would fight the sage one —
+   "Save settings" inside the search panel, the selected month in the archive. */
+button.dark { background: var(--fg); border-color: var(--fg); color: var(--bg); font-weight: 500; }
+button.dark:hover:not(:disabled) { background: #4a473f; border-color: #4a473f; }
+
+button.danger { background: none; border-color: var(--line); color: var(--clay-deep); }
+button.danger:hover:not(:disabled) { border-color: var(--clay-line); }
+
+button.ghost { background: none; border-color: transparent; color: var(--accent); padding: 9px 10px; }
+button.ghost:hover:not(:disabled) { background: none; color: var(--accent-deep); }
+button.ghost.danger { background: none; color: var(--clay-deep); border-color: transparent; }
+
+/* A button that reads as a link — the "Adjust search settings" / "More details"
+   affordance. Still a real <button>, because it toggles rather than navigates. */
+button.text {
+  border: 0; background: none; color: var(--accent);
+  font: inherit; font-size: 13.5px; padding: 0; cursor: pointer;
+}
+button.text:hover:not(:disabled) { color: var(--accent-deep); }
 
 .notice {
-  border: 1px solid var(--line); border-left: 3px solid var(--accent);
-  border-radius: .35rem; padding: .6rem .8rem; margin: .75rem 0;
-  background: var(--bg); font-size: .9rem;
+  border: 1px solid var(--accent-line); background: var(--accent-soft);
+  border-radius: 11px; padding: 11px 15px; margin: 12px 0;
+  font-size: 13.5px; color: var(--accent-deep);
 }
-.notice.error { border-left-color: var(--off); color: var(--off); }
-.notice.small { font-size: .85rem; }
+.notice.error { border-color: var(--clay-line); background: var(--clay-soft); color: var(--clay-deep); }
+.notice.plain { border-color: var(--line); background: var(--panel); color: var(--body); }
+.notice.small { font-size: 13px; }
 
 /* --- program cards --------------------------------------------------------- */
 
-.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: .85rem; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; }
 .card {
-  border: 1px solid var(--line); border-radius: .45rem;
-  padding: .75rem .85rem; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 11px;
+  padding: 13px 15px; background: var(--card);
 }
-.card.active { border-color: var(--accent); }
-.card.editing { grid-column: 1 / -1; }
-.card-tick { display: flex; align-items: center; gap: .5rem; cursor: pointer; }
-.card-title { font-weight: 600; }
-.card-summary { margin: .5rem 0; font-size: .9rem; }
-.card-meta { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .5rem; }
-.tags { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .4rem; }
+.card.active { border-color: var(--accent-line); }
+.card.editing { grid-column: 1 / -1; padding: 18px 20px; }
+.card-tick { display: flex; align-items: center; gap: 9px; cursor: pointer; }
+.card-title { font-weight: 600; font-size: 14px; }
+.card-summary { margin: 6px 0; font-size: 13px; color: var(--body); }
+.card-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; font-size: 12.5px; }
+.tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
 
 /* --- funders --------------------------------------------------------------- */
 
 .funder-list { display: flex; flex-direction: column; }
 .funder-row {
   display: grid; grid-template-columns: auto 1fr auto auto;
-  gap: .75rem; align-items: center;
-  padding: .55rem 0; border-bottom: 1px solid var(--line);
+  gap: 10px; align-items: center;
+  padding: 8px 2px; border-bottom: 1px solid var(--line-soft);
 }
 .funder-row.inactive { opacity: .55; }
-.funder-name { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; font-weight: 500; }
-.funder-sector { white-space: nowrap; }
+.funder-name { display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+               font-weight: 500; font-size: 14px; }
+.funder-sector { white-space: nowrap; font-size: 12px; }
 .clamp { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
 @media (max-width: 760px) {
   .funder-row { grid-template-columns: auto 1fr; }
@@ -188,39 +263,41 @@ button.ghost.danger { background: none; color: var(--off); border-color: transpa
 /* --- tables ---------------------------------------------------------------- */
 /* Wide content scrolls inside its own container — the page never scrolls sideways. */
 .tablewrap { overflow-x: auto; }
-table { border-collapse: collapse; width: 100%; font-size: .87rem; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
 th, td {
-  text-align: left;
-  padding: .5rem .65rem;
-  border-bottom: 1px solid var(--line);
-  white-space: nowrap;
+  text-align: left; padding: 8px 10px;
+  border-bottom: 1px solid var(--line-soft); white-space: nowrap;
 }
-th { font-weight: 600; color: var(--muted); font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; }
+th { font-weight: 600; color: var(--muted); font-size: 12px;
+     text-transform: uppercase; letter-spacing: .06em; }
 tbody tr:last-child td { border-bottom: none; }
 
-/* --- run panel ------------------------------------------------------------- */
+/* --- run cost + log -------------------------------------------------------- */
 
-.runbar { margin-top: 1rem; }
-.costbar { height: .45rem; border-radius: 999px; background: var(--line); overflow: hidden; margin-bottom: .4rem; }
-.costbar-fill { height: 100%; background: var(--ok); }
+.runbar { margin-top: 14px; }
+.costbar {
+  height: 5px; border-radius: 999px; background: #E9E5DC;
+  overflow: hidden; margin-bottom: 6px;
+}
+.costbar-fill { height: 100%; background: var(--accent); }
 
-.runlog { margin-top: .85rem; }
+.runlog { margin-top: 14px; }
 .runlog pre {
-  margin: .3rem 0 0; padding: .6rem .7rem; max-height: 15rem; overflow: auto;
-  border: 1px solid var(--line); border-radius: .35rem; background: var(--bg);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: .78rem; line-height: 1.45; white-space: pre-wrap; word-break: break-word;
+  margin: 5px 0 0; padding: 11px 13px; max-height: 15rem; overflow: auto;
+  border: 1px solid var(--line); border-radius: 11px; background: var(--card);
+  font-family: var(--mono);
+  font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
 }
 
 /* --- findings -------------------------------------------------------------- */
 
-.opps { display: flex; flex-direction: column; gap: .6rem; }
+.opps { display: flex; flex-direction: column; gap: 12px; }
 .opp {
   /* 4.25rem, not 3rem: the badge carries a "fit · AI" label under the number, and the
      label is wider than the number it describes. At 3rem it spilled past the card. */
-  display: grid; grid-template-columns: 4.25rem minmax(0, 1fr); gap: .85rem;
-  border: 1px solid var(--line); border-radius: .45rem;
-  padding: .75rem .85rem; background: var(--bg);
+  display: grid; grid-template-columns: 4.25rem minmax(0, 1fr); gap: 16px;
+  border: 1px solid var(--line); border-radius: 14px;
+  padding: 16px 18px; background: var(--card);
 }
 /* A grid column defaults to min-width:auto, so it refuses to shrink below its widest
    unbreakable word. Funder URLs and long grant titles have no break opportunity, so the
@@ -228,56 +305,75 @@ tbody tr:last-child td { border-bottom: none; }
    min-width let it shrink; overflow-wrap then breaks the long token itself. */
 .opp-body { min-width: 0; }
 .opp-title, .opp-why, .opp-funder, .opp-meta a { overflow-wrap: anywhere; }
-.opp.flagged { border-left: 3px solid var(--warn); }
+
+/* The flagged block reads as a whole card, not a card with a stripe. The 3px
+   left-border-accent pattern is retired — a full clay border says "this one is
+   different" without implying a severity ramp we do not have. */
+.opp.flagged { border-color: var(--clay-line); }
+
 .opp-score {
-  font-size: 1.35rem; font-weight: 700; text-align: center;
-  color: var(--accent); line-height: 1.2;
+  font-family: var(--display); font-size: 26px; font-weight: 500;
+  text-align: center; color: var(--accent); line-height: 1.1;
 }
 /* The badge holds the AI's fit estimate, which is a judgement and not a figure read off
    the funder's page. It is the biggest number on the row, so the inferred marking has to
-   be unmistakable: muted rather than accent-coloured, and a dashed rule under it echoing
-   .chip.inferred. Same correctness requirement as that class — see the top of this file. */
-.opp-score.inferred {
-  color: var(--muted);
-  border-bottom: 1px dashed var(--line);
-  padding-bottom: .15rem;
+   be unmistakable — a dashed rule under it echoing .chip.inferred. Same correctness
+   requirement as that class; see the top of this file. */
+.opp-score.inferred .opp-score-tag {
+  border-top: 1px dashed var(--dash);
+  margin-top: 3px; padding-top: 3px;
 }
+.opp.flagged .opp-score { color: var(--clay); }
 .opp-score-tag {
-  display: block; font-size: .6rem; font-weight: 600; letter-spacing: .02em;
-  text-transform: uppercase; color: var(--muted); margin-top: .1rem;
+  display: block; font-size: 10px; font-weight: 400; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--muted);
 }
-.opp-head { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
-.opp-funder { font-weight: 600; }
-.opp-title { margin: .15rem 0; }
-.opp-why { margin: .35rem 0 .5rem; }
-.opp-meta { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin-top: .35rem; }
-.opp-meta a { color: var(--accent); }
+.opp-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.opp-funder { font-weight: 600; font-size: 15.5px; }
+.opp-title { font-size: 14px; color: var(--body); margin: 2px 0 8px; }
+.opp-why { margin: 6px 0 8px; font-size: 13.5px; color: var(--body); max-width: 70ch; }
+.opp-meta { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; margin-top: 8px; }
+.opp-meta a { color: var(--accent); font-size: 13.5px; }
+
+/* --- chips ----------------------------------------------------------------- */
 
 .chip {
-  display: inline-flex; align-items: center; gap: .3rem;
-  padding: .1rem .45rem; border-radius: 999px;
-  border: 1px solid var(--line); background: var(--panel);
-  font-size: .8rem;
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 10px; border-radius: 999px;
+  border: 1px solid transparent; background: var(--line-soft);
+  color: var(--body); font-size: 12.5px;
   /* Was nowrap. Most chips are short enough that flex-wrap moves them to the next line
      before their text ever needs to break — but service areas and contact notes are
      free text, and one long one was riding out past the card edge with nowrap set. */
   white-space: normal; overflow-wrap: anywhere; max-width: 100%;
 }
-.chip.strong { font-weight: 700; border-color: var(--ok); color: var(--ok); }
-.chip.warn { border-color: var(--warn); color: var(--warn); }
-.chip.warm { border-color: var(--accent); color: var(--accent); }
+/* Sourced, and good news: an amount the funder's own page stated. Solid sage — the
+   visual opposite of .chip.inferred, on purpose. */
+.chip.strong { background: var(--accent-soft); color: var(--accent-deep); font-weight: 600; }
+.chip.warn { background: var(--clay-soft); color: var(--clay-deep); }
+.chip.warm { background: var(--accent-soft); color: var(--accent-deep); }
 .chip.muted { color: var(--muted); }
 
 /* An AI judgement, not a quote from the funder's page. This distinction is a
    correctness requirement, not decoration — see the note at the top of this file. */
-.chip.inferred { border-style: dashed; }
-.chip-tag {
-  font-size: .62rem; font-weight: 700; letter-spacing: .04em;
-  padding: 0 .2rem; border-radius: .2rem;
-  background: var(--line); color: var(--muted);
+.chip.inferred {
+  background: none; border: 1px dashed var(--dash); color: var(--muted); padding: 2px 10px;
 }
+.chip-tag {
+  font-size: 10px; font-weight: 600; letter-spacing: .06em;
+  padding: 1px 4px; border-radius: 4px;
+  background: var(--line-soft); color: var(--muted);
+}
+.chip.inferred .chip-tag { background: var(--line-soft); }
 
-.empty { border: 1px dashed var(--line); border-radius: .5rem; padding: 2rem 1rem; text-align: center; }
-.empty h3 { margin: 0 0 .35rem; }
+.empty {
+  border: 1px dashed var(--dash); border-radius: 14px;
+  padding: 40px 20px; text-align: center; background: var(--panel);
+}
+.empty h3 { font-family: var(--display); font-weight: 500; font-size: 19px; margin: 0 0 6px; }
+.empty p { margin: 0; color: var(--muted); font-size: 13.5px; }
 
-footer { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+footer {
+  margin-top: 40px; padding-top: 16px;
+  border-top: 1px solid var(--line); font-size: 13px; color: var(--muted);
+}
