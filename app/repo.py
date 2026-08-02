@@ -203,10 +203,52 @@ def list_funders(conn, *, active_only: bool = False) -> list[dict]:
     sql = "SELECT * FROM funders"
     if active_only:
         sql += " WHERE active=1"
-    # Alphabetical. It used to be `warm DESC, name` — partners first — which is exactly
-    # the priority the stakeholder asked us to drop.
-    sql += " ORDER BY name"
+    # Alphabetical, case-insensitively. It used to be `warm DESC, name` — partners
+    # first — which is exactly the priority the stakeholder asked us to drop. NOCASE
+    # because SQLite's default is byte order, which puts every capitalised name above
+    # every lowercase one and reads as unsorted to a person.
+    sql += " ORDER BY name COLLATE NOCASE"
     return [_funder_out(r) for r in conn.execute(sql)]
+
+
+_F990 = ("ein", "form_990_url", "form_990_year",
+         "form_990_total_revenue", "form_990_total_expenses")
+
+
+def funder_990_map(conn) -> dict[str, dict]:
+    """{casefolded funder name: 990 facts} for everything already looked up.
+
+    Read once per run and matched in memory. Funder financials change annually, so
+    re-querying an external API every week for data that moves once a year would be
+    exactly the kind of fragile, pointless dependency the stakeholder asked us to avoid.
+    """
+    out: dict[str, dict] = {}
+    for r in conn.execute(
+        "SELECT name, ein, form_990_url, form_990_year, form_990_total_revenue, "
+        "form_990_total_expenses FROM funders WHERE ein IS NOT NULL"
+    ):
+        out[str(r["name"]).strip().casefold()] = {k: r[k] for k in _F990}
+    return out
+
+
+def save_funder_990(conn, funder_id: str, data: dict | None) -> None:
+    """Cache a lookup result. A miss is cached too — as a checked_at with no EIN — so
+    we do not re-ask an API every week about a funder that has no filing (every
+    government body and tribal nation in the registry)."""
+    data = data or {}
+    conn.execute(
+        "UPDATE funders SET ein=?, form_990_url=?, form_990_year=?, "
+        "form_990_total_revenue=?, form_990_total_expenses=?, form_990_checked_at=? "
+        "WHERE id=?",
+        (data.get("ein"), data.get("form_990_url"), data.get("form_990_year"),
+         data.get("form_990_total_revenue"), data.get("form_990_total_expenses"),
+         now_iso(), funder_id),
+    )
+
+
+def funders_needing_990(conn) -> list[dict]:
+    return [_funder_out(r) for r in conn.execute(
+        "SELECT * FROM funders WHERE form_990_checked_at IS NULL AND active=1")]
 
 
 def excluded_funder_names(conn) -> set[str]:
@@ -327,8 +369,10 @@ def save_opportunity(conn, opp, run_id: str | None = None) -> None:
                estimated_effort_hours, program_match, score, score_rationale,
                funder_type, service_areas, geography, form_990_available,
                confidence_pct, contact_note, verified, needs_human_check,
-               section, source_kind, fetched_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               section, source_kind, application_lead_time_days, time_to_funds_days,
+               ein, form_990_url, form_990_year, form_990_total_revenue,
+               form_990_total_expenses, fetched_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
            ON CONFLICT(id) DO UPDATE SET
                run_id=excluded.run_id, score=excluded.score,
                score_rationale=excluded.score_rationale,
@@ -344,6 +388,12 @@ def save_opportunity(conn, opp, run_id: str | None = None) -> None:
                contact_note=excluded.contact_note, verified=excluded.verified,
                needs_human_check=excluded.needs_human_check,
                section=excluded.section, source_kind=excluded.source_kind,
+               application_lead_time_days=excluded.application_lead_time_days,
+               time_to_funds_days=excluded.time_to_funds_days,
+               ein=excluded.ein, form_990_url=excluded.form_990_url,
+               form_990_year=excluded.form_990_year,
+               form_990_total_revenue=excluded.form_990_total_revenue,
+               form_990_total_expenses=excluded.form_990_total_expenses,
                fetched_at=excluded.fetched_at""",
         (
             d["id"], run_id, month_key(), d.get("found_on") or stamp[:10],
@@ -357,7 +407,11 @@ def save_opportunity(conn, opp, run_id: str | None = None) -> None:
             None if d.get("form_990_available") is None else int(d["form_990_available"]),
             d.get("confidence_pct"), d.get("contact_note"),
             int(d["verified"]), int(d["needs_human_check"]),
-            d["section"], d.get("source_kind", "funder_page"), d["fetched_at"],
+            d["section"], d.get("source_kind", "funder_page"),
+            d.get("application_lead_time_days"), d.get("time_to_funds_days"),
+            d.get("ein"), d.get("form_990_url"), d.get("form_990_year"),
+            d.get("form_990_total_revenue"), d.get("form_990_total_expenses"),
+            d["fetched_at"],
         ),
     )
 

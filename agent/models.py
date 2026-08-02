@@ -168,6 +168,30 @@ class Opportunity:
     contact_note: str | None = None
     found_on: date = field(default_factory=date.today)
 
+    # --- the COO's own ranking criteria (§11 Q5, answered) ---
+    #
+    # Two different kinds of time, which she separated and we had conflated:
+    #   application_lead_time_days  CALENDAR days to be READY to submit. Audited
+    #                               financials and board resolutions depend on other
+    #                               people and add weeks that no hours estimate sees.
+    #                               Compared against the deadline, this is the
+    #                               "due in 2 weeks, takes 3 weeks" case.
+    #   time_to_funds_days          days from SUBMITTING to money in the bank. Nothing
+    #                               to do with whether we can apply; everything to do
+    #                               with whether the money arrives when it is needed.
+    # Both are AI judgement — funders almost never state either — and both are
+    # labelled as such in the UI.
+    application_lead_time_days: int | None = None
+    time_to_funds_days: int | None = None
+
+    # 990 filing data, shown as context rather than scored. Populated by a lookup
+    # against the funder, not read off the opportunity page.
+    ein: str | None = None
+    form_990_url: str | None = None
+    form_990_year: int | None = None
+    form_990_total_revenue: int | None = None
+    form_990_total_expenses: int | None = None
+
     # provenance — defaulted so existing construction sites stay valid
     source_kind: SourceKind = SourceKind.FUNDER_PAGE
 
@@ -221,6 +245,13 @@ class Opportunity:
             "service_areas": list(self.service_areas),
             "geography": self.geography,
             "form_990_available": self.form_990_available,
+            "ein": self.ein,
+            "form_990_url": self.form_990_url,
+            "form_990_year": self.form_990_year,
+            "form_990_total_revenue": self.form_990_total_revenue,
+            "form_990_total_expenses": self.form_990_total_expenses,
+            "application_lead_time_days": self.application_lead_time_days,
+            "time_to_funds_days": self.time_to_funds_days,
             "confidence_pct": self.confidence_pct,
             "contact_note": self.contact_note,
             "source_url": self.source_url,

@@ -149,3 +149,111 @@ def test_the_run_budget_is_customizable_end_to_end(tmp_path, monkeypatch):
     budget.check("claude-sonnet-4-6", 1_000, 500)          # well under — fine
     with pytest.raises(BudgetExceeded):
         budget.check("claude-sonnet-4-6", 10_000_000, 1)   # over her ceiling — refused
+
+
+# --- the COO's ranking criteria (§11 Q5, answered) ----------------------------
+
+def test_the_scoring_prompt_carries_her_weights_and_nothing_else():
+    from agent.score import _SCORING_RULES
+
+    for line in ("40  program fit", "35  award size", "25  can this application"):
+        assert line in _SCORING_RULES, f"missing weight line: {line}"
+    assert "funder warmth" not in _SCORING_RULES.lower() or \
+        "Funder warmth is gone" in _SCORING_RULES
+
+
+def test_warmth_no_longer_buys_a_candidate_the_scoring_budget():
+    """`warm` used to lead the spend-ordering tuple, so RISE's existing relationships
+    consumed the budget first — which is precisely the funders the stakeholder says she
+    does not want. Ordering must now depend only on the opportunity."""
+    from agent.run import _rank_for_scoring
+    from agent.parse import ParsedPage
+    from agent.sources import Confidence, Source, Tier
+
+    def page(url, amount):
+        p = ParsedPage(url=url, title="t", text="x" * 2000)
+        p.amounts = [type("E", (), {"value": amount, "snippet": "", "kind": "amount"})()]
+        return p
+
+    def src(name, warm):
+        return Source(name=name, funder=name, url=f"https://{name}.invalid",
+                      tier=Tier.WARM, confidence=Confidence.CONFIRMED, warm=warm)
+
+    warm_small = (page("https://a.invalid", 10_000), src("warm", True))
+    cold_big = (page("https://b.invalid", 500_000), src("cold", False))
+
+    ranked = _rank_for_scoring([warm_small, cold_big], Config())
+    assert ranked[0][1].funder == "cold", \
+        "the bigger award must be scored first regardless of the relationship"
+
+
+def test_both_time_criteria_are_in_the_response_schema():
+    from agent.score import scoring_schema
+
+    props = scoring_schema(["ARTS"])["properties"]
+    assert "application_lead_time_days" in props, "calendar time to be ready to submit"
+    assert "time_to_funds_days" in props, "submit -> money in the bank"
+    required = scoring_schema(["ARTS"])["required"]
+    assert "application_lead_time_days" in required
+    assert "time_to_funds_days" in required
+
+
+def test_absurd_day_counts_are_discarded_rather_than_shown():
+    from agent.score import _bounded
+
+    assert _bounded(21, 400) == 21
+    assert _bounded(99999, 400) is None, "a wrong number must not render as fact"
+    assert _bounded(-5, 400) is None
+    assert _bounded(None, 400) is None
+    assert _bounded("not a number", 400) is None
+
+
+# --- the 990 lookup -----------------------------------------------------------
+
+def test_government_and_tribal_bodies_are_never_looked_up():
+    """They file no 990 at all, so a 'no result' is correct rather than a failure —
+    and asking anyway would burn a request a week on every one of them."""
+    from agent.irs990 import files_a_990
+
+    for name in ("County of San Diego — Community Enhancement Program",
+                 "City of San Diego — CDBG",
+                 "California Department of Social Services",
+                 "Viejas Band of Kumeyaay Indians",
+                 "Port of San Diego — Tidelands Activation Program",
+                 "National Endowment for the Arts"):
+        assert files_a_990(name) is False, name
+
+    for name in ("The Parker Foundation", "Rosenberg Foundation", "Las Patronas"):
+        assert files_a_990(name) is True, name
+
+
+def test_program_suffixes_are_stripped_before_searching():
+    """The registry name carries the programme; the IRS indexes the legal name."""
+    from agent.irs990 import search_name
+
+    assert search_name("The Kresge Foundation (Health Program)") == "Kresge Foundation"
+    assert search_name("Doris Duke Foundation — Performing Arts") == "Doris Duke Foundation"
+    assert search_name("W.K. Kellogg Foundation") == "W K Kellogg Foundation"
+    assert search_name("The Parker Foundation") == "Parker Foundation"
+
+
+def test_an_ambiguous_990_match_returns_nothing():
+    """Attaching one charity's finances to another charity's name is exactly the
+    confident-wrong-answer §6 exists to prevent."""
+    from agent.irs990 import _best_match
+
+    two_states = [{"name": "Parker Foundation", "state": "PA", "ein": 1},
+                  {"name": "Parker Foundation", "state": "NY", "ein": 2}]
+    assert _best_match("Parker Foundation", two_states) is None
+
+    # ...unless California breaks the tie, which this registry is entitled to assume.
+    with_ca = two_states + [{"name": "Parker Foundation", "state": "CA", "ein": 3}]
+    assert _best_match("Parker Foundation", with_ca)["ein"] == 3
+
+
+def test_a_near_miss_is_not_a_match():
+    from agent.irs990 import _best_match
+
+    orgs = [{"name": "The Jack B Parker Foundation", "state": "GA", "ein": 9},
+            {"name": "The James Parker Charitable Foundation", "state": "MA", "ein": 8}]
+    assert _best_match("Parker Foundation", orgs) is None

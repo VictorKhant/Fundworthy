@@ -81,9 +81,24 @@ export function Finding({ o }) {
           )}
           <Deadline o={o} />
           {o.estimated_effort_hours != null && (
-            <Inferred title="Estimated effort for a competitive application">
-              ~{o.estimated_effort_hours}h
+            <Inferred title="Estimated working hours for a competitive application">
+              ~{o.estimated_effort_hours}h work
               {o.estimated_effort_hours > 10 && " — over the 10-hour cap"}
+            </Inferred>
+          )}
+          {/* Calendar time to be READY to submit — audited financials and board
+              resolutions depend on other people and add weeks no hours estimate sees.
+              Against the deadline, this is the "due in 2 weeks, takes 3" case. */}
+          {o.application_lead_time_days != null && (
+            <Inferred title="Calendar days needed to prepare and submit, given what the application requires">
+              ~{o.application_lead_time_days}d to prepare
+              {o.days_left != null && o.application_lead_time_days > o.days_left &&
+                " — longer than the time left"}
+            </Inferred>
+          )}
+          {o.time_to_funds_days != null && (
+            <Inferred title="Estimated days from submitting to the money reaching the bank">
+              ~{Math.round(o.time_to_funds_days / 30)} months to funds
             </Inferred>
           )}
           {o.confidence_pct != null && (
@@ -101,7 +116,16 @@ export function Finding({ o }) {
           {o.program_match?.length > 0 && (
             <span className="chip">For: {o.program_match.join(", ")}</span>
           )}
-          {o.form_990_available === true && <span className="chip">990 on file</span>}
+          {/* The 990. Shown as data, never scored — that was the COO's call. It is
+              here so a funder that reads big on its own website can be checked against
+              what it actually files. */}
+          {o.form_990_url && (
+            <a className="chip" href={o.form_990_url} target="_blank" rel="noopener noreferrer">
+              {o.form_990_total_expenses
+                ? `990: ${money(o.form_990_total_expenses)} spent in ${o.form_990_year} ↗`
+                : "View their 990 ↗"}
+            </a>
+          )}
           {o.contact_note && <span className="chip">{o.contact_note}</span>}
         </div>
 

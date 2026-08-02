@@ -152,20 +152,27 @@ _SCORING_RULES = """
 Score this opportunity 0-100 for RISE, write one sentence explaining the score in
 language the COO can act on, and fill in the funder profile she asked for.
 
-Weights (CLAUDE.md §7 — PROVISIONAL, pending Mauri's forced-rank in §11 Q5):
-  45  award size relative to the floor
-  35  program fit, weighted toward the programs listed above
-  15  effort vs the 10-hour cap
-   5  deadline runway
+Weights — these are the COO's own, given directly (CLAUDE.md §11 Q5, answered):
+  40  program fit
+  35  award size relative to the floor
+  25  can this application realistically be finished before the deadline
 
-Funder warmth used to be worth 20 and is gone. RISE already receives money from the
-funders it has relationships with and does not want to reapply to them, so an existing
-relationship is now a reason to leave a funder OUT of the search entirely — not a
-reason to rank it higher. Those 20 points went to the two things that do decide this:
-how big the award is, and whether it fits a program.
+Nothing else moves the score. In particular:
 
-Judge every funder on the opportunity in front of you. You are not being told whether
-RISE knows them, because it should not change the score.
+- Funder warmth is gone. RISE already receives money from the funders it has
+  relationships with and does not want to reapply, so a relationship is a reason to
+  leave a funder out of the search entirely — never a reason to rank it higher. You are
+  not told whether RISE knows a funder, because it must not change the score.
+- The funder's 990 filing history is shown to the COO as data next to the result. It is
+  not a scoring criterion. Where 990 context is given to you below, use it to judge
+  PROGRAM FIT better — a funder whose past grants look nothing like RISE's work is a
+  weak fit however well the page reads — not as a score of its own.
+
+On the 25 points for finishing in time: judge the application against the deadline, not
+in the abstract. A grant closing in three weeks that needs an audited financial
+statement, three letters of support and a board resolution is not a 25; a two-page
+letter of interest due in two months is. Say so in the rationale when the calendar is
+the problem.
 
 There are two kinds of field below and they are held to different standards.
 
@@ -193,7 +200,18 @@ Also:
 - confidence_pct is how confident you are that this funder would fund one of the RISE
   programs listed above. Be honest and use the low end when the fit is thin.
 - estimated_effort_hours is your read of what a competitive application costs this
-  team. Above 10 is a real signal, not a rounding error — say so.
+  team in WORKING HOURS. Above 10 is a real signal, not a rounding error — say so.
+- application_lead_time_days is different and is about the CALENDAR: how many days
+  from starting to being able to submit, given what the application requires. Audited
+  financials, board resolutions, letters of support and reference forms all depend on
+  other people and add weeks that have nothing to do with hours of work. If this
+  exceeds the days left before the deadline, the opportunity is not feasible — score
+  the "finish in time" component at or near zero and say so plainly in the rationale.
+- time_to_funds_days is your estimate of how long AFTER submitting before the money
+  would actually reach RISE's bank account — decision timeline plus disbursement. A
+  nonprofit's cash flow depends on this and funders rarely state it, so estimate from
+  what the page says about review cycles and award dates. This is a judgement, and it
+  is labelled as one; null if you have nothing to go on.
 - score_rationale is one sentence, no preamble, no hedging, written for someone
   deciding whether to spend ten hours.
 """
@@ -244,7 +262,23 @@ def scoring_schema(program_slugs: list[str]) -> dict:
             },
             "estimated_effort_hours": {
                 "type": ["integer", "null"],
-                "description": "Hours for a competitive application, or null if unknowable.",
+                "description": "WORKING HOURS for a competitive application, or null.",
+            },
+            "application_lead_time_days": {
+                "type": ["integer", "null"],
+                "description": (
+                    "CALENDAR days from starting to being able to submit, given what "
+                    "the application requires from other people (audited financials, "
+                    "board resolutions, letters of support). Null if unknowable."
+                ),
+            },
+            "time_to_funds_days": {
+                "type": ["integer", "null"],
+                "description": (
+                    "Your estimate of days from SUBMITTING to the money reaching the "
+                    "bank — review cycle plus disbursement. A judgement, not a quote. "
+                    "Null if the page gives nothing to go on."
+                ),
             },
 
             # --- sourced: each needs its verbatim quote or it is discarded ---
@@ -340,6 +374,7 @@ def scoring_schema(program_slugs: list[str]) -> dict:
         },
         "required": [
             "score", "score_rationale", "program_match", "estimated_effort_hours",
+            "application_lead_time_days", "time_to_funds_days",
             "award_min_stated", "award_max_stated", "award_quote",
             "award_typical_stated", "award_typical_quote",
             "deadline_stated", "deadline_quote", "deadline_type", "deadline_type_quote",
@@ -405,7 +440,7 @@ def triage(candidate: RawCandidate, budget: Budget,
 # --- tier 3: Sonnet scoring ---------------------------------------------------
 
 def score_one(candidate: RawCandidate, source: Source, cfg: Config,
-              budget: Budget) -> Opportunity:
+              budget: Budget, facts_990: dict | None = None) -> Opportunity:
     """Full score + rationale. The system prompt is cached across candidates."""
     system = org_context(cfg) + _SCORING_RULES
     body = _text_block(
@@ -415,6 +450,10 @@ def score_one(candidate: RawCandidate, source: Source, cfg: Config,
         # here. Removed with the warmth weight: telling the model about a relationship
         # it must not score on is just an invitation to score on it anyway.
         f"Funder: {candidate.funder}"
+        # 990 context, when we have it. Given so the model can judge PROGRAM FIT
+        # against what this funder actually is — a $500M national foundation and a
+        # $350k county fund read the same on a web page — not as a criterion of its own.
+        + (f"\nFunder's IRS filing: {_990_line(facts_990)}" if _990_line(facts_990) else "")
         + f"\nPage title: {candidate.title}\nURL: {candidate.source_url}\n\n"
         f"{candidate.text[:SCORING_TEXT_CAP]}"
     )
@@ -527,12 +566,23 @@ def score_one(candidate: RawCandidate, source: Source, cfg: Config,
         funder_type=funder_type,
         service_areas=service_areas,
         geography=geography,
-        form_990_available=None,   # nothing has checked yet; None means unknown, not no
         confidence_pct=confidence_pct,
         contact_note=contact_note,
         found_on=date.today(),
         source_kind=(SourceKind.INDEXED_DATABASE if source.is_api
                      else SourceKind.FUNDER_PAGE),
+        # The COO's two time criteria. Both are judgement — funders almost never state
+        # either — and both are rendered with an AI marker.
+        application_lead_time_days=_bounded(data.get("application_lead_time_days"), 400),
+        time_to_funds_days=_bounded(data.get("time_to_funds_days"), 800),
+        # 990 facts come from the funder lookup, not from this page, so they bypass the
+        # quote gate — nothing here is being claimed about the opportunity itself.
+        ein=(facts_990 or {}).get("ein"),
+        form_990_url=(facts_990 or {}).get("form_990_url"),
+        form_990_year=(facts_990 or {}).get("form_990_year"),
+        form_990_total_revenue=(facts_990 or {}).get("form_990_total_revenue"),
+        form_990_total_expenses=(facts_990 or {}).get("form_990_total_expenses"),
+        form_990_available=bool((facts_990 or {}).get("form_990_year")) or None,
     )
     log.info("  scored %3d  %-30s  %s  ($%.5f)",
              opp.score, opp.funder[:30], opp.title[:40], cost)
@@ -550,6 +600,22 @@ def _gated(data: dict, value_key: str, quote_key: str, page_text: str):
         return value, True
     log.warning("  ⚠ %s unverified (quote not on page) — dropping %r", value_key, value)
     return None, False
+
+
+def _bounded(value, ceiling: int) -> int | None:
+    """A day count that survives being wrong. A model that answers 99999 should give us
+    nothing rather than a number the UI renders as fact."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    return n if 0 <= n <= ceiling else None
+
+
+def _990_line(facts: dict | None) -> str:
+    from .irs990 import summary_line
+
+    return summary_line(facts)
 
 
 def _as_enum(enum_cls, raw, default):

@@ -98,6 +98,52 @@ def _discover_extra(cfg: Config, run: RunLog) -> list[Source]:
     return found
 
 
+async def enrich_990(run: RunLog) -> dict[str, dict]:
+    """Look up 990 filings for any funder we have not checked yet, and cache them.
+
+    Runs once per funder, ever — not once per run. A funder's filings change annually,
+    so re-asking an external API every Wednesday for data that moves once a year is the
+    fragile, pointless dependency the stakeholder specifically asked us to avoid.
+
+    Government bodies and tribal nations file no 990 at all, so a "no result" for them
+    is the right answer and is cached as such rather than retried weekly.
+    """
+    try:
+        from app.db import db_path, session
+        from app.repo import funder_990_map, funders_needing_990, save_funder_990
+
+        if not db_path().exists():
+            return {}
+        with session() as conn:
+            pending = funders_needing_990(conn)
+    except Exception:  # noqa: BLE001
+        return {}
+
+    if pending:
+        from .irs990 import lookup
+
+        log.info("Looking up 990 filings for %d funder(s) (one time each)…", len(pending))
+        found = 0
+        for f in pending:
+            data = await lookup(f["name"])
+            found += bool(data)
+            try:
+                with session() as conn:
+                    save_funder_990(conn, f["id"], data)
+            except Exception as exc:  # noqa: BLE001 — never fail a run over this
+                log.debug("could not cache 990 for %s: %s", f["name"], exc)
+        run.notes.append(
+            f"990 lookup: checked {len(pending)} funder(s), found filings for {found}. "
+            "Government bodies and tribal nations file none, which is expected."
+        )
+
+    try:
+        with session() as conn:
+            return funder_990_map(conn)
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def excluded_funders() -> set[str]:
     """The remove list — funders Mauri has taken out of the search, casefolded.
 
@@ -354,7 +400,8 @@ def _unscored(page: ParsedPage, source: Source, cfg: Config, note: str) -> Oppor
 
 
 def evaluate(survivors: list[tuple[ParsedPage, Source]], cfg: Config, run: RunLog,
-             budget: Budget, *, use_llm: bool) -> list[Opportunity]:
+             budget: Budget, *, use_llm: bool,
+             funder_990: dict[str, dict] | None = None) -> list[Opportunity]:
     """Tiers 2 and 3 of §8. Stops on the first stop condition to fire."""
     ranked = _rank_for_scoring(survivors, cfg)
     per_kind = cfg.per_kind_cap
@@ -402,7 +449,9 @@ def evaluate(survivors: list[tuple[ParsedPage, Source]], cfg: Config, run: RunLo
                 key = "triage_not_an_opportunity"
                 run.rejected_by_filter[key] = run.rejected_by_filter.get(key, 0) + 1
                 continue
-            opp = score_one(candidate, source, cfg, budget)        # tier 3 — Sonnet
+            opp = score_one(candidate, source, cfg, budget,        # tier 3 — Sonnet
+                            facts_990=(funder_990 or {}).get(
+                                source.funder.strip().casefold()))
             # Post-scoring deadline guard: §7 rejects passed deadlines, but the
             # deterministic parser (tier 1) often can't find the date. Sonnet does.
             # Enforce the hard reject here, now that we have a trustworthy deadline.
@@ -607,7 +656,9 @@ async def main_async(args: argparse.Namespace) -> int:
         survivors = await crawl(cfg, run, follow_links=not args.no_follow,
                                 already_seen=already_seen)
         log.info("%d candidates survived the free filters.", len(survivors))
-        opportunities = evaluate(survivors, cfg, run, budget, use_llm=use_llm)
+        funder_990 = await enrich_990(run) if use_llm else {}
+        opportunities = evaluate(survivors, cfg, run, budget, use_llm=use_llm,
+                                 funder_990=funder_990)
     except Exception as exc:  # noqa: BLE001
         # Whatever went wrong, Mauri still gets what we did find, plus a run log
         # saying it was incomplete. A silent empty Sheet on Thursday morning is

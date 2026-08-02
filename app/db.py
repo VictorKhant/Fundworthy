@@ -41,7 +41,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path("data/rise.db")
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # --- schema -------------------------------------------------------------------
 
@@ -91,6 +91,14 @@ CREATE TABLE IF NOT EXISTS funders (
     -- after scoring would have already spent the tokens.
     active      INTEGER NOT NULL DEFAULT 1,
     exclude_reason TEXT NOT NULL DEFAULT '',  -- why she took it off the list
+    -- 990 lookup, cached here rather than repeated per run: a funder's filings change
+    -- once a year, so this is ~40 requests once and effectively never again.
+    ein                    TEXT,
+    form_990_url           TEXT,
+    form_990_year          INTEGER,
+    form_990_total_revenue INTEGER,
+    form_990_total_expenses INTEGER,
+    form_990_checked_at    TEXT,
     tier        INTEGER NOT NULL DEFAULT 1,
     confidence  INTEGER NOT NULL DEFAULT 1,   -- agent.sources.Confidence
     programs    TEXT NOT NULL DEFAULT '[]',   -- json array of program slugs
@@ -132,6 +140,16 @@ CREATE TABLE IF NOT EXISTS opportunities (
     -- Funder page vs public grants database. Same accuracy rules either way, but very
     -- different starting positions for a conversation, so Mauri gets to see which.
     source_kind            TEXT NOT NULL DEFAULT 'funder_page',
+    -- The COO's own criteria (§11 Q5). Two different kinds of time, which she
+    -- separated and we had conflated: days to BE READY to submit, vs days from
+    -- submitting to money in the bank.
+    application_lead_time_days INTEGER,
+    time_to_funds_days     INTEGER,
+    ein                    TEXT,
+    form_990_url           TEXT,
+    form_990_year          INTEGER,
+    form_990_total_revenue INTEGER,
+    form_990_total_expenses INTEGER,
     fetched_at             TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_opp_month ON opportunities(month_key);
@@ -287,6 +305,27 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE funders ADD COLUMN exclude_reason "
                          "TEXT NOT NULL DEFAULT ''")
         current = 4
+
+    if current < 5:
+        # v5 lands the COO's answer to the forced-rank (§11 Q5): the two time criteria
+        # on opportunities, and cached 990 facts on both tables.
+        for table, cols in (
+            ("funders", [
+                ("ein", "TEXT"), ("form_990_url", "TEXT"),
+                ("form_990_year", "INTEGER"), ("form_990_total_revenue", "INTEGER"),
+                ("form_990_total_expenses", "INTEGER"), ("form_990_checked_at", "TEXT"),
+            ]),
+            ("opportunities", [
+                ("application_lead_time_days", "INTEGER"), ("time_to_funds_days", "INTEGER"),
+                ("ein", "TEXT"), ("form_990_url", "TEXT"), ("form_990_year", "INTEGER"),
+                ("form_990_total_revenue", "INTEGER"), ("form_990_total_expenses", "INTEGER"),
+            ]),
+        ):
+            have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+            for col, kind in cols:
+                if col not in have:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {kind}")
+        current = 5
 
     conn.execute(
         "INSERT INTO meta(key, value) VALUES('schema_version', ?) "

@@ -279,8 +279,20 @@ GOVERNMENT_SOURCES: list[Source] = [
 ]
 
 
+def _researched() -> list[Source]:
+    """The 44 researched funders. Imported lazily to keep this module import-light."""
+    from .sd_funders import RESEARCHED_SOURCES
+
+    return RESEARCHED_SOURCES
+
+
+# WARM_SOURCES stays in the registry, but its meaning has changed. RISE already receives
+# money from those funders and does not want to reapply, so they are seeded like anything
+# else and Mauri puts the ones she means on the remove list. They are no longer a
+# priority — see agent/sd_funders.py for what replaced them as the actual target.
 ALL_SOURCES: list[Source] = (
     INDEXED_SOURCES + WARM_SOURCES + INTERMEDIARY_SOURCES + GOVERNMENT_SOURCES
+    + _researched()
 )
 
 
