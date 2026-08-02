@@ -31,7 +31,7 @@ problem worse. Everything in this repo follows from that one sentence.
 | 2 | Candid / Foundation Directory / Instrumentl access? If not, which ~20 funder pages? | crawl scope | ⚠️ Partial — and it has stopped being a *code* question. The funder list is CRUD-editable in the dashboard, so adding twenty pages is data entry, not a deploy. Still worth asking which twenty. |
 | 3 | Government contracts and RFPs too, or grants only? | source scope | ✅ **ANSWERED: yes, both.** Ticking the "Government RFPs & contracts" sector raises the crawl tier. Live — the first scored run attempted County of San Diego (it timed out; their site is slow, not missing). |
 | 4 | Can RISE meet a 1:1 match requirement? | hard filter | ❌ Unanswered. Filter still not written; matches are flagged and passed through rather than guessed at. |
-| 5 | Forced-rank: award size / win likelihood / program fit / funder warmth / low reporting burden | score weights §7 | ❌ Unanswered. §7's 35/25/20/15/5 is in the scoring prompt, labeled PROVISIONAL. |
+| 5 | Forced-rank: award size / win likelihood / program fit / funder warmth / low reporting burden | score weights §7 | ✅ **ANSWERED.** Her criteria, in her order: **program fit, funding amount, how long the application takes against the deadline, and the 990.** Implemented as 40 / 35 / 25, with the 990 shown as data rather than scored. Funder warmth deleted outright — see Q13. |
 | 6 | Who owns the Anthropic API key and this repo after Sunday? Name + payment method. | handoff §12 | ❌ Unanswered — but now **concrete**: whoever pastes a key into the Settings page is paying. Measured cost is **$0.18/run, under $1/month**, so this is a decision about ownership, not budget. |
 | 7 | Annual operating budget and EIN | funders filter on these | ❌ Unanswered. |
 
@@ -49,6 +49,14 @@ problem worse. Everything in this repo follows from that one sentence.
 |---|---|---|---|
 | 11 | **risesandiego.org lists TEN programs, not seven.** We were told seven; the site also shows Community Impact Showcase, RISE Urban Breakfast Club, and RISE Consult. Do those need funding too, or are they not fundraising targets? | which cards ship seeded | ❌ Open. All seven named ones are seeded; the other three are not. Adding one is a button press. |
 | 12 | **The four non-priority program cards are empty.** ILIA, RISE Now, On the RISE, Nonprofit Partnerships Training have a name and a real URL and nothing else — we would not invent descriptions of RISE's own programmes. | how well those programs get matched | ❌ Open, and it takes ten minutes: Edit → paste the program's link → "Read this page for me" → correct it → Save. Demonstrated working on ILIA (evidence E14). |
+
+---
+
+| # | Question | Blocks | Status |
+|---|---|---|---|
+| 13 | **"We don't want opportunities from funders we're already warm with."** | the entire source strategy | ✅ **ANSWERED, and it inverted the design.** RISE receives those cheques consistently without reapplying, so warmth went from a +20 scoring boost to a reason to EXCLUDE. The partner list is replaced by 44 researched funders. The remove list ships empty because the 8 "warm" funders came from the 2025 Impact Report — past funders, not reliable ones. **She still needs to tick which ones she means.** |
+| 14 | **Which of the 8 former partners actually fund you reliably?** | what goes on the remove list | ❌ Open, and it is a two-minute answer that makes the remove list real. |
+| 15 | **Does RISE have Candid / Foundation Directory access?** (a sharper version of Q2) | the 990 grantee list | ❌ Open. This is now concrete: "who a funder has given to and how much" is in no free API, and Candid serves it directly. It is the only clean way to give her the half of the 990 she asked for. |
 
 ---
 

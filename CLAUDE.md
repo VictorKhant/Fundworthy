@@ -246,9 +246,16 @@ REJECT if requires a match RISE cannot meet        # ← TBD
 Geography note: RISE operates across **San Diego AND Imperial Counties** (Far
 South/Border North spans both). Do not hardcode San Diego County alone.
 
-### Warm funders (score boost)
+### ~~Warm funders (score boost)~~ → the remove list
 
-From the 2025 Impact Report, confirmed warm by Mauri:
+> **REVERSED.** These are no longer a boost. RISE already receives money from them
+> consistently and does not want to reapply, so warmth is a reason to *exclude*. The
+> list below is seeded like any other funder and Mauri ticks the ones she means onto
+> the remove list, which filters in the free Python tier — never fetched, never read,
+> never scored. What replaced them as the actual target is `agent/sd_funders.py`: 44
+> San Diego / California funders, every URL fetched and read before admission.
+
+From the 2025 Impact Report, originally recorded as warm:
 
 San Diego Foundation · Alliance Healthcare Foundation · Prebys Foundation ·
 City of San Diego Economic Development · City of San Diego Commission for Arts and
@@ -290,13 +297,28 @@ Do **not** run one search across all of them. They live in different funder univ
 
 ### Score composition (0–100)
 
-Weights are **TBD until Mauri completes the forced-rank** (§11). Placeholder:
+**ANSWERED (§11 Q5).** These are Mauri's own, given directly:
 
-- Award size relative to floor — 35
-- Program fit, weighted toward her three priorities — 25
-- Funder warmth — 20
-- Effort vs. the 10-hour cap — 15
-- Deadline runway — 5
+- **Program fit — 40**
+- **Award size relative to the floor — 35**
+- **Can the application realistically be finished before the deadline — 25**
+
+Funder **warmth is gone**, and its removal is the important part. RISE already receives
+money from the funders it has relationships with and does not want to reapply — so a
+relationship is now a reason to leave a funder *out of the search entirely*, via the
+remove list, never a reason to rank it higher. The model is not told whether RISE knows
+a funder, because it must not change the score.
+
+She also separated two kinds of time we had conflated into one "effort" field:
+
+| | what it measures | why it is separate |
+|---|---|---|
+| `estimated_effort_hours` | working hours | the 10-hour cap |
+| `application_lead_time_days` | **calendar** days to be ready to submit | audited financials and board resolutions depend on other people and add weeks no hours estimate sees — her *"due in 2 weeks but the application takes 3 weeks"* case |
+| `time_to_funds_days` | days from submitting to money in the bank | a nonprofit's cash flow depends on it, and funders rarely state it |
+
+The **990 is shown as data, never scored** — her call. It is used in the prompt to judge
+program fit better, not as a criterion of its own.
 
 ---
 

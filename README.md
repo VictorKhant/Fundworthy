@@ -28,7 +28,7 @@ The pipeline on its own, if you want it without the UI:
 .venv/bin/python -m agent.run --dry-run           # crawl and report, write nothing
 .venv/bin/python -m agent.run --no-archive        # ignore monthly dedup, show repeats
 .venv/bin/python -m agent.run --sink sheets       # export to a Google Sheet
-.venv/bin/python -m pytest tests/ -q              # 66 tests, offline, no key needed
+.venv/bin/python -m pytest tests/ -q              # 126 tests, offline, no key needed
 .venv/bin/python -m tests.calibration --dry-run   # the §10 test, filters only
 ```
 
@@ -46,6 +46,9 @@ The pipeline on its own, if you want it without the UI:
 | `app/runner.py` | The Re-run button. A subprocess, so Stop actually stops. |
 | `agent/sources.py` | The shipped seed registry. The live list is in the database. |
 | `agent/apis.py` | The two indexed lists — CA Grants Portal (CKAN) and Grants.gov |
+| `agent/sd_funders.py` | The 44 researched funders. Every URL fetched and read. |
+| `agent/irs990.py` | 990 lookup — what is reachable, and what is honestly not |
+| `app/export.py` | Download the week as a spreadsheet |
 | `agent/parse.py` | Page → candidate. The hard part. |
 | `agent/filters.py` | The §7 hard rejects. Free — they run before any model call. |
 | `agent/score.py` | Haiku triage → Sonnet scoring, behind a hard $1.00 ceiling |
@@ -64,10 +67,11 @@ the biggest open question in this repo and it is closed:
 
 | | |
 |---|---|
-| Cost of one full run | **$0.18** against a $1.00 ceiling |
-| Killed for $0.00 before any model call | 23 of 28 pages |
+| Sources searched | **60** — 44 researched SD/CA funders, 8 former partners, the CA Grants Portal and Grants.gov |
+| Cost of one full run | **$0.60** against a $1.00 ceiling |
+| Killed for $0.00 before any model call | **259 of 356** candidates |
 | Repeat findings killed for $0.00 | 17 of 17 on a same-month re-run |
-| Tests | **66**, all offline, no key required |
+| Tests | **126**, all offline, no key required |
 
 The **accuracy gate fired on live data**, and checking *why* turned up a real parser
 bug: Prebys renders "Up to $150,000" with each digit group in its own element, so we
@@ -80,8 +84,15 @@ limit, sector selection, program cards with CRUD and an AI drafting assistant, a
 editable funder list, a monthly archive, and a Re-run button that streams live output
 and can actually be stopped.
 
-**Answered since v1:** the award floor is **$10,000** (§11 Q1) and **yes to government
-RFPs and contracts** (§11 Q3).
+**Answered since v1:** the award floor is **$10,000** (§11 Q1), **yes to government
+RFPs and contracts** (§11 Q3), and — the big one — **§11 Q5, the forced-rank**:
+program fit 40, award size 35, can-we-finish-in-time 25, and funder warmth deleted.
+
+**The biggest change came from a stakeholder correction.** RISE does *not* want
+opportunities from funders it already has relationships with — those cheques arrive
+without reapplying. So warmth went from a +20 scoring boost to a reason to *exclude*,
+and the partner list was replaced by **44 researched San Diego / California funders**,
+every URL fetched and read before admission. See `evidence/README.md` E17.
 
 **Still open, and honestly so:**
 - **Mauri has not used it.** Everything above is a claim about a UI she has not touched.

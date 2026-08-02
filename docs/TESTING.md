@@ -33,7 +33,8 @@ You need Python 3.11+ and Node 18+. Nothing else.
 - **This week's search** — award floor showing **$10,000**, runway 14 days, cap 12,
   spend limit $1.00, four sector checkboxes ticked
 - **Programs to find funding for** — 7 cards, 3 ticked (Arts, Resilience, RULFP)
-- **Funders we watch** — 8 partners + 8 others, each with a tick box
+- **Funders we watch** — **60**, most of them researched and URL-verified, each
+  with a tick box, plus an empty **Remove list** below them
 - A banner saying no API key is saved yet
 
 ⚠️ The findings list is empty on a fresh database. Correct — nothing has run.
@@ -48,7 +49,7 @@ Leave this running. Open a **second terminal** for everything below.
 .venv/bin/python -m pytest tests/ -q
 ```
 
-✅ `84 passed`
+✅ `126 passed`
 
 🔎 **The four that matter most**, if you want to read one thing:
 
@@ -81,10 +82,10 @@ Querying 2 indexed source(s)…
   ✓ U.S. Federal Government    12 federal opportunities with runway, from 67 hits
   ✓ Prebys Foundation          1 amounts, 0 deadlines, 8 links
   ✗ County of San Diego        ReadTimeout:
-54 candidates survived the free filters.
+114 candidates survived the free filters.
 ```
 
-✅ 8 of 9 sources answer. ✅ `cost $0.0000`.
+✅ ~27 of 31 sources answer. ✅ `cost $0.0000`.
 ⚠️ County of San Diego times out most runs — their site is slow, not missing. It is
 reported as `unreachable`, which is the point: a broken source never looks like a quiet
 week.
@@ -137,26 +138,37 @@ Back on the main page, press **Re-run search pipeline**.
   ⚠ geography_stated unverified (quote not on page) — dropping 'San Diego'
 ```
 
-1. **Warm partners score first.** That ordering is deliberate — RISE's own
-   relationships get the budget before the public databases do.
+1. **No funder gets priority for being known.** RISE told us they do not want
+   opportunities from funders they already receive money from, so warmth was removed
+   from the score and the ordering entirely — it is now a reason to put a funder on the
+   **Remove list** instead. Results are ranked on the opportunity alone.
 2. **The ⚠ lines are the accuracy gate working.** A value the model reported, thrown
    away because the sentence backing it was not on the page. Do not treat those as
    failures — and do not treat them as wins either without checking the page. See
    `evidence/README.md` E12 for why that distinction cost us a real $150,000 grant.
-3. **Cost lands around $0.23** against the $1.00 ceiling.
+3. **Cost lands around $0.60** against the $1.00 ceiling, and the run usually
+   stops on `target_met` — the 12-result cap, not the budget.
 
 ✅ **Stop the search** genuinely stops it mid-run (it is a subprocess, not a thread).
 
 🔎 **On the results:**
 - Clean results first, **Needs your eyes** as its own block at the bottom.
-- Values with a **dashed outline and an AI tag** are the model's judgement — funder
-  type, service areas, % fit, hours estimate. Everything without that tag was read off
-  the funder's own page or left blank.
+- The big number on each card is **fit %** — the AI's own judgement, drawn dashed with
+  an AI tag. The 0–100 **score** is what the list is ranked by and sits one row down.
+- Values with a **dashed outline and an AI tag** are the model's judgement — fit, funder
+  type, service areas, hours to apply, days to prepare, months to funds. Everything
+  without that tag was read off the funder's own page or left blank.
+- **Their 990** links to the actual IRS filing where we could identify the funder.
 - A **Public database** chip marks anything from CA Grants Portal / Grants.gov.
 
-⚠️ **Expect most results to say "Needs your eyes."** Most funders do not put an award
-amount or deadline in plain text — we checked across 86 pages. That is a fact about
-them, not a fault here.
+⚠️ **"Needs your eyes" should be RARE — a handful, not most of the list.** It used to
+fire on nearly everything, which made it meaningless; it now means one specific thing:
+*the AI reported something it could not confirm against the page.* If most of a run
+lands there, that is a real signal something has drifted — tell us.
+
+⚠️ **Most results will say "amount not stated" or "deadline not stated", and that is
+normal.** Most funders publish neither — we checked across 155 pages. The score already
+accounts for it.
 
 ---
 

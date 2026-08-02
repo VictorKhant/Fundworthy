@@ -20,6 +20,7 @@ the reasoning survives.
 |---|---|
 | Verified | 2 |
 | Pending mentor verification | 3 |
+| Unlogged but earned | **1** — the Aug 2 stakeholder conversation (see C1) |
 | Categories verified | `stakeholder-conversation: 2` |
 | Categories pending | `teammate-hygiene: 2` · `asset-shipped: 1` |
 
@@ -195,9 +196,25 @@ real software, real runs, no deployment, no user yet.
 
 ## Not yet submitted — candidates
 
-Nothing queued. The next one worth logging is a **stakeholder conversation** the first
-time someone at RISE opens the app — that would also let M5's "nobody has used it"
-caveat be retired.
+### C1 — Stakeholder conversation (Sun Aug 2) — **log this**
+
+A second conversation with RISE happened on Aug 2 and it **changed the product**, which
+is the strongest kind of stakeholder evidence there is: not "we showed them a demo" but
+"they told us something and we rebuilt on it."
+
+What she said, and what it changed:
+
+| She said | We changed |
+|---|---|
+| "We don't want opportunities from funders we're already warm with — we get those cheques without reapplying" | Warmth went from a **+20 scoring boost** to a reason to **exclude**. The partner list was replaced by 44 researched funders. |
+| The forced-rank: program fit, funding amount, how long the application takes, the 990 | §11 Q5 answered after two days open. Weights are now **40 / 35 / 25**, hers not ours. |
+| "There are two kinds of time — the deadline, and how long until the money is in the bank" | Two separate fields, where we had one "effort" number that answered neither. |
+
+That is a **commitment-adjacent** conversation too — she gave a decision that the
+product now depends on. Worth logging as `stakeholder-conversation`; whoever ran the
+call should write the note, since they were there and we were not.
+
+**This also retires a caveat on M5** once someone at RISE opens the app.
 
 ---
 

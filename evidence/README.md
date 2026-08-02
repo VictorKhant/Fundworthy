@@ -353,6 +353,86 @@ the fact.
 clean merge are evidence that nothing *obvious* broke. They are not evidence that the
 system works. Only running it and reading the output is that.
 
+### E17 — What happens when you take the partner list away
+**When:** 2026-08-02, after a second stakeholder conversation
+**What changed:** RISE said they do **not** want opportunities from funders they
+already have relationships with — they receive those cheques consistently without
+reapplying. That inverted an assumption the whole pipeline was built on: warmth had
+been a **+20 scoring weight** and the first key in the spend ordering.
+
+**The immediate consequence, measured before building anything:** all five scored
+results in the previous run came from warm partners. Removing them left sources that
+had produced **zero** triage survivors (E15). So the feature was not "add an exclude
+list" — it was "the source strategy has to be replaced".
+
+**What was built:**
+- Warmth removed from the score, the spend ordering, the scoring prompt, and the list
+  order. Its 20 points went to program fit and award size.
+- A **remove list**, filtering in the free Python tier. It ships **empty**: the 8 warm
+  funders came from the 2025 Impact Report, which records *past* funders, and that is
+  not the same as "we always get the cheque". Guessing which she meant would drop real
+  opportunities.
+- **44 researched San Diego / California funders**, from 88 candidates proposed across
+  six independent lanes. Every URL was fetched and read before admission; 36 were
+  rejected, overwhelmingly as invitation-only or with no published application path.
+  Every entry carries a verbatim sentence proving it funds nonprofits.
+
+**Result of the first run on the new registry:**
+
+| | before | after |
+|---|---|---|
+| Sources tried | 9 | **31** |
+| Candidates | 54 | **114** |
+| Rejected free | 211 | **259** |
+| Stop reason | sources_exhausted | **target_met** — the cap, not the sources |
+
+And it surfaced funders RISE has **no** relationship with: NEA, the Andy Warhol
+Foundation, W.K. Kellogg, the Parker Foundation, Doris Duke. That is the point.
+
+### E18 — The 990: half of what was asked for, and which half
+**Assumption tested:** "who they have given to and how much" is obtainable.
+**Result:** ⚠️ **Half.** Verified directly rather than assumed:
+
+- ✅ ProPublica's free API returns EIN, filing year, total revenue and expenses, and a
+  link to the filing. That answers *"does this funder move money at RISE's scale?"*
+- ❌ The grantee list (Schedule I) is in **no** API. The only source is IRS bulk XML,
+  and the old per-EIN S3 objects are **gone** — `index_2023.json` now 404s and the
+  bucket lists nothing — leaving year-sized ZIPs at **123 MB per part**. Downloading
+  that to answer 44 lookups fails the stakeholder's own stated bar.
+
+**Coverage:** 20 of the 31 registry entries that actually file a 990 matched. The other
+13 are government bodies and tribal nations, which file none — cached as "checked,
+nothing to find" rather than retried weekly. Matching is exact-or-nothing: attaching
+one charity's finances to another's name is the confident-wrong-answer §6 exists to
+prevent.
+
+### E19 — Three more failures found by reading output, not by testing
+**When:** 2026-08-02
+Each was invisible to a green suite and each would have reached Mauri.
+
+1. **We were paying Sonnet to score PDF binary.** Three of twelve results had a raw URL
+   as their title. A PDF fetched as HTML decodes to `%PDF-1.6 … FlateDecode …`, and
+   Sonnet scored one **55/100**. Money spent, answer wrong, and it looks like a result.
+   Fixed with two guards — the link filter and a Content-Type check, because a URL with
+   no extension can still serve a PDF. Cost fell $0.83 → $0.60.
+
+2. **`needs_human_check` had no description in the schema**, so the model set it however
+   it liked — and it liked `true`: **10 of 12** flagged. That re-broke the ranking from
+   the other end, sinking a 62 and a 55 below a 28. Tightening the dataclass was half
+   the job; the model was the other half. Now 9 clear / 3 flagged.
+
+3. **The score rationale was never checked against the page.** The Warhol result had
+   `award_max = None` — correct, no quote — and a rationale reading *"solid average
+   awards (~$80k inferred from public announcements)"*. **The field was honest and the
+   sentence was not**, which is worse than either alone: the number reads as sourced
+   because everything around it is. And the sentence is the part she reads. §6 does not
+   say "except in prose"; we had been reading it that way by omission. Now
+   deterministically checked, digits-only so `$250k` and `250,000` are the same claim.
+
+**The pattern is the finding.** E12, E16 and all three of these were caught by running
+the system and reading what it produced. The test suite was green throughout — it went
+66 → 126 tests, and every one of those tests was written *after* the bug, not before.
+
 ---
 
 ## What is NOT evidenced yet
@@ -390,9 +470,16 @@ Stated plainly, because claiming otherwise is the failure mode the rubric penali
   A run with it ticked reports `provider=none` rather than pretending.
 - ❌ **`form_990_available` is never populated.** The column exists and is always `None`.
   Nothing has checked, and `None` means unknown — not "no".
-- ❌ **The two public grant databases have never produced a usable result.** One scored
-  run, 37 candidates, zero survivors (E15). The infrastructure is proven; its *value* is
-  not, and one week cannot settle it either way.
+- ⚠️ **The two public grant databases have produced almost nothing usable.** Across
+  three scored runs they contributed 37, then 37, then 2 surviving candidates. The
+  infrastructure is proven; its *value* is marginal so far, and the honest read is that
+  the researched registry (E17) is carrying the pipeline.
+- ❌ **The 990 grantee list — "who they gave to" — is not implemented** and cannot be at
+  a defensible cost (E18). Candid / Foundation Directory access (§11 Q2, unanswered) is
+  the clean way to close it.
+- ❌ **The calibration fixtures still are not Mauri's**, and now they are further out of
+  date: they were written against a $25,000 floor and the old 35/25/20/15/5 weights.
+  The rubric is now hers (40/35/25) and the floor is $10,000.
 - ❌ **`--balance` / `per_kind_cap` is wired but never set.** Warm-partners-first was
   chosen deliberately, so the per-kind quota is dead code kept against the day the
   ordering needs revisiting. It has never run.

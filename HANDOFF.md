@@ -45,6 +45,7 @@ because there is nothing to log into.
 | Setting | What it does |
 |---|---|
 | **Smallest award worth applying for** | **The most important one.** Currently **$10,000**. Anything smaller is never shown to you. |
+| **Download as a spreadsheet** | Button in the page header. The same columns as the Sheet. |
 | **Ignore anything due sooner than** | 14 days. Less runway than that and a good application isn't possible. |
 | **Most results to bring back** | 12. Sized for a one-hour review. |
 | **Most to spend on one search** | $1.00. It stops rather than going over. |
@@ -82,15 +83,29 @@ Two kinds of source, and results say which they came from:
 A programme with an empty card contributes nothing to the database searches, and the
 run says so by name rather than quietly returning less.
 
-### Funders
+### Funders, and the remove list
 
-The list of funders it watches. The important control is the **tick box on the left**:
+60 funders are watched. Most were researched for you — every one had its grants page
+opened and read before it went on the list, and each carries a sentence from that page
+showing it funds nonprofits.
 
-- **A funder stops funding you?** Untick them. They drop out of the search immediately,
-  and the record of the relationship stays. This is what you want almost every time.
+The important control is the **tick box on the left**:
+
+- **Already getting money from them?** Untick. That is the whole point of the remove
+  list: you told us you do not want opportunities from funders you already have, because
+  you get those cheques without reapplying. An unticked funder is never visited, never
+  read, and never scored — so it costs nothing every week rather than a little every
+  week. It asks why, and remembers.
+- **A funder stops funding you?** Untick them too. Same effect, and the record of the
+  relationship stays.
 - **Remove** is for a row that was simply wrong. It deletes the record.
 
 New funders can be added with a name and their grants page.
+
+**Nothing is on the remove list to begin with.** The eight funders we had marked as
+"partners" came from your 2025 Impact Report — that is who has funded you *before*,
+which is not the same as who funds you *reliably*. You know which is which; we did not
+want to guess and drop something real.
 
 ---
 
@@ -298,7 +313,7 @@ the bugs we shipped and caught), and `STAKEHOLDER.md` for the open questions.
 
 ```bash
 ./start.sh                                        # the whole app
-.venv/bin/python -m pytest tests/ -q              # 66 tests, offline, no key
+.venv/bin/python -m pytest tests/ -q              # 126 tests, offline, no key
 .venv/bin/python -m agent.run --no-llm --dry-run  # free, no key, writes nothing
 .venv/bin/python -m tests.calibration --dry-run   # the test that matters most
 ```

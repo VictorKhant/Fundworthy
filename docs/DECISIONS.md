@@ -53,6 +53,31 @@ Full reasoning in `docs/PLAN.md` §0. The decisions, and what each one cost:
   was discarding *true* values. Fixed both halves; records with a sourced amount went
   0 → 1 on the same crawl.
 
+## Sun Aug 2, 2026 — v3, after the second stakeholder conversation
+
+| # | Decision | Rationale | What we gave up |
+|---|---|---|---|
+| C1 | **Warmth stops being a scoring signal and becomes a reason to EXCLUDE.** | RISE already receives money from funders it has relationships with and does not want to reapply. Surfacing those spends tokens to produce rows she skips. | The +20 weight and the partner-first spend ordering — both of which were actively producing the wrong answer. |
+| C2 | **The remove list filters in the free Python tier, and ships EMPTY.** | Exclusion after scoring has already spent the money. And the 8 "warm" funders came from the 2025 Impact Report — that is who funded RISE *before*, not who funds them *reliably*. Guessing which she meant would drop real opportunities. | She has to tick them. Worth it: the alternative is us deciding which of her relationships are the consistent ones. |
+| C3 | **Both doors closed on exclusion.** | A removed funder never enters the registry — but the two indexed databases carry grants from every funder in the state, so one can still arrive through Grants.gov. Source-level exclusion alone would have let exactly the opportunity she does not want back in by a side entrance. | One extra check per candidate, in the free tier. |
+| C4 | **44 researched funders replace the partner list.** Every URL fetched and read before admission; 36 of 88 candidates rejected. | Removing partners left sources that had produced zero triage survivors. This is the replacement, not an addition. Guessing URLs was falsified in E2, so nothing goes in unread. | An hour of research, and a registry that is ours rather than Mauri's — she should still review it. |
+| C5 | **§11 Q5 answered by the COO: 40 fit / 35 award / 25 feasibility.** 990 shown as data, never scored. | Her rubric, not ours. The provisional 35/25/20/15/5 had been carried for two days and was labelled PROVISIONAL in the prompt the whole time. | Nothing. This is strictly better than a guess. |
+| C6 | **Two time fields, not one.** Effort hours ≠ calendar days to be ready ≠ days until the money arrives. | She separated them herself: "a program due in 2 weeks but the app takes 3 weeks" is a calendar problem, and time-to-funds is a cash-flow problem. One "effort" number answered neither. | Two more inferred fields to label and bound. |
+| C7 | **990 = ProPublica totals + a link. NOT the grantee list.** | Verified rather than assumed: the grantee list is in no API, the per-EIN IRS S3 objects are gone, and only 123 MB-per-part ZIPs remain. That fails her own "cost-optimised, no fragile dependencies" bar. | The half she most wanted. Candid access (§11 Q2) is the clean way to close it, and it is now a concrete ask. |
+| C8 | **`needs_human_check` means "we could not confirm a claim", not "information is missing".** | It fired on 5 of 5 results, then 10 of 12 — a flag that is always on is not a flag, and because the list also split on it, the ranking stopped meaning anything. | The broader "check everything" reading. Missing information is now carried by the score instead, which is where it belongs. |
+| C9 | **The rationale is checked against the page, deterministically.** | The quote gate protected the fields and not the prose — and the prose is what she reads. A result with `award_max = None` and "~$80k inferred from public announcements" in its sentence is worse than either failure alone. | Nothing. §6 never said "except in prose"; we had been reading it that way by omission. |
+
+### Corrections we made to our own work, v3
+
+- **We shipped a ranking that sorted by whether a funder published a number.** The
+  `scored` / `amount_not_stated` split was right when "no amount" meant "never scored";
+  once Sonnet scored everything it silently became noise, and put a score-18 above a
+  score-65. Caught by the stakeholder-facing owner reading the dashboard, not by us.
+- **We were paying to score PDF binary.** Three results had a raw URL as their title and
+  Sonnet gave one of them 55/100.
+- **The CSV export shipped without the COO's own criteria**, because it mirrored a
+  column list written before those fields existed. Caught while merging.
+
 ## Ownership split
 - Phyo + teammate own **Execution (30)** and **Use of AI (25)**.
 
