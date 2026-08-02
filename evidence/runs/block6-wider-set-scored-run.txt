@@ -19,3 +19,65 @@ Following 24 program links…
   scored  18  Prebys Foundation               2026 Rooted and Rising: Youth Leaders |   ($0.04462)
   scored  58  California Arts Council         Grant Programs & Applications - Californ  ($0.02668)
   scored  55  California Arts Council         Grants - California Arts Council  ($0.01964)
+  scored  65  City of San Diego Commission f  Apply for Funding | City of San Diego Of  ($0.02379)
+  ⚠ geography_stated unverified (quote not on page) — dropping 'San Diego'
+  scored  45  City of San Diego Economic Dev  Community Development Block Grant (CDBG)  ($0.02505)
+
+==============================================================================
+RUN SUMMARY
+==============================================================================
+  sources tried      9
+  fetched OK         8
+  fetch failed       1
+  pages parsed       86
+  award amount found 1
+  amount not stated  4
+  cost               $0.2265
+  stop reason        sources_exhausted
+
+  rejected before any model call (211 — free):
+      84  ca_category_off_mission
+      49  triage_not_an_opportunity
+      33  ca_not_open_to_nonprofits
+      17  deadline_too_soon
+      11  thin_landing_page
+      10  ca_loan_not_grant
+       6  not_a_funding_opportunity
+       1  geography_excludes_rise
+
+  SOURCE HEALTH
+    ✗ County of San Diego                unreachable  
+        ReadTimeout: 
+    ✓ Alliance Healthcare Foundation     ok              1 kept
+    ✓ California Arts Council            ok              4 kept
+    ✓ City of San Diego Commission for A ok              1 kept
+    ✓ City of San Diego Economic Develop ok              4 kept
+    ✓ Prebys Foundation                  ok              7 kept
+    · San Diego Foundation               no_results   
+    ✓ State of California                ok             25 kept
+        46 of 173 active CA grants are on-mission
+    ? The Morales Fund                   not_checked  
+        no confirmed web address on file
+    ? The Villegas Fund                  not_checked  
+        no confirmed web address on file
+    ? U.S. Federal Government            not_checked  
+        no confirmed web address on file
+    ✓ U.S. Federal Government            ok             12 kept
+        12 federal opportunities with runway, from 67 hits
+
+  notes:
+    · Sources: 9 from the funders list (sectors: warm_partner, foundation, government, arts_agency)
+    · MATCHING FUNDS mentioned on 29 opportunit(ies) — 2027 Department of Pesticide Regulation Sustainable Pest Man; Extreme Heat and Community Resilience Program Round 2; Technical Assistance Program (TAP) 2026-2027 and 26 more. Not filtered: §11 Q4 is unanswered.
+
+  RANKED — award amount stated
+     18  $           150,000  Prebys Foundation           2026 Rooted and Rising: Youth Leader
+         The April 17 deadline has already passed (today is August 2, 2026), and the grant targets middle
+
+  AMOUNT NOT STATED — needs a human look, not ranked
+      —                    —  California Arts Council     Grant Programs & Applications - Cali
+      —                    —  California Arts Council     Grants - California Arts Council
+      —                    —  City of San Diego Commissi  Apply for Funding | City of San Dieg
+      —                    —  City of San Diego Economic  Community Development Block Grant (C
+
+Wrote 5 records via: sqlite, web.
+

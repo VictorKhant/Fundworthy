@@ -282,6 +282,77 @@ Most importantly it reported its own limits without being asked:
 So the draft arrives with its caveats attached instead of looking uniformly confident,
 and the card stays marked `AI draft — unreviewed` until a human saves it.
 
+### E15 — Does widening the search past RISE's own partners actually help?
+**When:** 2026-08-02, after merging the indexed-source branch
+**Assumption tested:** adding two complete public grant lists — the California Grants
+Portal (every state agency must post there under AB 2252) and Grants.gov (every federal
+discretionary grant) — surfaces opportunities the partner-page crawl misses.
+**Method:** one full scored run, warm partners first and indexed lists taking whatever
+scoring budget was left, against the real APIs with a real key.
+
+**Result: ❌ Not confirmed this week, and the number that matters is zero.**
+
+| | |
+|---|---|
+| Candidates reaching triage | 54 (vs 17 before) — **37 from the two databases** |
+| Rejected free, before any model call | **211** |
+| Survived Haiku triage | **5** |
+| Of those, from a public database | **0** |
+| Cost | **$0.2265**, against the $1.00 ceiling |
+
+Every one of the 37 state and federal candidates was rejected as not a RISE
+opportunity. Reading them, that is the *correct* call: *Division of Boating and
+Waterways*, *Proposition 4 — Wildfire and Forest Resilience*, *Tribal Colleges and
+Universities Program*, *California National Archery in the Schools*. Real grants,
+none of them RISE's.
+
+**So the honest scorecard for the wider search, this week:**
+
+- it cost roughly **$0.08** in triage to look at 37 records and keep none;
+- the free structured filters did most of the work first — 84 rejected on California's
+  own category taxonomy, 33 as not open to nonprofits, 10 as loans not grants — all at
+  **$0.00**, which is the only reason the bill stayed at ~8 cents rather than ~50;
+- and it produced **no opportunity Mauri would not otherwise have seen**.
+
+**This is one week, not a verdict.** The value of a complete statutory list is the week
+a relevant state grant appears in it, and one run cannot tell us how often that happens.
+But it should be reported as it stands rather than as "we widened the search," which is
+true and would imply something that is not.
+
+**What it does confirm:** the funnel behaves exactly as CLAUDE.md §8 designed it. Intake
+tripled and the bill did not, because 211 of 216 candidates died in the free tier. The
+cost-tiering thesis survived a 3× increase in volume — that *is* a real result.
+
+**Artifact:** `runs/block6-wider-set-scored-run.txt`
+
+### E16 — Five silent failures found by integrating two branches
+**When:** 2026-08-02
+**Assumption tested:** two independently-correct branches merge into a correct system.
+**Result:** ❌ **Falsified, five times.** Every conflict `git` reported was resolved
+keeping both sides, and the tests passed — and the system was still broken in five
+places, each of which failed *silently*:
+
+| # | Defect | What it would have done to Mauri |
+|---|---|---|
+| 1 | `Source.adapter` was not persisted | Both grant databases quietly become ordinary web pages and stop being read |
+| 2 | Grants.gov and SAM.gov share a funder name; seed ids hashed on name | One overwrites the other; a registered source vanishes |
+| 3 | `RunLog.credit()` matched on that same name | Coverage banner reports the federal source as *unchecked* while displaying its 12 results |
+| 4 | `apis.py` keyed on the old three-program enum | **Ticking any other program searched the opposite of what she asked for** |
+| 5 | `source_kind` dropped by the sink | Every record reads back as "funder page"; she cannot tell a partner from a database |
+
+**None of these raised an error.** Four of the five would have looked like a normal,
+slightly quiet week. #4 is the worst: it makes her most visible control — which
+programmes to search — do nothing, while appearing to work.
+
+**How they were found:** by running the merged system against live APIs and reading
+what it actually did, rather than by trusting a green test suite. The tests were green
+before and after the merge; they are green now with 18 more of them, all written after
+the fact.
+
+**The generalisable lesson, and it is the same one as E12:** a passing test suite and a
+clean merge are evidence that nothing *obvious* broke. They are not evidence that the
+system works. Only running it and reading the output is that.
+
 ---
 
 ## What is NOT evidenced yet
@@ -319,6 +390,12 @@ Stated plainly, because claiming otherwise is the failure mode the rubric penali
   A run with it ticked reports `provider=none` rather than pretending.
 - ❌ **`form_990_available` is never populated.** The column exists and is always `None`.
   Nothing has checked, and `None` means unknown — not "no".
+- ❌ **The two public grant databases have never produced a usable result.** One scored
+  run, 37 candidates, zero survivors (E15). The infrastructure is proven; its *value* is
+  not, and one week cannot settle it either way.
+- ❌ **`--balance` / `per_kind_cap` is wired but never set.** Warm-partners-first was
+  chosen deliberately, so the per-kind quota is dead code kept against the day the
+  ordering needs revisiting. It has never run.
 - ⚠️ **Deadline enforcement is only as good as the deadline.** The first scored run
   surfaced a Prebys program whose deadline had passed; Sonnet said so in the rationale,
   but the date failed the quote gate, so `deadline` was `None` and the post-scoring
