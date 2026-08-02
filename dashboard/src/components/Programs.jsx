@@ -175,17 +175,20 @@ function Row({ program, globalFloor, onToggle, onEdit, onDelete }) {
               </span>
             )}
           </span>
-          <span className={`progrow-sub ${empty ? "unfilled" : ""}`}>
+          {/* Summary and meta are separate lines rather than one joined string. Joined,
+              a long summary pushed the search count and the floor past the clamp — and
+              those two are the reason to read this row at all. */}
+          <span className={`progrow-sub ${empty ? "unfilled" : ""}`} title={program.summary || undefined}>
             {empty
               ? "Empty card — paste the program's web page and the assistant fills it in"
-              : [
-                  program.summary,
-                  searches > 0 && `${searches} ${searches === 1 ? "search" : "searches"}`,
-                  `floor ${money(floor)}`,
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
+              : program.summary}
           </span>
+          {!empty && (
+            <span className="progrow-meta">
+              {searches > 0 && `${searches} ${searches === 1 ? "search" : "searches"} · `}
+              floor {money(floor)}
+            </span>
+          )}
         </span>
       </label>
 

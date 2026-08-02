@@ -375,10 +375,15 @@ button.text:hover:not(:disabled) { color: var(--accent-deep); }
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
   font-weight: 600; font-size: 14px; overflow-wrap: anywhere;
 }
+/* Clamped to two lines. A filled-in card's summary is a paragraph, and at full height
+   one program pushed the rest of the list off the screen. The full text is in the
+   title attribute and in the editor. */
 .progrow-sub {
-  display: block; font-size: 12.5px; color: var(--muted); margin-top: 2px;
-  overflow-wrap: anywhere;
+  font-size: 12.5px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
 }
+.progrow-meta { display: block; font-size: 12.5px; color: var(--muted); margin-top: 3px; }
 /* An empty card is not neutral — until it is filled in, the researcher has to guess
    what the programme needs. Clay, so it reads as unfinished rather than as a caption.
    Named "unfilled" rather than "empty" because .empty is the page-level no-results
