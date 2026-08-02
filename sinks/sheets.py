@@ -6,8 +6,10 @@ turns the agent off from a cell. So the rendering rules matter as much as the da
   - score_rationale sits in a column she can read without scrolling (§9).
   - Rows whose award amount was never stated go in their own block below the ranked
     list, clearly labeled, so they cannot be mistaken for scored results.
-  - Records are keyed by id, so a re-run updates a row rather than duplicating it.
-  - Nothing is ever deleted. If the agent is wrong, she still has the history.
+  - Each run archives last week's brief to a dated "Archive <date>" tab, then writes
+    this week fresh — so the live Opportunities tab is always the current week's brief
+    (sorted, one-hour review), and nothing is ever destroyed. If the agent is wrong,
+    the snapshot is still there.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ log = logging.getLogger(__name__)
 
 OPPORTUNITIES_TAB = "Opportunities"
 RUNS_TAB = "Runs"
+ARCHIVE_PREFIX = "Archive"   # last week's brief is snapshotted to "Archive <date>"
 
 HEADERS = [
     "Score",
@@ -119,9 +122,45 @@ class SheetsSink:
             ws.freeze(rows=1)
         return ws
 
+    def _unique_title(self, base: str) -> str:
+        """A worksheet title that doesn't collide (two runs on the same day, etc.)."""
+        existing = {w.title for w in self._book.worksheets()}
+        if base not in existing:
+            return base
+        n = 2
+        while f"{base} ({n})" in existing:
+            n += 1
+        return f"{base} ({n})"
+
+    def _archive_and_reset(self, ws) -> None:
+        """Option C: snapshot last week's brief to a dated tab, then clear the live
+        Opportunities tab so this run writes a clean current-week brief. Preserves
+        history without ever letting weeks pile up in the tab Mauri reviews."""
+        import re
+
+        from gspread.utils import rowcol_to_a1
+
+        values = ws.get_all_values()
+        if len(values) <= 1:
+            return  # header only (or empty) — nothing to archive, fresh start
+
+        # Label the archive by when its opportunities were found (the "Found on"
+        # column), so the tab name reflects the week it represents — not the run
+        # that is now replacing it. Fall back to today if the column is empty.
+        found_col = HEADERS.index("Found on")
+        found = [r[found_col] for r in values[1:]
+                 if len(r) > found_col and r[found_col].strip()]
+        label = max(found) if found else datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        ws.duplicate(new_sheet_name=self._unique_title(f"{ARCHIVE_PREFIX} {label}"))
+
+        last_col = re.sub(r"\d+", "", rowcol_to_a1(1, len(HEADERS)))
+        ws.batch_clear([f"A2:{last_col}"])
+
     def write_opportunities(self, opportunities: list[Opportunity]) -> int:
         scored, not_stated = split_sections(opportunities)
         ws = self._tab(OPPORTUNITIES_TAB, HEADERS)
+        self._archive_and_reset(ws)  # Option C: snapshot last week, start clean
 
         rows: list[list] = [_row(o) for o in scored]
         if not_stated:

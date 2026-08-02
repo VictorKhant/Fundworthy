@@ -20,7 +20,7 @@ import asyncio
 import logging
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from .config import Config, ConfigUnavailable, load_config
 from .fetch import Fetcher
@@ -180,7 +180,16 @@ def evaluate(survivors: list[tuple[ParsedPage, Source]], cfg: Config, run: RunLo
                 key = "triage_not_an_opportunity"
                 run.rejected_by_filter[key] = run.rejected_by_filter.get(key, 0) + 1
                 continue
-            out.append(score_one(candidate, source, cfg, budget))  # tier 3 — Sonnet
+            opp = score_one(candidate, source, cfg, budget)        # tier 3 — Sonnet
+            # Post-scoring deadline guard: §7 rejects passed deadlines, but the
+            # deterministic parser (tier 1) often can't find the date. Sonnet does.
+            # Enforce the hard reject here, now that we have a trustworthy deadline.
+            if opp.deadline is not None and opp.deadline < date.today():
+                key = "deadline_passed"
+                run.rejected_by_filter[key] = run.rejected_by_filter.get(key, 0) + 1
+                log.info("  dropped (deadline %s passed): %s", opp.deadline, opp.title[:40])
+                continue
+            out.append(opp)
         except BudgetExceeded as exc:
             run.stop_reason = StopReason.BUDGET
             run.notes.append(f"BUDGET CEILING: {exc}")
