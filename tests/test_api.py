@@ -147,6 +147,15 @@ def test_test_endpoint_reports_no_key_without_calling_out(client):
     assert "No API key" in body["message"]
 
 
+def test_test_endpoint_accepts_an_empty_body(client):
+    """Regression: "check the key I already saved" sends `{}`, and declaring the body
+    as `ApiKeyIn | None` still validated it against a required field — so the button
+    422'd instead of testing the stored key."""
+    r = client.post("/api/settings/api-key/test", json={})
+    assert r.status_code == 200
+    assert r.json()["ok"] is False  # nothing saved in this fixture
+
+
 # --- programs -----------------------------------------------------------------
 
 def test_program_crud_through_the_api(client):

@@ -69,6 +69,14 @@ class ApiKeyIn(BaseModel):
     api_key: str = Field(min_length=8, max_length=500)
 
 
+class ApiKeyTestIn(BaseModel):
+    """Testing an unsaved key and testing the saved one are the same request with and
+    without a body, so the field has to be genuinely optional — `ApiKeyIn | None` is
+    not, because an empty `{}` still gets validated against the required field."""
+
+    api_key: str | None = None
+
+
 class ProgramIn(BaseModel):
     name: str | None = None
     summary: str | None = None
@@ -155,7 +163,7 @@ def delete_api_key() -> dict:
 
 
 @api.post("/settings/api-key/test")
-def test_api_key(body: ApiKeyIn | None = None) -> dict:
+def test_api_key(body: ApiKeyTestIn | None = None) -> dict:
     """Check a key works before trusting it. One token, so effectively free.
 
     Accepts a key in the body to test before saving, or falls back to the saved one —
