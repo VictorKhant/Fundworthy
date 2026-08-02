@@ -1,5 +1,41 @@
-import { defineConfig } from "vite";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
+
+const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
+
+// Dev only. On Vercel these two are project environment variables and this never
+// runs; locally they live in the repo-root .env that the Python agent already reads,
+// so `npm run dev` shows real data instead of the not-connected state.
+//
+// The shapes differ on purpose and this is the only place that reconciles them:
+// the agent takes GOOGLE_APPLICATION_CREDENTIALS as a *path* (gspread opens the
+// file), while api/runs.js takes GOOGLE_SHEETS_CREDENTIALS as the JSON *itself*
+// (Vercel has no filesystem to put a key file on). One .env feeds both.
+function devEnvFromRepoRoot() {
+  return {
+    name: "rise-dev-env",
+    apply: "serve",
+    config(_, { mode }) {
+      const env = loadEnv(mode, REPO_ROOT, "");
+      for (const [key, value] of Object.entries(env)) {
+        process.env[key] ??= value;
+      }
+      if (!process.env.GOOGLE_SHEETS_CREDENTIALS && process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+        try {
+          process.env.GOOGLE_SHEETS_CREDENTIALS = readFileSync(
+            new URL(process.env.GOOGLE_APPLICATION_CREDENTIALS, new URL("file://" + REPO_ROOT)),
+            "utf8",
+          );
+        } catch (err) {
+          // Not fatal: api/runs.js already renders an honest not-connected page.
+          console.warn(`[rise] could not read the service-account file: ${err.message}`);
+        }
+      }
+    },
+  };
+}
 
 // Static build. There is no backend here — /api/runs is a Vercel serverless
 // function (see api/runs.js), which exists so the Sheet can stay unpublished.
@@ -36,7 +72,7 @@ function mountApi() {
 }
 
 export default defineConfig({
-  plugins: [react(), mountApi()],
+  plugins: [devEnvFromRepoRoot(), react(), mountApi()],
   build: { outDir: "dist", sourcemap: false },
   server: { port: 5173 },
 });
