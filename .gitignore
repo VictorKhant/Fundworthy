@@ -27,3 +27,7 @@ data/
 *.db-wal
 *.db-shm
 .fernet-key
+
+# the handoff PDF is a build artifact of docs/handoff/guide.html — but we DO commit it,
+# because the person who needs it cannot run a build. (No ignore rule; noted here so
+# nobody adds one.)

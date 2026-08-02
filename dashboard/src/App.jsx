@@ -29,9 +29,27 @@ function initialScreen() {
   return AUTH_ENABLED ? "landing" : "app";
 }
 
+// Which section of the app is open, kept in the URL hash. Three reasons it is worth the
+// six lines: a refresh no longer throws you back to the dashboard, you can send someone
+// a link to the page you mean, and the section is addressable — which is what lets the
+// handoff guide be built from screenshots of the real thing rather than mock-ups.
+const PAGES = ["dashboard", "archive", "settings"];
+
+function initialPage() {
+  const want = window.location.hash.replace(/^#\/?/, "");
+  return PAGES.includes(want) ? want : "dashboard";
+}
+
 export default function App() {
   const [screen, setScreen] = useState(initialScreen);
-  const [page, setPage] = useState("dashboard");
+  const [page, setPageState] = useState(initialPage);
+
+  const setPage = useCallback((next) => {
+    setPageState(next);
+    // replaceState, not push: the sidebar is a view switch, not navigation, and stacking
+    // history entries would make Back feel broken inside a single-page tool.
+    window.history.replaceState({}, "", next === "dashboard" ? "#/" : `#/${next}`);
+  }, []);
   const [open, setOpen] = useState(window.innerWidth >= 900);
   const [state, setState] = useState(null);
   const [error, setError] = useState(null);
