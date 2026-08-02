@@ -19,7 +19,7 @@ import os
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from agent.models import Opportunity, RunLog, SourceKind
+from agent.models import Opportunity, RunLog, _enum_value, SourceKind
 
 from .base import coverage_banner, split_sections
 
@@ -40,6 +40,12 @@ HEADERS = [
     "Deadline",
     "Days left",
     "Est. hours",
+    # The COO's own ranking criteria (§11 Q5). Two different kinds of time, which she
+    # separated: days to BE READY to submit, vs days from submitting to money arriving.
+    "Days to prepare",
+    "Months to funds",
+    "Fit %",                 # the AI's own confidence — inferred, labelled in the UI
+    "Their 990",             # shown as data, never scored — her call
     "Programs",
     "Needs a human check",
     "Link",
@@ -121,7 +127,11 @@ def _row(opp: Opportunity) -> list:
         opp.deadline.isoformat() if opp.deadline else "not stated",
         days if days is not None else "",
         opp.estimated_effort_hours if opp.estimated_effort_hours is not None else "",
-        ", ".join(p.value for p in opp.program_match),
+        opp.application_lead_time_days if opp.application_lead_time_days is not None else "",
+        round(opp.time_to_funds_days / 30) if opp.time_to_funds_days else "",
+        opp.confidence_pct if opp.confidence_pct is not None else "",
+        opp.form_990_url or "",
+        ", ".join(_enum_value(p) for p in opp.program_match),
         "YES" if opp.needs_human_check else "",
         opp.source_url,
         # Pacific, so "Found on" matches the day the run actually happened. A late

@@ -257,3 +257,34 @@ def test_a_near_miss_is_not_a_match():
     orgs = [{"name": "The Jack B Parker Foundation", "state": "GA", "ein": 9},
             {"name": "The James Parker Charitable Foundation", "state": "MA", "ein": 8}]
     assert _best_match("Parker Foundation", orgs) is None
+
+# --- effort estimate is mandatory --------------------------------------------
+#
+# CLAUDE.md §7 weights effort against a hard 10-hour cap, and §1 is explicit that the
+# cap is the decision the whole product exists to serve. A null cannot be compared
+# against 10, so an opportunity without an estimate silently drops out of that
+# comparison instead of failing it. These tests keep the field non-nullable: it is an
+# inferred judgement, not a claim about the page, so nothing in §6 requires withholding
+# it when the page is thin.
+
+def test_effort_hours_is_required_and_not_nullable():
+    from agent.score import scoring_schema
+
+    schema = scoring_schema(["RULFP", "ARTS"])
+    effort = schema["properties"]["estimated_effort_hours"]
+
+    assert effort["type"] == "integer", "a nullable effort estimate is unusable against the 10-hour cap"
+    assert "estimated_effort_hours" in schema["required"]
+
+
+def test_sourced_fields_stay_nullable():
+    """The opposite rule, asserted so the change above cannot be widened by accident.
+
+    Award amounts and deadlines must stay nullable — CLAUDE.md §6 forbids inventing
+    them. Only the inferred estimate is mandatory.
+    """
+    from agent.score import scoring_schema
+
+    props = scoring_schema(["RULFP"])["properties"]
+    for field in ("award_min_stated", "award_max_stated", "deadline_stated"):
+        assert "null" in props[field]["type"], f"{field} must stay nullable — §6"

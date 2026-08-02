@@ -128,12 +128,16 @@ textarea { resize: vertical; }
 .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
 .row.end { justify-content: flex-end; margin-top: .75rem; }
 
-button {
+/* a.button is the download link. It has to be an <a download> rather than a button so
+   the browser saves the file natively, but it should be indistinguishable from the
+   buttons beside it — hence the shared declaration. */
+button, a.button {
   padding: .45rem .8rem; border-radius: .35rem;
   border: 1px solid var(--line); background: var(--bg); color: var(--fg);
   font: inherit; cursor: pointer;
 }
-button:hover:not(:disabled) { border-color: var(--muted); }
+a.button { text-decoration: none; white-space: nowrap; display: inline-block; }
+button:hover:not(:disabled), a.button:hover { border-color: var(--muted); }
 button:disabled { opacity: .5; cursor: not-allowed; }
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 button.danger  { background: var(--off); border-color: var(--off); color: #fff; }
@@ -212,14 +216,35 @@ tbody tr:last-child td { border-bottom: none; }
 
 .opps { display: flex; flex-direction: column; gap: .6rem; }
 .opp {
-  display: grid; grid-template-columns: 3rem 1fr; gap: .85rem;
+  /* 4.25rem, not 3rem: the badge carries a "fit · AI" label under the number, and the
+     label is wider than the number it describes. At 3rem it spilled past the card. */
+  display: grid; grid-template-columns: 4.25rem minmax(0, 1fr); gap: .85rem;
   border: 1px solid var(--line); border-radius: .45rem;
   padding: .75rem .85rem; background: var(--bg);
 }
+/* A grid column defaults to min-width:auto, so it refuses to shrink below its widest
+   unbreakable word. Funder URLs and long grant titles have no break opportunity, so the
+   column grew past the card border instead of wrapping. minmax(0, 1fr) above and this
+   min-width let it shrink; overflow-wrap then breaks the long token itself. */
+.opp-body { min-width: 0; }
+.opp-title, .opp-why, .opp-funder, .opp-meta a { overflow-wrap: anywhere; }
 .opp.flagged { border-left: 3px solid var(--warn); }
 .opp-score {
   font-size: 1.35rem; font-weight: 700; text-align: center;
   color: var(--accent); line-height: 1.2;
+}
+/* The badge holds the AI's fit estimate, which is a judgement and not a figure read off
+   the funder's page. It is the biggest number on the row, so the inferred marking has to
+   be unmistakable: muted rather than accent-coloured, and a dashed rule under it echoing
+   .chip.inferred. Same correctness requirement as that class — see the top of this file. */
+.opp-score.inferred {
+  color: var(--muted);
+  border-bottom: 1px dashed var(--line);
+  padding-bottom: .15rem;
+}
+.opp-score-tag {
+  display: block; font-size: .6rem; font-weight: 600; letter-spacing: .02em;
+  text-transform: uppercase; color: var(--muted); margin-top: .1rem;
 }
 .opp-head { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
 .opp-funder { font-weight: 600; }
@@ -232,7 +257,11 @@ tbody tr:last-child td { border-bottom: none; }
   display: inline-flex; align-items: center; gap: .3rem;
   padding: .1rem .45rem; border-radius: 999px;
   border: 1px solid var(--line); background: var(--panel);
-  font-size: .8rem; white-space: nowrap;
+  font-size: .8rem;
+  /* Was nowrap. Most chips are short enough that flex-wrap moves them to the next line
+     before their text ever needs to break — but service areas and contact notes are
+     free text, and one long one was riding out past the card edge with nowrap set. */
+  white-space: normal; overflow-wrap: anywhere; max-width: 100%;
 }
 .chip.strong { font-weight: 700; border-color: var(--ok); color: var(--ok); }
 .chip.warn { border-color: var(--warn); color: var(--warn); }

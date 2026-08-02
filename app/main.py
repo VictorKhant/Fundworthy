@@ -19,6 +19,7 @@ Everything the browser can do:
     GET    /api/funders                POST to add
     PUT    /api/funders/{id}           DELETE to remove
     GET    /api/opportunities          this month's findings, in her reading order
+    GET    /api/opportunities/export.csv  ← the "Download as a spreadsheet" button
     GET    /api/archive                the archive, by month
     GET    /api/runs                   run history
     POST   /api/runs                   ← the "Re-run search pipeline" button
@@ -37,11 +38,11 @@ from typing import Any
 
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import archive, repo, secrets
+from . import archive, export, repo, secrets
 from .db import SECTORS, init_db, month_key, session
 from .runner import MANAGER
 
@@ -311,6 +312,28 @@ def list_opportunities(month: str | None = None, run_id: str | None = None) -> d
         "clear": [r for r in rows if not r["needs_human_check"]],
         "needs_check": [r for r in rows if r["needs_human_check"]],
     }
+
+
+@api.get("/opportunities/export.csv")
+def export_opportunities(month: str | None = None, run_id: str | None = None):
+    """Download the brief as a spreadsheet file. (docs/DECISIONS.md B3)
+
+    Deliberately not the Phase 3 OAuth push into her live Sheet: this needs no Google
+    credential, so there is nothing here that can expire, get revoked, or need a
+    consent screen re-verified before a demo. She opens the file in Sheets.
+
+    Same rows and same order as GET /opportunities — one query, one sort, so the file
+    can never disagree with the page she downloaded it from.
+    """
+    key = month or month_key()
+    with session() as conn:
+        rows = repo.list_opportunities(conn, month=key, run_id=run_id)
+    return Response(
+        content=export.to_csv(rows),
+        media_type="text/csv; charset=utf-8",
+        # Without this the browser renders the CSV as text instead of saving it.
+        headers={"Content-Disposition": f'attachment; filename="{export.filename(key)}"'},
+    )
 
 
 @api.get("/archive")

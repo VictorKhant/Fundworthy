@@ -186,9 +186,18 @@ it, set BOTH the value and its quote to null. Never infer, estimate, or recall a
 from anywhere but this page. The deadline quote MUST contain the full date including
 the year.
 
-INFERRED fields — funder_type, service_areas, confidence_pct — are your judgement and
-are shown to the COO labelled as such. Use everything on the page. Do not force them:
-"unknown" and an empty list are real answers.
+INFERRED fields — funder_type, service_areas, confidence_pct, estimated_effort_hours —
+are your judgement and are shown to the COO labelled as such. Use everything on the page.
+Do not force them: "unknown" and an empty list are real answers.
+
+The one exception is estimated_effort_hours, which is ALWAYS required. Never leave it
+out. Every opportunity on this list gets compared against a hard 10-hour cap, so an
+application with no estimate cannot be weighed against one that has it — it silently
+drops out of the only comparison that matters. If the page is thin, estimate from what
+the funder is asking for and how much money is at stake: a two-page letter of interest
+is not a full proposal with audited financials. A rough number you would defend is far
+more useful to her than no number. If the page is an index or overview rather than a
+single application, estimate the typical application it leads to.
 
 Also:
 - deadline_type is "fixed" when the page names one date, "rolling" when it says
@@ -200,7 +209,11 @@ Also:
 - confidence_pct is how confident you are that this funder would fund one of the RISE
   programs listed above. Be honest and use the low end when the fit is thin.
 - estimated_effort_hours is your read of what a competitive application costs this
-  team in WORKING HOURS. Above 10 is a real signal, not a rounding error — say so.
+  team in WORKING HOURS, counting drafting, gathering attachments, and internal
+  review. Give a whole number on every opportunity, without exception — a null cannot
+  be compared against the 10-hour cap, so it drops the row out of the only comparison
+  that matters instead of failing it. Above 10 is a real signal, not a rounding error
+  — say so in the rationale when it happens.
 - application_lead_time_days is different and is about the CALENDAR: how many days
   from starting to being able to submit, given what the application requires. Audited
   financials, board resolutions, letters of support and reference forms all depend on
@@ -270,9 +283,20 @@ def scoring_schema(program_slugs: list[str]) -> dict:
                 "items": {"type": "string",
                           "enum": program_slugs or ["NONE"]},
             },
+            # Not nullable, unlike every other inferred field. This is an estimate, not
+            # a claim about the page, so there is no accuracy rule requiring it to be
+            # withheld — and §7 weights effort against a hard 10-hour cap, which a null
+            # cannot be compared against. Structured outputs enforce the integer, so the
+            # model has to commit to a number rather than declining the question.
             "estimated_effort_hours": {
-                "type": ["integer", "null"],
-                "description": "WORKING HOURS for a competitive application, or null.",
+                # NOT nullable, deliberately. The schema used to allow null "if
+                # unknowable" and the model took the option on 2 of 5 findings — and a
+                # null cannot be compared against the 10-hour cap, so those rows fell
+                # out of the decision this whole list exists to serve.
+                "type": "integer",
+                "description": "Whole WORKING HOURS for a competitive application. Always "
+                               "required — estimate from the ask and the award size if the "
+                               "page is thin. Never omit or return null.",
             },
             "application_lead_time_days": {
                 "type": ["integer", "null"],

@@ -62,6 +62,12 @@ export const api = {
   opportunities: (month) => get(`/api/opportunities${month ? `?month=${month}` : ""}`),
   archive: (month) => get(`/api/archive${month ? `?month=${month}` : ""}`),
 
+  // A URL, not a fetch. The browser's own download handling reads the filename off
+  // the Content-Disposition header, which a fetch + blob would throw away — and this
+  // way the file never passes through JS memory.
+  exportUrl: (month) =>
+    `${BASE}/api/opportunities/export.csv${month ? `?month=${month}` : ""}`,
+
   runs: {
     list: () => get("/api/runs"),
     current: () => get("/api/runs/current"),
