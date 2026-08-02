@@ -1,0 +1,20 @@
+# secrets — never commit a key (CLAUDE.md §5)
+.env
+*.json.key
+service-account*.json
+credentials.json
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# run output
+out/
+*.jsonl
+!evidence/**/*.jsonl
+
+# os
+.DS_Store

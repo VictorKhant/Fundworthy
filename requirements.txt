@@ -1,0 +1,13 @@
+# RISE San Diego Funding Opportunity Agent
+# Python 3.11+ (CLAUDE.md §5)
+
+httpx[http2]==0.27.2       # async fetch, timeouts, retries
+selectolax==0.3.21         # fast HTML parsing (primary)
+beautifulsoup4==4.12.3     # parsing fallback
+lxml==5.3.0                # bs4 backend
+dateparser==1.2.0          # funder deadline formats are chaotic
+
+gspread==6.1.4             # Google Sheets sink
+google-auth==2.35.0        # service-account credentials
+
+anthropic==0.120.2         # Block 2 — Haiku triage / Sonnet scoring (needs output_config + adaptive thinking)

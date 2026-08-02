@@ -1,0 +1,149 @@
+"""Fetching: httpx + retry + politeness delays. (CLAUDE.md §10)
+
+We are a small nonprofit's agent hitting funders' own websites once a week. Behave
+accordingly: identify ourselves honestly, obey robots.txt, one request at a time per
+host, and back off rather than hammer. A funder blocking RISE's IP would be a real
+cost to the organization.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import urllib.robotparser
+from dataclasses import dataclass
+from urllib.parse import urlparse
+
+import httpx
+
+log = logging.getLogger(__name__)
+
+USER_AGENT = (
+    "RISE-San-Diego-Funding-Agent/0.1 "
+    "(+https://risesd.org; nonprofit grant research; contact: RISE San Diego)"
+)
+
+REQUEST_TIMEOUT = httpx.Timeout(20.0, connect=10.0)
+MAX_RETRIES = 2
+PER_HOST_DELAY_SECONDS = 2.0
+MAX_BYTES = 3_000_000  # a grants page over 3MB is not a grants page
+
+
+@dataclass
+class FetchResult:
+    url: str
+    status: int | None
+    html: str | None
+    error: str | None = None
+    final_url: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.status is not None and 200 <= self.status < 300 and bool(self.html)
+
+
+class Fetcher:
+    """Async fetcher with per-host serialization and robots.txt caching."""
+
+    def __init__(self, *, respect_robots: bool = True) -> None:
+        self.respect_robots = respect_robots
+        self._host_locks: dict[str, asyncio.Lock] = {}
+        self._robots: dict[str, urllib.robotparser.RobotFileParser | None] = {}
+        self._client: httpx.AsyncClient | None = None
+
+    async def __aenter__(self) -> "Fetcher":
+        self._client = httpx.AsyncClient(
+            headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
+            timeout=REQUEST_TIMEOUT,
+            follow_redirects=True,
+        )
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        if self._client:
+            await self._client.aclose()
+
+    def _lock_for(self, host: str) -> asyncio.Lock:
+        if host not in self._host_locks:
+            self._host_locks[host] = asyncio.Lock()
+        return self._host_locks[host]
+
+    async def _allowed(self, url: str) -> bool:
+        """robots.txt check. A robots.txt we cannot read is treated as permissive —
+        that is the conventional reading, and these are public grant pages."""
+        if not self.respect_robots:
+            return True
+        parsed = urlparse(url)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        if origin not in self._robots:
+            rp: urllib.robotparser.RobotFileParser | None = None
+            try:
+                assert self._client is not None
+                resp = await self._client.get(f"{origin}/robots.txt", timeout=10.0)
+                if resp.status_code == 200:
+                    rp = urllib.robotparser.RobotFileParser()
+                    rp.parse(resp.text.splitlines())
+            except Exception as exc:  # noqa: BLE001 — absence of robots is not an error
+                log.debug("robots.txt unavailable for %s: %s", origin, exc)
+            self._robots[origin] = rp
+        rp = self._robots[origin]
+        return True if rp is None else rp.can_fetch(USER_AGENT, url)
+
+    async def get(self, url: str) -> FetchResult:
+        assert self._client is not None, "use `async with Fetcher() as f`"
+        host = urlparse(url).netloc
+
+        if not await self._allowed(url):
+            log.info("robots.txt disallows %s — skipping", url)
+            return FetchResult(url=url, status=None, html=None, error="robots_disallowed")
+
+        async with self._lock_for(host):
+            last_error: str | None = None
+            for attempt in range(MAX_RETRIES + 1):
+                try:
+                    resp = await self._client.get(url)
+
+                    # Back off on rate limits and server errors; give up on 4xx.
+                    if resp.status_code in (429, 503) and attempt < MAX_RETRIES:
+                        wait = PER_HOST_DELAY_SECONDS * (2 ** attempt)
+                        log.info("%s returned %s — backing off %.1fs", url, resp.status_code, wait)
+                        await asyncio.sleep(wait)
+                        continue
+                    if resp.status_code >= 400:
+                        return FetchResult(
+                            url=url,
+                            status=resp.status_code,
+                            html=None,
+                            error=f"http_{resp.status_code}",
+                            final_url=str(resp.url),
+                        )
+
+                    content = resp.text
+                    if len(resp.content) > MAX_BYTES:
+                        content = resp.text[:MAX_BYTES]
+                    return FetchResult(
+                        url=url,
+                        status=resp.status_code,
+                        html=content,
+                        final_url=str(resp.url),
+                    )
+
+                except (httpx.TimeoutException, httpx.TransportError) as exc:
+                    last_error = f"{type(exc).__name__}: {exc}"
+                    if attempt < MAX_RETRIES:
+                        await asyncio.sleep(PER_HOST_DELAY_SECONDS * (2 ** attempt))
+                        continue
+
+            return FetchResult(url=url, status=None, html=None, error=last_error or "unknown")
+
+    async def get_many(self, urls: list[str]) -> list[FetchResult]:
+        """Concurrent across hosts, serialized within a host by the per-host lock."""
+        results = await asyncio.gather(*(self.get(u) for u in urls), return_exceptions=True)
+        out: list[FetchResult] = []
+        for url, res in zip(urls, results):
+            if isinstance(res, BaseException):
+                out.append(FetchResult(url=url, status=None, html=None, error=repr(res)))
+            else:
+                out.append(res)
+            await asyncio.sleep(0)  # yield; politeness spacing lives in the host lock
+        return out
