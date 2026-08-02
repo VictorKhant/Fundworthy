@@ -109,8 +109,8 @@ spans both). RISE runs three programs, and they live in different funder univers
 
 The person reading your output is RISE's COO. She has one hour on Thursday morning
 and a hard cap of 10 collective team-hours per application. Her stated problem is
-NOT that she cannot find grants — she already spends 16 hours a week finding them.
-It is that what she finds is too small to justify a 10-hour application.
+NOT that she cannot find grants — she can already find plenty. It is that what she
+finds is too small to justify a 10-hour application.
 
 So: surfacing a marginal opportunity costs her more than missing one. Be strict.
 """

@@ -6,10 +6,10 @@ Social Impact Hack-AI-thon (San Diego, Aug 1–2 2026). RISE San Diego owns this
 It watches the funders RISE already has relationships with, and each Wednesday night
 leaves a short, sourced, ranked list in a Google Sheet for Thursday morning.
 
-**The problem it solves is not "find more grants."** RISE's COO already spends ~16
-hours a week finding grants; the problem is that most of what she finds is too small to
-justify a 10-hour application. So this agent is built to return *few* results, and to
-say "amount not stated" rather than guess. See `CLAUDE.md` §1.
+**The problem it solves is not "find more grants."** RISE's COO can already find them;
+the problem is that most of what she finds is too small to justify a 10-hour
+application. So this agent is built to return *few* results, and to say "amount not
+stated" rather than guess. See `CLAUDE.md` §1.
 
 ## Run it
 

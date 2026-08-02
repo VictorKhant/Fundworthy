@@ -13,11 +13,14 @@ Mauri Hamilton is COO at RISE San Diego. She is responsible for finding funding.
 
 What she told us:
 
-- She spends **~16 hours a week** searching for funding opportunities.
+- Searching for funding takes a **substantial, recurring block of her week**.
+  (TODO: capture the real number from Mauri and put it here. An earlier draft of this
+  file carried a specific figure that turned out not to be hers — it has been removed
+  rather than left in, because a made-up stat about a real person is worse than a gap.)
 - She reports findings at a **Thursday meeting**.
 - The team will spend **no more than 10 collective hours** on any single application.
-- The 16 hours of searching **"doesn't guarantee the grants found are worth the
-  application — mainly due to the low award amount."**
+- All that searching **"doesn't guarantee the grants found are worth the application —
+  mainly due to the low award amount."**
 
 Read that last line carefully. The bottleneck is **not** discovery volume. It is that
 discovery yields opportunities too small to justify a 10-hour application. An agent
@@ -27,10 +30,10 @@ that finds *more* grants makes her problem worse.
 
 | | Today | Target |
 |---|---|---|
-| Hours spent searching | ~16 / week | ~0 |
+| Hours spent searching | a recurring block of her week | ~0 |
 | Hours spent reviewing | — | 1 / week (Thursday AM) |
 | Opportunities surfaced | many, mostly too small | few, all above the award floor |
-| Cost | 16 hrs of COO time | < $20 / month |
+| Cost | COO time | < $20 / month |
 
 If the agent surfaces six opportunities and all six clear the award floor, that is a
 **successful run**. Do not treat a low count as failure.

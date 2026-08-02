@@ -14,11 +14,10 @@ anything closing too soon, and anything RISE cannot apply for — before spendin
 cent. What survives lands in your Google Sheet, sorted best-first, with a one-line
 reason and a link to the funder's own page, ready for Thursday morning.
 
-**What it deliberately does not do:** it does not try to find *more* grants. Mauri
-already spends ~16 hours a week doing that. The problem was never volume — it was
-that most of what turns up is too small to justify a 10-hour application. So this
-agent is built to return **few** results. Six good ones is a good week. If it returns
-three, that is not a malfunction.
+**What it deliberately does not do:** it does not try to find *more* grants. Finding
+them was never the hard part — the problem is that most of what turns up is too small
+to justify a 10-hour application. So this agent is built to return **few** results.
+Six good ones is a good week. If it returns three, that is not a malfunction.
 
 It also never writes an application, never emails anyone on RISE's behalf, and never
 states a dollar amount or deadline it did not read on the funder's own page. When it

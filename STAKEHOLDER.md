@@ -13,7 +13,7 @@ The rubric scores **Stakeholder evidence (10)** and **Commitments or next steps 
 
 | Fact | Detail |
 |---|---|
-| Time spent searching | ~16 hours/week |
+| Time spent searching | A substantial, recurring block of her week. **The specific number is an open question — see Q9.** |
 | Reporting cadence | Thursday meeting |
 | Effort ceiling per application | 10 collective hours, hard |
 | The actual pain | *"doesn't guarantee the grants found are worth the application — mainly due to the low award amount."* |
@@ -40,6 +40,8 @@ problem worse. Everything in this repo follows from that one sentence.
 | # | Question | Blocks | Status |
 |---|---|---|---|
 | 8 | **The 5 clear-yes and 5 clear-no opportunities for the calibration test.** | `tests/calibration.py` — §10 calls it "the only test that matters" | ❌ Unanswered. Block 2 cannot be verified without it. |
+| 9 | **How much time does searching for funding actually take you in a week?** | the before/after claim in the demo and in every doc | ❌ Unanswered. An earlier draft carried "~16 hours/week"; RISE's team says that figure is not correct, so it has been **removed from every file in this repo** rather than left standing. We would rather have a gap than a wrong stat about a real person. |
+| 10 | **What are the four sectors you want funding found in?** | `sector` tags on the funder registry and the sector checkboxes in the dashboard | ❌ Unanswered. Seeded with `warm_partner / foundation / government / arts_agency / intermediary` as a placeholder taxonomy; her answer is a label change, not a code change. |
 
 ---
 
