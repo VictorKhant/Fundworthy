@@ -234,3 +234,64 @@ def active_sources(max_tier: Tier = Tier.WARM) -> list[Source]:
 def unconfirmed_sources(max_tier: Tier = Tier.WARM) -> list[Source]:
     """Registered but unfetchable — the run reports these so they don't go quiet."""
     return [s for s in ALL_SOURCES if s.tier <= max_tier and not s.fetchable]
+
+
+# --- the database-backed registry ---------------------------------------------
+#
+# The lists above are now the SHIPPED SEED, not the live registry. On first boot they
+# are copied into the funders table (app/db.py seed_funders) and from then on Mauri
+# owns the list: she adds partners, edits URLs, and — the case that motivated this —
+# DEACTIVATES a partner who stops funding RISE, without losing the relationship record.
+#
+# They stay here rather than being deleted because they carry the URL-confidence
+# research from the first crawls (see the notes on each entry), and because a fresh
+# clone with no database has to be runnable.
+
+def sources_from_db(max_tier: Tier = Tier.WARM,
+                    sectors: list[str] | None = None,
+                    db_path=None) -> tuple[list[Source], list[Source]] | None:
+    """(fetchable, unconfirmed) built from the funders table, or None if unavailable.
+
+    `sectors` is the set of sector tags Mauri ticked for this run. An empty or missing
+    list means "no sector filter" rather than "nothing" — silently searching nothing
+    would look identical to a quiet week, which is the one ambiguity this project
+    cannot afford.
+    """
+    try:
+        from app.db import db_path as default_db_path
+        from app.db import loads, session
+    except ImportError:
+        return None
+
+    target = db_path or default_db_path()
+    if db_path is None and not default_db_path().exists():
+        return None
+
+    try:
+        with session(target) as conn:
+            rows = [dict(r) for r in conn.execute(
+                "SELECT * FROM funders WHERE active=1 ORDER BY warm DESC, name")]
+    except Exception:  # noqa: BLE001
+        return None
+
+    wanted = set(sectors or [])
+    fetchable: list[Source] = []
+    unconfirmed: list[Source] = []
+    for r in rows:
+        if int(r["tier"]) > int(max_tier):
+            continue
+        if wanted and r["sector"] not in wanted:
+            continue
+        source = Source(
+            name=r["name"],
+            funder=r["name"],
+            url=r["url"] or None,
+            tier=Tier(int(r["tier"])),
+            programs=[p for p in loads(r["programs"], [])],
+            confidence=Confidence(int(r["confidence"])),
+            warm=bool(r["warm"]),
+            notes=r["notes"] or "",
+            sector=r["sector"],
+        )
+        (fetchable if source.fetchable else unconfirmed).append(source)
+    return fetchable, unconfirmed

@@ -42,15 +42,62 @@ def _is_thin_landing_page(page: ParsedPage) -> bool:
             and len(page.text) < 1200)
 
 
+def resolve_sources(cfg: Config, run: RunLog) -> tuple[list[Source], list[Source]]:
+    """Which funder pages this run visits.
+
+    The funders table wins when it exists — that is the list Mauri edits. The shipped
+    registry in sources.py is the fallback for a fresh clone with no database. Either
+    way, sources she has deactivated never get fetched, and a partner who stopped
+    funding RISE stops costing us requests without losing its record.
+    """
+    from .sources import sources_from_db
+
+    from_db = sources_from_db(cfg.max_tier, cfg.sectors_active)
+    if from_db is not None:
+        sources, skipped = from_db
+        run.notes.append(
+            f"Sources: {len(sources)} from the funders list "
+            f"(sectors: {', '.join(cfg.sectors_active) or 'all'})"
+        )
+        return sources, skipped
+
+    run.notes.append("Sources: shipped registry (no funders database found)")
+    return active_sources(cfg.max_tier), unconfirmed_sources(cfg.max_tier)
+
+
+def _discover_extra(cfg: Config, run: RunLog) -> list[Source]:
+    """Sources from beyond the partner list, when Mauri asked for them.
+
+    The provider itself lives on another branch (agent/discovery.py explains why). What
+    matters here is that the run log distinguishes "we looked and found nothing" from
+    "nothing looked" — those are very different weeks and they must not read the same.
+    """
+    if not cfg.search_beyond_partners:
+        return []
+
+    from .discovery import get_provider
+
+    provider = get_provider()
+    found = provider.discover(cfg.programs, sectors=cfg.sectors_active, limit=25)
+    run.notes.append(
+        f"Beyond-partners search: provider={provider.name}, {len(found)} source(s)."
+        + ("  NOTE: no discovery provider is installed, so this ran over the partner "
+           "list only." if provider.name == "none" else "")
+    )
+    return found
+
+
 async def crawl(cfg: Config, run: RunLog,
-                *, follow_links: bool = True) -> list[tuple[ParsedPage, Source]]:
+                *, follow_links: bool = True,
+                already_seen: set[str] | None = None) -> list[tuple[ParsedPage, Source]]:
     """Tier 1 of §8: fetch, parse, and apply the free deterministic filters.
 
     Returns only what survived. Every reject is counted in `run.rejected_by_filter`
     so the Runs tab shows what the free tier saved us from paying to think about.
     """
-    sources = active_sources(cfg.max_tier)
-    skipped = unconfirmed_sources(cfg.max_tier)
+    sources, skipped = resolve_sources(cfg, run)
+    sources = sources + _discover_extra(cfg, run)
+    already_seen = already_seen or set()
 
     for s in skipped:
         run.notes.append(f"SKIPPED (no confirmed URL): {s.name}")
@@ -62,6 +109,17 @@ async def crawl(cfg: Config, run: RunLog,
         run.candidates_parsed += 1
         if page.url in survivors:
             return
+
+        # Already shown to Mauri this month. Dropping it here — in the free tier,
+        # before triage — is the point: a repeat finding costs $0.00 rather than a
+        # Haiku call, and she does not re-read the same row four Thursdays running.
+        # The archive resets monthly, so it can legitimately come back later.
+        if stable_id(page.url, page.title) in already_seen:
+            key = "already_seen_this_month"
+            run.rejected_by_filter[key] = run.rejected_by_filter.get(key, 0) + 1
+            run.duplicates_skipped += 1
+            return
+
         if _is_thin_landing_page(page):
             key = "thin_landing_page"
             run.rejected_by_filter[key] = run.rejected_by_filter.get(key, 0) + 1
@@ -175,7 +233,7 @@ def evaluate(survivors: list[tuple[ParsedPage, Source]], cfg: Config, run: RunLo
             [p for p in source.programs if p in cfg.programs_active],
         )
         try:
-            relevant, reason = triage(candidate, budget)          # tier 2 — Haiku
+            relevant, reason = triage(candidate, budget, cfg)     # tier 2 — Haiku
             if not relevant:
                 key = "triage_not_an_opportunity"
                 run.rejected_by_filter[key] = run.rejected_by_filter.get(key, 0) + 1
@@ -262,6 +320,25 @@ async def main_async(args: argparse.Namespace) -> int:
     )
 
     run = RunLog(started_at=datetime.now(timezone.utc))
+
+    # Create and seed the settings database before reading config, so a first run picks
+    # up the defaults from the same place every later run reads them.
+    #
+    # Deliberately NOT done under RISE_STRICT_CONFIG. Strict mode is the scheduled job,
+    # where the database is not checked in — auto-creating it there would hand back a
+    # fresh `enabled=1` on every run and silently defeat the kill switch, which is the
+    # exact failure evidence/README.md E7 was written about. In strict mode a config we
+    # cannot read stays a refusal to run.
+    strict = os.environ.get("RISE_STRICT_CONFIG", "").strip().lower() in {
+        "1", "true", "yes", "on"}
+    if not strict and not args.no_archive:
+        try:
+            from app.db import init_db
+
+            init_db()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Could not open the settings database (%s).", exc)
+
     try:
         cfg = load_config()
     except ConfigUnavailable as exc:
@@ -296,9 +373,31 @@ async def main_async(args: argparse.Namespace) -> int:
 
     budget = Budget(ceiling_usd=args.budget or cfg.weekly_budget_usd)
 
+    # The monthly archive, both halves. The purge bounds the file; `already_seen` is
+    # what keeps Mauri from re-reading the same grant every Thursday. Both are skipped
+    # silently if there is no database — the agent still has to run from a fresh clone.
+    already_seen: set[str] = set()
+    if not args.no_archive:
+        try:
+            from app.archive import purge_old_months, seen_ids_this_month
+            from app.db import init_db, session
+
+            init_db()
+            with session() as conn:
+                run.purged_rows = purge_old_months(conn)
+                already_seen = seen_ids_this_month(conn)
+            if run.purged_rows:
+                run.notes.append(
+                    f"Archive: purged {run.purged_rows} row(s) from earlier months.")
+            log.info("Archive: %d finding(s) already shown this month.", len(already_seen))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Archive unavailable (%s) — running without dedup.", exc)
+            run.notes.append(f"Archive unavailable: {exc}")
+
     log.info("Crawling tier ≤ %d…", cfg.max_tier)
     try:
-        survivors = await crawl(cfg, run, follow_links=not args.no_follow)
+        survivors = await crawl(cfg, run, follow_links=not args.no_follow,
+                                already_seen=already_seen)
         log.info("%d candidates survived the free filters.", len(survivors))
         opportunities = evaluate(survivors, cfg, run, budget, use_llm=use_llm)
     except Exception as exc:  # noqa: BLE001
@@ -321,29 +420,42 @@ async def main_async(args: argparse.Namespace) -> int:
         print("--dry-run: nothing written.\n")
         return 0
 
+    sinks = []
     if args.sink == "sheets":
         from sinks.sheets import SheetsSink
 
-        sink = SheetsSink()
-        sink.ensure_config_tab()
-    elif args.sink == "web":
-        from sinks.webjson import WebJsonSink
-
-        sink = WebJsonSink(out_path=args.web_out)
-    else:
+        sheets = SheetsSink()
+        sheets.ensure_config_tab()
+        sinks.append(sheets)
+    elif args.sink == "jsonl":
         from sinks.jsonl import JsonlSink
 
-        sink = JsonlSink(out_dir=args.out)
+        sinks.append(JsonlSink(out_dir=args.out))
+    else:
+        # The default is both: SQLite is what the dashboard reads and what next week's
+        # dedup checks against, and run.json keeps the static export path alive for
+        # the GitHub Actions run and for anyone opening the built site directly.
+        from sinks.sqlite import SqliteSink
+        from sinks.webjson import WebJsonSink
 
-    written = sink.write_opportunities(opportunities)
-    sink.write_run_log(run)
-    print(f"Wrote {written} records via the {sink.name} sink.\n")
+        sinks.append(SqliteSink(run_id=args.run_id))
+        sinks.append(WebJsonSink(out_path=args.web_out))
+
+    written = 0
+    for sink in sinks:
+        written = sink.write_opportunities(opportunities)
+        sink.write_run_log(run)
+    print(f"Wrote {written} records via: {', '.join(s.name for s in sinks)}.\n")
     return 0
 
 
 def main() -> int:
     p = argparse.ArgumentParser(description="RISE San Diego funding opportunity agent")
-    p.add_argument("--sink", choices=["web", "jsonl", "sheets"], default="web")
+    p.add_argument("--sink", choices=["db", "web", "jsonl", "sheets"], default="db",
+                   help="db (default) writes SQLite + run.json; sheets is now export-only")
+    p.add_argument("--run-id", help="attach this run's findings to an existing run row")
+    p.add_argument("--no-archive", action="store_true",
+                   help="skip the monthly dedup and purge (shows repeats again)")
     p.add_argument("--out", default="out", help="output dir for the jsonl sink")
     p.add_argument("--web-out", default="dashboard/public/run.json",
                    help="output path for the web sink (the file the dashboard reads)")
