@@ -27,16 +27,34 @@ def _normalize(text: str | None) -> str:
     return re.sub(r"\s+", " ", text or "").strip().casefold()
 
 
+def _squeeze(text: str) -> str:
+    """Normalized, with whitespace removed entirely rather than collapsed."""
+    return re.sub(r"\s+", "", text or "").casefold()
+
+
 def quote_on_page(quote: str | None, page_text: str) -> bool:
     """True only if `quote` is a non-trivial, verbatim substring of `page_text`.
 
     Whitespace- and case-insensitive (the page text is cleaned before the model sees
     it), but otherwise exact — a paraphrase or a fabricated number will not match.
+
+    Two passes. The first collapses runs of whitespace to a single space, which handles
+    the ordinary case. The second removes whitespace altogether, which handles pages
+    that break a value across elements: the Prebys grant page renders "Up to $150,000"
+    as "$\\n150\\n,\\n000", so the model's (correct) quote of "Up to $150,000" is not a
+    substring of our extracted text under the first pass alone. That cost us a real
+    opportunity on the first scored run.
+
+    The second pass cannot launder a fabrication. Removing whitespace makes matching
+    more permissive about *layout* only — every other character still has to appear in
+    the same order, so an invented number or a paraphrase fails exactly as before.
     """
     q = _normalize(quote)
     if len(q) < _MIN_QUOTE_LEN:
         return False
-    return q in _normalize(page_text)
+    if q in _normalize(page_text):
+        return True
+    return _squeeze(quote) in _squeeze(page_text)
 
 
 def year_in_quote(deadline_iso: str | None, quote: str | None) -> bool:

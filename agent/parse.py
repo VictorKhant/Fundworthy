@@ -182,9 +182,43 @@ def html_to_text(html: str) -> tuple[str, str, list[tuple[str, str]]]:
         return title_text, text, links
 
 
+# A dollar sign followed by a run of digits, commas, periods and whitespace, ending on
+# a digit. Deliberately anchored to `$` so the repair below can only ever touch the
+# inside of a money figure.
+_SPLIT_MONEY = re.compile(r"\$\s*(\d[\d\s,.]*\d|\d)")
+
+
+def _repair_split_amounts(text: str) -> str:
+    """Rejoin dollar figures that the page broke across elements.
+
+    Found on the Prebys "2026 Rooted and Rising" page during the first real scoring run.
+    It reads "Anticipated Grant Awards: Up to $150,000", but each digit group sits in
+    its own element, so the extracted text is:
+
+        Up to $\\n150\\n,\\n000
+
+    Two things went wrong because of it, and they pull in opposite directions:
+
+      - the free tier found NO amount on the page, because `_MONEY` cannot match across
+        those newlines. A real $150,000 opportunity had no award figure at all;
+      - Sonnet read it correctly as $150,000 — it can see through the line breaks — but
+        the verbatim sentence it quoted could not be a literal substring of our mangled
+        text, so the §6 accuracy gate discarded a TRUE value.
+
+    The gate failing that way is the safe direction (we showed "amount not stated"
+    rather than a wrong number) but it is still a loss: this is exactly the kind of
+    opportunity the whole product exists to surface. Repairing the text at the source
+    fixes both halves at once.
+    """
+    return _SPLIT_MONEY.sub(
+        lambda m: "$" + re.sub(r"\s+", "", m.group(1)), text
+    )
+
+
 def _clean(text: str) -> str:
     text = re.sub(r"[ \t\xa0]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
+    text = _repair_split_amounts(text)
     return text.strip()
 
 

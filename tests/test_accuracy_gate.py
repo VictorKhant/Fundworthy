@@ -108,3 +108,52 @@ def _run() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(_run())
+
+
+# --- regression: values split across elements (found on the first scored run) ---
+#
+# The Prebys "2026 Rooted and Rising" page renders "Up to $150,000" with each digit
+# group in its own element, so the extracted text is "Up to $\n150\n,\n000". On the
+# first real scoring run this cost us a genuine $150,000 opportunity twice over: the
+# free tier found no amount at all, and the gate then discarded Sonnet's correct
+# reading because the quote was not a literal substring of our mangled text.
+
+SPLIT_PAGE = (
+    "Guidelines\nGrant Term:\nJuly\n2026\n– December\n2027\n,\n\n18\nmonths\n"
+    "Anticipated Grant Awards:\nUp to $\n150\n,\n000\nTotal Funds for the Initiative:\n"
+    "$\n2\n.\n5\nM\nin funding\n"
+)
+
+
+def test_split_amount_is_repaired_by_the_parser():
+    from agent.parse import _clean, extract_amounts
+
+    cleaned = _clean(SPLIT_PAGE)
+    assert "$150,000" in cleaned, "the split figure was not rejoined"
+    assert "$2.5" in cleaned
+
+    amounts = [e.value for e in extract_amounts(cleaned)]
+    assert 150_000 in amounts, "the free tier still cannot see the award"
+
+
+def test_quote_matches_across_a_split_value():
+    from agent.parse import _clean
+
+    assert quote_on_page("Anticipated Grant Awards: Up to $150,000", _clean(SPLIT_PAGE))
+
+
+def test_whitespace_insensitive_pass_still_rejects_a_fabrication():
+    """The second pass may only forgive layout. An invented number must still fail."""
+    from agent.parse import _clean
+
+    page = _clean(SPLIT_PAGE)
+    assert not quote_on_page("Anticipated Grant Awards: Up to $500,000", page)
+    assert not quote_on_page("Awards of up to $150,000 are made annually", page)
+
+
+def test_repair_does_not_join_unrelated_numbers():
+    from agent.parse import _clean
+
+    assert _clean("We gave $5 million. 2024 was a strong year.") == \
+        "We gave $5 million. 2024 was a strong year."
+    assert _clean("Applications cost $25 to submit") == "Applications cost $25 to submit"
