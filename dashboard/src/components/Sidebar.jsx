@@ -14,7 +14,7 @@ const PAGES = [
   { id: "settings", label: "Settings" },
 ];
 
-export default function Sidebar({ page, setPage, open, setOpen, orgName, onSignOut }) {
+export default function Sidebar({ page, setPage, open, setOpen, orgName, onBrand, onSignOut }) {
   return (
     <>
       <button
@@ -27,10 +27,13 @@ export default function Sidebar({ page, setPage, open, setOpen, orgName, onSignO
       </button>
 
       <nav className={`sidebar ${open ? "open" : ""}`} aria-label="Sections">
-        <div className="brandmark">
+        {/* The wordmark goes home, the way a wordmark does everywhere else. A real
+            <button> rather than an <a href="/welcome">: navigation here is a state change
+            inside the app, and a hard link would drop the whole SPA and refetch it. */}
+        <button className="brandmark" onClick={onBrand} title="Go to the Fundworthy home page">
           Fundworthy
           <span className="brand-dot" aria-hidden="true" />
-        </div>
+        </button>
 
         {AUTH_ENABLED && <OrgSwitcher orgName={orgName} />}
 

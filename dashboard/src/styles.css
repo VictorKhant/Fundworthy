@@ -104,6 +104,14 @@ a:hover { color: var(--accent-deep); }
   background: var(--clay); display: inline-block; flex-shrink: 0;
 }
 
+/* The wordmark is a button (it navigates home), so it has to shed the pill border,
+   background and radius the base button rule gives everything else. */
+button.brandmark {
+  border: 0; background: none; border-radius: 0; width: auto; cursor: pointer;
+}
+button.brandmark:hover:not(:disabled) { border-color: transparent; color: var(--accent-deep); }
+button.brandmark:hover:not(:disabled) .brand-dot { background: var(--clay-deep); }
+
 /* The sidebar is open by default at ≥900px and the toggle would just sit on top of it.
    Hiding it while open rather than at a breakpoint means someone who closes the sidebar
    on a wide screen still gets it back. */

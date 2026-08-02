@@ -82,7 +82,11 @@ export default function App() {
   };
 
   if (screen === "landing") {
-    return <Landing onSignIn={() => go("login")} onCreate={() => go("login")} />;
+    // Where the landing page's buttons lead depends on whether accounts notionally
+    // exist. With the flag off there is nothing to sign into, and routing through a
+    // placeholder form would make the wordmark a one-way door out of the dashboard.
+    const enter = () => go(AUTH_ENABLED ? "login" : "app");
+    return <Landing onSignIn={enter} onCreate={enter} />;
   }
 
   if (screen === "login") {
@@ -100,6 +104,7 @@ export default function App() {
         open={open}
         setOpen={setOpen}
         orgName={orgName}
+        onBrand={() => go("landing")}
         onSignOut={() => go("landing")}
       />
 
