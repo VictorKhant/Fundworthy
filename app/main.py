@@ -64,6 +64,8 @@ class SettingsIn(BaseModel):
     enabled: bool | None = None
     sectors_active: list[str] | None = None
     search_beyond_partners: bool | None = None
+    org_name: str | None = Field(None, max_length=200)
+    org_location: str | None = Field(None, max_length=200)
 
 
 class ApiKeyIn(BaseModel):

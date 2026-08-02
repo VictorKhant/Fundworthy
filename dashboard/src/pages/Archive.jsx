@@ -39,7 +39,7 @@ export default function Archive() {
     return (
       <>
         <header>
-          <h1>Archived findings</h1>
+          <h1>Past findings</h1>
         </header>
         <div className="notice error">{error}</div>
       </>
@@ -55,46 +55,42 @@ export default function Archive() {
   return (
     <>
       <header>
-        <div className="panel-head">
-          <h1>Archived findings</h1>
-          {/* Downloads the month currently selected below, not today's — otherwise
-              picking August and getting July's file is a silent wrong answer. */}
-          {rows.length > 0 && (
-            <a className="button" href={api.exportUrl(month)} download>
-              Download as a spreadsheet
-            </a>
-          )}
-        </div>
-        <p className="muted">
+        <h1>Past findings</h1>
+        <p className="muted small">
           Everything found this month, including what you have already reviewed.
         </p>
       </header>
 
-      <section className="panel">
-        <h2>By month</h2>
+      <div className="row archive-months">
         {data.months?.length === 0 ? (
-          <p className="muted">Nothing archived yet. Run a search on the main page.</p>
+          <p className="muted small">Nothing archived yet. Run a search on This week.</p>
         ) : (
-          <div className="checks">
-            {data.months.map((m) => (
-              <button
-                key={m.month_key}
-                className={m.month_key === month ? "primary" : "ghost"}
-                onClick={() => setMonth(m.month_key)}
-              >
-                {monthName(m.month_key)} — {m.total}
-                {m.month_key === data.current_month && " (this month)"}
-              </button>
-            ))}
-          </div>
+          data.months.map((m) => (
+            <button
+              key={m.month_key}
+              className={m.month_key === month ? "dark" : ""}
+              onClick={() => setMonth(m.month_key)}
+            >
+              {monthName(m.month_key)} — {m.total}
+              {m.month_key === data.current_month && " (this month)"}
+            </button>
+          ))
         )}
-        <p className="muted small">
-          The archive keeps the current month. When a search runs in a new month, the
-          previous month's rows are cleared — that is what stops you being shown the same
-          grant every week, and it means anything still open gets a fresh look next month
-          rather than being hidden forever.
-        </p>
-      </section>
+        {/* Downloads the month currently selected, not today's — otherwise picking
+            August and getting July's file is a silent wrong answer. */}
+        {rows.length > 0 && (
+          <a className="button" href={api.exportUrl(month)} download>
+            Download spreadsheet
+          </a>
+        )}
+      </div>
+
+      <div className="archive-note">
+        The archive keeps the current month. When a search runs in a new month, the
+        previous month's rows are cleared — that is what stops you being shown the same
+        grant every week, and it means anything still open gets a fresh look next month
+        rather than being hidden forever.
+      </div>
 
       {month && (
         <Findings

@@ -13,6 +13,8 @@
 //   - Login.jsx's onSubmit stops calling straight through to the app
 // HANDOFF.md says what has to change on the server before any of that is safe.
 
+import { orgLabel } from "./api";
+
 // Off by default. `./start.sh` must still open straight onto the dashboard with no
 // sign-in wall in front of a local, single-user, localhost-bound app.
 //
@@ -21,6 +23,10 @@
 // *behaves* as though accounts exist: whether "/" lands on the marketing page, and
 // whether the sidebar grows an org switcher and a Sign out.
 export const AUTH_ENABLED = import.meta.env.VITE_SHOW_AUTH === "1";
+
+// orgLabel returns a sentence-case fallback ("your organization") because most of its
+// uses are mid-sentence. This one is a proper-noun slot, so it gets a capital.
+const titleCase = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
 export function initials(name) {
   return (name || "")
@@ -40,7 +46,7 @@ export const STUB_SESSION = { name: "Signed-in user", email: "" };
 // yet — there is no second database to switch to.
 export function stubOrgs(activeName) {
   return [
-    { id: "active", name: activeName || "Your organization", active: true },
+    { id: "active", name: titleCase(orgLabel(activeName)), active: true },
     { id: "stub", name: "Harbor Youth Collective", active: false },
   ];
 }

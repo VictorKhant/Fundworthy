@@ -570,6 +570,33 @@ footer {
   border-top: 1px solid var(--line); font-size: 13px; color: var(--muted);
 }
 
+/* --- past findings --------------------------------------------------------- */
+
+.archive-months { margin-bottom: 18px; gap: 8px; }
+/* Dashed, because it explains a deletion. A solid panel would read as another section
+   of results; this is a note about why some are missing. */
+.archive-note {
+  background: var(--panel); border: 1px dashed #D9D4C8; border-radius: 14px;
+  padding: 16px 20px; margin-bottom: 18px;
+  font-size: 13.5px; color: var(--muted); max-width: 74ch;
+}
+
+/* --- settings -------------------------------------------------------------- */
+
+.settings-lede { margin: 0 0 16px; color: var(--body); font-size: 14px; max-width: 64ch; }
+
+/* The key walkthrough. Clay numerals, because "go to console.anthropic.com" is not
+   instructions to someone who has never been there. */
+.steps { list-style: none; margin: 0 0 18px; padding: 0;
+         display: flex; flex-direction: column; gap: 10px; }
+.steps li { display: flex; gap: 12px; align-items: baseline; font-size: 14px; color: var(--body); }
+.step-n { font-family: var(--display); color: var(--clay); font-size: 17px; min-width: 18px; }
+
+.keyrow { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.keyrow .field { flex: 1; min-width: 240px; margin: 0; }
+.notice-action { color: inherit; font-weight: 600; font-size: inherit; }
+.notice-action:hover:not(:disabled) { text-decoration: underline; }
+
 /* --- landing page ---------------------------------------------------------- */
 /* Public, marketing, no API. Runs a notch larger than the app: 16px against 15px,
    because it is read once at arm's length rather than scanned weekly. */

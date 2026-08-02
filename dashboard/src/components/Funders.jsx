@@ -59,7 +59,7 @@ function Editor({ initial, sectors, onSave, onCancel }) {
           checked={!!form.warm}
           onChange={(e) => setForm({ ...form, warm: e.target.checked })}
         />
-        <span>RISE already has a relationship with them</span>
+        <span>We already have a relationship with them</span>
       </label>
 
       <label className="field">

@@ -62,7 +62,7 @@ function Editor({ initial, onSave, onCancel, globalFloor }) {
           <input
             value={url}
             onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://www.risesandiego.org/programs/…"
+            placeholder="https://your-organization.org/programs/…"
           />
           <button onClick={draft} disabled={drafting || !url}>
             {drafting ? "Reading the page…" : "Read this page for me"}
@@ -79,7 +79,7 @@ function Editor({ initial, onSave, onCancel, globalFloor }) {
 
       <label className="field">
         <span>Program name</span>
-        <input value={form.name} onChange={set("name")} placeholder="RISE Arts" />
+        <input value={form.name} onChange={set("name")} placeholder="Arts &amp; Cultural Equity" />
       </label>
 
       <label className="field">
