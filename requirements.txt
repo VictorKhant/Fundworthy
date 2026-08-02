@@ -11,3 +11,9 @@ gspread==6.1.4             # Google Sheets sink
 google-auth==2.35.0        # service-account credentials
 
 anthropic==0.120.2         # Block 2 — Haiku triage / Sonnet scoring (needs output_config + adaptive thinking)
+
+# --- the local control surface (docs/PLAN.md §1) -----------------------------
+fastapi==0.141.1           # the REST API the dashboard calls
+uvicorn[standard]==0.52.1  # the server start.sh runs
+cryptography==50.0.0       # Fernet — the API key is never stored in plaintext
+pytest==9.1.1              # the test suite
