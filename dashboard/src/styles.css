@@ -104,6 +104,11 @@ a:hover { color: var(--accent-deep); }
   background: var(--clay); display: inline-block; flex-shrink: 0;
 }
 
+/* The sidebar is open by default at ≥900px and the toggle would just sit on top of it.
+   Hiding it while open rather than at a breakpoint means someone who closes the sidebar
+   on a wide screen still gets it back. */
+.shell.with-sidebar .sidebar-toggle { display: none; }
+
 .sidebar-link {
   display: flex; align-items: center; gap: 10px;
   padding: 9px 12px; border-radius: 10px;
@@ -114,6 +119,57 @@ a:hover { color: var(--accent-deep); }
 .sidebar-link.current { background: var(--nav-active); font-weight: 600; }
 .sidebar-icon { width: 16px; text-align: center; opacity: .7; font-size: 13px; }
 .sidebar-foot { margin-top: auto; padding: 14px 10px 4px; border-top: 1px solid var(--line); }
+
+/* --- org switcher + user chip (both behind VITE_SHOW_AUTH) ----------------- */
+
+.orgswitch { position: relative; margin-bottom: 14px; }
+.orgswitch-btn {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; padding: 10px 12px; border-radius: 12px;
+  border: 1px solid var(--line); background: var(--card);
+  font: inherit; font-size: 14px; text-align: left; cursor: pointer;
+}
+.orgswitch-label { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.orgswitch-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.orgswitch-caret { color: var(--muted); font-size: 11px; flex-shrink: 0; }
+.orgswitch-avatar {
+  width: 26px; height: 26px; border-radius: 8px; flex-shrink: 0;
+  background: var(--accent-soft); color: var(--accent);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 13px;
+}
+.orgswitch-avatar.alt { background: var(--clay-soft); color: var(--clay); }
+
+.orgswitch-menu {
+  position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 40;
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: var(--shadow); padding: 6px;
+}
+.orgswitch-item {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 8px 10px; border-radius: 8px; border: 0; background: none;
+  font: inherit; font-size: 13.5px; text-align: left; cursor: pointer;
+}
+.orgswitch-item:hover:not(:disabled) { background: var(--line-soft); border-color: transparent; }
+.orgswitch-item.current { background: var(--line-soft); }
+.orgswitch-item.add { color: var(--accent); }
+.orgswitch-item .orgswitch-avatar { width: 22px; height: 22px; border-radius: 6px; font-size: 11px; }
+.orgswitch-rule { height: 1px; background: var(--line); margin: 5px 4px; }
+
+.userchip { display: flex; align-items: center; gap: 10px; }
+.avatar {
+  width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+  background: #E9E5DC; color: var(--body);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-weight: 600; font-size: 12.5px;
+}
+.userchip-text { min-width: 0; }
+.userchip-name {
+  display: block; font-size: 13.5px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.userchip-out { font-size: 12px; color: var(--muted); }
+.userchip-out:hover:not(:disabled) { color: var(--fg); }
 
 .scrim { position: fixed; inset: 0; z-index: 20; background: rgba(51, 49, 44, .28); }
 @media (min-width: 900px) { .scrim { display: none; } }
@@ -512,4 +568,169 @@ tbody tr:last-child td { border-bottom: none; }
 footer {
   margin-top: 40px; padding-top: 16px;
   border-top: 1px solid var(--line); font-size: 13px; color: var(--muted);
+}
+
+/* --- landing page ---------------------------------------------------------- */
+/* Public, marketing, no API. Runs a notch larger than the app: 16px against 15px,
+   because it is read once at arm's length rather than scanned weekly. */
+
+.lp { font-size: 16px; }
+.lp h2, .lp p { margin: 0; }
+.lp-nav {
+  display: flex; align-items: center; justify-content: space-between; gap: 24px;
+  max-width: 1080px; margin: 0 auto; padding: 22px 28px;
+}
+.lp-brand { padding: 0; font-size: 23px; }
+.lp-navlinks { display: flex; align-items: center; gap: 26px; font-size: 14.5px; }
+.lp-navlinks a { color: var(--body); text-decoration: none; }
+.lp-navlinks a:hover { color: var(--fg); }
+.lp-signin { color: var(--body); font-size: 14.5px; }
+.lp-signin:hover:not(:disabled) { color: var(--fg); }
+
+.lp-hero {
+  max-width: 1080px; margin: 0 auto; padding: 72px 28px 56px;
+  display: grid; grid-template-columns: 1.05fr .95fr; gap: 56px; align-items: center;
+}
+.lp-eyebrow {
+  margin: 0 0 18px !important; font-size: 13px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--muted); font-weight: 600;
+}
+.lp-h1 {
+  font-family: var(--display); font-weight: 500; font-size: 52px; line-height: 1.12;
+  margin: 0 0 20px; letter-spacing: -.015em;
+}
+.lp-h1 em { color: var(--accent); }
+.lp-lede { margin: 0 0 30px !important; font-size: 18px; color: var(--body); max-width: 44ch; }
+.lp-cta { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.lp-cta-center { justify-content: center; margin-top: 36px; }
+.lp-bigbtn { padding: 13px 26px; font-size: 16px; }
+.lp-ghostlink { color: var(--body); text-decoration: none; padding: 13px 10px; font-size: 16px; }
+.lp-fineprint { margin: 26px 0 0 !important; font-size: 13.5px; color: var(--muted); }
+
+.lp-mock {
+  background: var(--card); border: 1px solid var(--line); border-radius: 18px;
+  padding: 22px; box-shadow: var(--shadow);
+}
+.lp-mock-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin-bottom: 14px;
+}
+.lp-mock-title {
+  font-size: 13px; font-weight: 600; color: var(--muted);
+  letter-spacing: .1em; text-transform: uppercase;
+}
+.lp-mock-row {
+  border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+  display: flex; gap: 14px; align-items: flex-start;
+}
+.lp-mock-score { font-size: 22px; min-width: 44px; }
+.lp-mock-foot { margin: 14px 2px 0 !important; font-size: 12.5px; color: var(--muted); }
+
+.lp-section { max-width: 1080px; margin: 0 auto; padding: 64px 28px; }
+.lp-centered { text-align: center; }
+.lp-centered .lp-sub { margin-left: auto; margin-right: auto; }
+.lp-h2 {
+  font-family: var(--display); font-weight: 500; font-size: 34px;
+  margin: 0 0 10px; letter-spacing: -.01em;
+}
+.lp-sub { color: var(--body); max-width: 56ch; margin-bottom: 36px !important; }
+.lp-em { font-family: var(--display); font-style: italic; }
+
+.lp-three { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+.lp-card {
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: 16px; padding: 26px 24px;
+}
+.lp-card p { font-size: 15px; color: var(--body); }
+.lp-step { font-family: var(--display); font-size: 20px; color: var(--clay); margin-bottom: 12px; }
+
+.lp-band { background: var(--card); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.lp-band-inner {
+  max-width: 1080px; margin: 0 auto; padding: 56px 28px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: center;
+}
+.lp-band-inner .lp-sub { margin-bottom: 0 !important; max-width: 48ch; }
+.lp-principles { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.lp-principles li { display: flex; gap: 12px; align-items: baseline; font-size: 15.5px; }
+.lp-principles li > span:first-child { color: var(--accent); font-weight: 700; }
+
+.lp-stats {
+  display: inline-flex; gap: 40px; background: var(--card);
+  border: 1px solid var(--line); border-radius: 16px; padding: 28px 44px;
+}
+.lp-stat { font-family: var(--display); font-size: 36px; color: var(--accent); line-height: 1.2; }
+.lp-statlabel { font-size: 13px; color: var(--muted); }
+.lp-statrule { width: 1px; background: var(--line); }
+
+.lp-footer {
+  max-width: 1080px; margin: 0 auto; padding: 28px;
+  display: flex; justify-content: space-between; align-items: center; gap: 20px;
+  border-top: 1px solid var(--line); color: var(--muted); font-size: 13.5px;
+}
+.lp-footmark { font-family: var(--display); font-size: 17px; color: var(--body); }
+
+@media (max-width: 880px) {
+  .lp-hero, .lp-band-inner { grid-template-columns: 1fr; gap: 36px; }
+  .lp-three { grid-template-columns: 1fr; }
+  .lp-h1 { font-size: 38px; }
+  .lp-nav { flex-wrap: wrap; gap: 14px; }
+  .lp-stats { flex-direction: column; gap: 20px; padding: 24px 32px; }
+  .lp-statrule { width: auto; height: 1px; }
+  .lp-footer { flex-direction: column; align-items: flex-start; }
+}
+
+/* --- sign in / create account (placeholder, see auth.js) ------------------- */
+
+.authwrap {
+  min-height: 100vh; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; padding: 32px 20px;
+}
+button.authbrand {
+  padding: 0; margin-bottom: 28px; font-size: 24px;
+  border: 0; background: none; cursor: pointer;
+}
+button.authbrand:hover { border-color: transparent; }
+.authcard {
+  background: var(--card); border: 1px solid var(--line); border-radius: 18px;
+  padding: 34px 34px 28px; width: 100%; max-width: 400px; box-shadow: var(--shadow);
+}
+.auth-h1 { font-family: var(--display); font-weight: 500; font-size: 26px;
+           margin: 0 0 6px; letter-spacing: -.01em; }
+.auth-sub { margin: 0 0 22px; color: var(--muted); font-size: 14.5px; }
+
+.auth-oauth { display: flex; flex-direction: column; gap: 10px; }
+.oauth-btn {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  width: 100%; padding: 11px; border-radius: 10px; font-size: 15px; font-weight: 500;
+}
+/* Disabled, because there is no OAuth flow behind them — but not at the .5 opacity the
+   base rule uses, which reads as "this broke" rather than "this isn't connected yet".
+   The tooltip says which. */
+.oauth-btn:disabled { opacity: .7; }
+/* Neutral marks, not the real logos. Google and Microsoft both publish branding rules
+   for sign-in buttons, and a button wearing a real logo would claim an integration that
+   does not exist. Proper branded buttons when a real OAuth flow is behind them. */
+.oauth-mark.g { font-weight: 700; color: var(--accent); font-family: var(--display); font-size: 17px; }
+.oauth-mark.grid {
+  display: inline-grid; grid-template-columns: 7px 7px; grid-template-rows: 7px 7px; gap: 1.5px;
+}
+.oauth-mark.grid > span:nth-child(1) { background: #B4826A; }
+.oauth-mark.grid > span:nth-child(2) { background: #7FA98D; }
+.oauth-mark.grid > span:nth-child(3) { background: #8B9DB8; }
+.oauth-mark.grid > span:nth-child(4) { background: #C9B36A; }
+
+.auth-divider { display: flex; align-items: center; gap: 12px; margin: 20px 0; }
+.auth-divider > span:first-child, .auth-divider > span:last-child { flex: 1; height: 1px; background: var(--line); }
+.auth-divider-text { font-size: 12.5px; color: var(--muted); flex: none !important; height: auto !important; }
+
+.authcard .field { margin: 0 0 14px; }
+.authcard input { background: var(--panel); padding: 11px 13px; font-size: 15px; }
+.auth-forgot { text-align: right; margin-bottom: 16px; }
+.auth-forgot .text { font-size: 13px; }
+.auth-cta { width: 100%; padding: 12px; font-size: 15.5px; margin-top: 2px; }
+.auth-switch { margin: 20px 0 0; text-align: center; font-size: 14px; color: var(--muted); }
+.auth-switch .text { font-weight: 500; font-size: 14px; color: var(--accent); }
+.auth-foot {
+  margin: 22px 0 0; font-size: 13px; color: var(--muted);
+  max-width: 380px; text-align: center;
 }

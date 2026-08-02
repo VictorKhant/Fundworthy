@@ -1,0 +1,75 @@
+import { AUTH_ENABLED, initials, STUB_SESSION } from "../auth";
+import OrgSwitcher from "./OrgSwitcher";
+
+// The shell's navigation. Three views, no router library — three views never justified a
+// dependency someone would have to keep updated, and they still don't.
+//
+// The account chrome (org switcher, user chip, Sign out) only appears behind
+// VITE_SHOW_AUTH. Without it this is a local single-user app and a "Sign out" that signs
+// you out of nothing is a lie told in the furniture.
+
+const PAGES = [
+  { id: "dashboard", label: "This week" },
+  { id: "archive", label: "Past findings" },
+  { id: "settings", label: "Settings" },
+];
+
+export default function Sidebar({ page, setPage, open, setOpen, orgName, onSignOut }) {
+  return (
+    <>
+      <button
+        className="sidebar-toggle"
+        onClick={() => setOpen(!open)}
+        aria-label={open ? "Hide the menu" : "Show the menu"}
+        aria-expanded={open}
+      >
+        ☰
+      </button>
+
+      <nav className={`sidebar ${open ? "open" : ""}`} aria-label="Sections">
+        <div className="brandmark">
+          Fundworthy
+          <span className="brand-dot" aria-hidden="true" />
+        </div>
+
+        {AUTH_ENABLED && <OrgSwitcher orgName={orgName} />}
+
+        {PAGES.map((p) => (
+          <button
+            key={p.id}
+            className={`sidebar-link ${page === p.id ? "current" : ""}`}
+            onClick={() => {
+              setPage(p.id);
+              if (window.innerWidth < 900) setOpen(false);
+            }}
+            aria-current={page === p.id ? "page" : undefined}
+          >
+            {p.label}
+          </button>
+        ))}
+
+        <div className="sidebar-foot">
+          {AUTH_ENABLED ? (
+            <div className="userchip">
+              <span className="avatar" aria-hidden="true">{initials(STUB_SESSION.name)}</span>
+              <span className="userchip-text">
+                <span className="userchip-name">{STUB_SESSION.name}</span>
+                <button className="text userchip-out" onClick={onSignOut}>
+                  Sign out
+                </button>
+              </span>
+            </div>
+          ) : (
+            <div className="muted small">
+              Runs on this computer.
+              <br />
+              Nothing is public.
+            </div>
+          )}
+        </div>
+      </nav>
+
+      {open && <div className="scrim" onClick={() => setOpen(false)} />}
+    </>
+  );
+}
