@@ -20,8 +20,12 @@ import { orgLabel } from "./api";
 //
 // The screens stay reachable at /welcome and /signin even with the flag off, so they can
 // be reviewed and demoed without rebuilding. What the flag controls is whether the app
-// *behaves* as though accounts exist: whether "/" lands on the marketing page, and
-// whether the sidebar grows an org switcher and a Sign out.
+// *behaves* as though accounts exist: whether "/" lands on the marketing page, whether
+// the sidebar carries a user chip and a Sign out, and whether the org switcher offers a
+// second organisation to switch to.
+//
+// The org switcher itself is NOT gated. Naming the organisation this install belongs to
+// is true today — see stubOrgs below.
 export const AUTH_ENABLED = import.meta.env.VITE_SHOW_AUTH === "1";
 
 // orgLabel returns a sentence-case fallback ("your organization") because most of its
@@ -41,12 +45,16 @@ export function initials(name) {
 // The signed-in person. Not read from anywhere — there is nobody to read.
 export const STUB_SESSION = { name: "Signed-in user", email: "" };
 
-// One real organisation (whatever this install is set up for) and one invented second
-// one, so the switcher demonstrates what it is for. Adding an organisation opens nothing
-// yet — there is no second database to switch to.
+// The organisation this install is set up for, from the org_name setting — that part is
+// real. Adding one opens nothing yet: there is no second database to switch to.
+//
+// The invented second organisation only appears when accounts are notionally on, where
+// it demonstrates what the switcher is for. On a real single-org install it would just
+// be a stranger's name sitting in her sidebar.
 export function stubOrgs(activeName) {
-  return [
-    { id: "active", name: titleCase(orgLabel(activeName)), active: true },
-    { id: "stub", name: "Harbor Youth Collective", active: false },
-  ];
+  const orgs = [{ id: "active", name: titleCase(orgLabel(activeName)), active: true }];
+  if (AUTH_ENABLED) {
+    orgs.push({ id: "stub", name: "Harbor Youth Collective", active: false });
+  }
+  return orgs;
 }

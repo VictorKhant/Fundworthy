@@ -35,7 +35,11 @@ export default function Sidebar({ page, setPage, open, setOpen, orgName, onBrand
           <span className="brand-dot" aria-hidden="true" />
         </button>
 
-        {AUTH_ENABLED && <OrgSwitcher orgName={orgName} />}
+        {/* Always visible, unlike the rest of the account chrome. Naming who this
+            install belongs to is true right now — it comes from the org_name setting —
+            and it is the one piece that is not waiting on accounts to mean something.
+            What it cannot yet do (switch, add) says so in a tooltip. */}
+        <OrgSwitcher orgName={orgName} />
 
         {PAGES.map((p) => (
           <button
