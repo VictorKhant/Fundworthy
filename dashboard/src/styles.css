@@ -1,0 +1,111 @@
+/* Plain, legible, light and dark. Nothing here needs to be clever — the audience is
+   a COO glancing at it once a week to confirm the agent is alive. */
+
+:root {
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+  --muted: #666666;
+  --line: #e2e2e2;
+  --panel: #fafafa;
+  --ok: #1a7f4b;
+  --warn: #a35c00;
+  --off: #a11b1b;
+  --accent: #2b5fa8;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16181c;
+    --fg: #ececec;
+    --muted: #9a9a9a;
+    --line: #2c2f36;
+    --panel: #1d2026;
+    --ok: #4fbf85;
+    --warn: #e0a44a;
+    --off: #e56a6a;
+    --accent: #6fa3e8;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+.page { max-width: 1100px; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
+
+header h1 { margin: 0 0 .35rem; font-size: 1.6rem; letter-spacing: -0.01em; }
+
+.muted { color: var(--muted); }
+.small { font-size: .85rem; }
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: .75rem;
+  margin: 1.75rem 0;
+}
+
+.stat {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: .9rem 1rem;
+  background: var(--panel);
+}
+.stat-label { font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.stat-value { font-size: 1.5rem; font-weight: 600; margin: .2rem 0; }
+.stat-sub { font-size: .82rem; color: var(--muted); }
+.stat.ok   .stat-value { color: var(--ok); }
+.stat.off  .stat-value { color: var(--off); }
+.stat.warn .stat-sub   { color: var(--warn); font-weight: 600; }
+.stat.compact .stat-value { font-size: 1.15rem; }
+
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 1.1rem 1.2rem;
+  margin-bottom: 1.25rem;
+  background: var(--panel);
+}
+.panel h2 { margin: 0 0 .8rem; font-size: 1.05rem; }
+
+.costbar {
+  position: relative;
+  height: 12px;
+  border-radius: 6px;
+  background: var(--line);
+  overflow: visible;
+}
+.costbar-fill { height: 100%; border-radius: 6px; background: var(--accent); transition: width .3s; }
+.costbar-target {
+  position: absolute; top: -4px; width: 2px; height: 20px; background: var(--warn);
+}
+
+/* Wide content scrolls inside its own container — the page never scrolls sideways. */
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; }
+th, td {
+  text-align: left;
+  padding: .5rem .65rem;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+th { font-weight: 600; color: var(--muted); font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; }
+td.notes { white-space: normal; min-width: 22rem; color: var(--muted); font-size: .82rem; }
+tbody tr:last-child td { border-bottom: none; }
+
+.empty {
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  padding: 2rem 1.25rem;
+  text-align: center;
+  background: var(--panel);
+}
+.empty h2 { margin: 0 0 .4rem; font-size: 1.05rem; }
+.empty p { margin: 0; color: var(--muted); }
+
+footer { margin-top: 2.5rem; padding-top: 1.25rem; border-top: 1px solid var(--line); }

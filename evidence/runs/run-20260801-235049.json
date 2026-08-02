@@ -1,0 +1,17 @@
+{
+  "started_at": "2026-08-01T23:50:47.633291+00:00",
+  "finished_at": "2026-08-01T23:50:49.916835+00:00",
+  "sources_attempted": 6,
+  "sources_ok": 6,
+  "sources_failed": 0,
+  "candidates_parsed": 28,
+  "rejected_by_filter": {},
+  "opportunities_scored": 2,
+  "opportunities_not_stated": 21,
+  "usd_spent": 0.0,
+  "stop_reason": "sources_exhausted",
+  "notes": [
+    "SKIPPED (no confirmed URL): The Morales Fund",
+    "SKIPPED (no confirmed URL): The Villegas Fund"
+  ]
+}
