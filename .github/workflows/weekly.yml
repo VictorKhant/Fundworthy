@@ -3,6 +3,28 @@
 # Wednesday 11pm PT -> the brief is sitting in the Sheet when Mauri opens it
 # Thursday morning, before her Thursday meeting.
 #
+# ─── KNOWN GAP, v2 ──────────────────────────────────────────────────────────────
+# This scheduled run and the local dashboard now read config from DIFFERENT PLACES,
+# and neither one can see the other's settings.
+#
+#   local app  ->  data/rise.db   (what Mauri edits; gitignored, and it holds her
+#                                  encrypted API key, so it must never be committed)
+#   this job   ->  the Google Sheet Config tab  (agent/config.py's fallback path)
+#
+# So a floor she changes on the dashboard does NOT change what runs here. That is a
+# real limitation, not an oversight, and it is the reason this workflow has never been
+# switched on: the local app is the product for v2, and turning this on as well would
+# mean two agents with two different ideas of what Mauri wants.
+#
+# Whoever picks this up has three honest options, in rough order of effort:
+#   1. Leave it off. The dashboard's Re-run button covers the weekly job.
+#   2. Keep the Sheet Config tab as the single source for BOTH — agent/config.py
+#      already reads it; the dashboard would need to write to it.
+#   3. Deploy the app (see HANDOFF.md "If you deploy it") and drop the cron entirely.
+#
+# Until one of those is chosen, this file stays as documented, working, and inactive.
+# ────────────────────────────────────────────────────────────────────────────────
+#
 # Mauri never touches this file. Her controls are the Config tab of the Sheet:
 # set ENABLED to FALSE and the run below exits at step 0, before any network call.
 

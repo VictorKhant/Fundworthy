@@ -5,6 +5,24 @@ Working spec for Claude Code. Read this before writing any code in this repo.
 Built at the AI Trailblazers Social Impact Hack-AI-thon, San Diego, Aug 1–2 2026.
 The partner organization (RISE San Diego) owns this work.
 
+> ### ⚠️ v2 — five rules below are deliberately reversed
+>
+> After a follow-up conversation with RISE, five things in this file are no longer
+> correct. They were changed on purpose, with the reasoning recorded in
+> **`docs/PLAN.md` §0** and **`docs/DECISIONS.md`** — not drifted away from.
+>
+> | This file says | Now | Where |
+> |---|---|---|
+> | §3 "❌ Editing configuration in the dashboard" | **Reversed** — config lives in the dashboard, backed by SQLite | §3, §4 |
+> | §4 "The Sheet *is* the product" | **Demoted** — the dashboard is; the Sheet is an export target | §4 |
+> | §5 "No server to maintain" | **Reversed** — a local FastAPI backend | §5 |
+> | §11 Q1 "Do not guess at MIN_AWARD" | **Answered: $10,000** | §7, §11 |
+> | §11 Q3 government RFPs? | **Answered: yes** | §7, §11 |
+>
+> Everything else still binds — in particular **§6's accuracy rules**, **§8's cost
+> ceilings and kill switch**, and **§3's remaining non-goals** (no accounts, no auth,
+> no writing applications, no email). Those were never the parts that were wrong.
+
 ---
 
 ## 1. The problem, in the stakeholder's own words
@@ -63,19 +81,45 @@ not do her job (see Non-goals).
 
 Explicitly out of scope for v1. If you find yourself building one of these, stop.
 
-- ❌ User accounts, login, or auth on the dashboard. v1 dashboard is **read-only** and
-  link-shared. This removes the entire OAuth surface.
+- ❌ User accounts, login, or auth on the dashboard. **Still true, and it is what makes
+  the local-only design necessary rather than lazy:** the app stores an API key, so if
+  it is not reachable from the network there is nothing to authenticate. It binds to
+  localhost. `HANDOFF.md` says what has to change before it is ever exposed.
 - ❌ Multi-tenant / other-org support. Preserve *optionality* via the adapter pattern
   (§6), build nothing more.
 - ❌ Writing or submitting applications. The agent stops at a ranked, sourced list.
 - ❌ Sending any email on RISE's behalf.
-- ❌ Editing configuration in the dashboard. Config lives in a Sheets tab she already
-  knows how to edit.
+- ~~❌ Editing configuration in the dashboard.~~ **REVERSED (v2).** Config is now the
+  dashboard's whole job — award floor, deadline runway, result cap, spend limit, which
+  sectors, which programs, which funders. A spreadsheet cell cannot express "search
+  these three programs, with these terms, at this floor, this week", and that is what
+  she asked for. See `docs/PLAN.md` §0.
 - ❌ Any unbounded loop. Every run has a hard cost ceiling and a hard stop.
 
 ---
 
 ## 4. Architecture
+
+> **v2 supersedes this section.** The current shape is in `docs/PLAN.md` §1:
+>
+> ```
+>   ./start.sh ──▶ FastAPI (localhost:8000) ──▶ dashboard/dist (React)
+>                        │
+>                        ├── data/rise.db  ← settings · programs · funders
+>                        │                    findings · runs · the API key
+>                        │
+>                        └── subprocess: python -m agent.run  (unchanged pipeline)
+>                                          │
+>                                          └── sinks/{sqlite,webjson,sheets}.py
+> ```
+>
+> The pipeline below is intact — fetch, parse, deterministic filters, Haiku triage,
+> Sonnet scoring, `Opportunity` records, sinks. What changed is where config comes from
+> (SQLite, not the Sheet), where results go (SQLite first), and that there is now a
+> local server so Mauri has controls. The GitHub Actions cron still exists and still
+> works; it is no longer the only way to run.
+
+The original v1 shape, for reference:
 
 ```
                      ┌──────────────────────────────┐
@@ -189,7 +233,7 @@ class Opportunity:
 ### Hard filters (reject before any LLM call — these are free)
 
 ```
-REJECT if award_max < MIN_AWARD                    # ← TBD, see §11. The main filter.
+REJECT if award_max < MIN_AWARD                    # ← $10,000. ANSWERED. The main filter.
 REJECT if deadline is within 14 days               # can't do a 10-hr app well
 REJECT if geography excludes San Diego County,
           Imperial County, California, or national
@@ -214,9 +258,29 @@ Also relevant as intermediaries/networks: Catalyst of San Diego & Imperial Count
 USD Nonprofit Institute, Live Well San Diego, San Diego Regional Arts and Culture
 Coalition.
 
-### Three programs, three vocabularies
+### Programs, and their vocabularies
 
-Do **not** run one search across all three. They live in different funder universes.
+> **v2:** RISE has **seven** programs it wants funded, not three — Inclusive Leadership
+> in Action (ILIA) Awards, RISE Now, RISE Urban Leadership Fellows, On the RISE, RISE
+> Resilience & Renewal, Nonprofit Partnerships Training, RISE Arts. The three below are
+> the priorities Mauri named and the only ones ticked on by default.
+>
+> They are no longer hardcoded. Programs are **editable cards** in the dashboard, and the
+> scoring prompt and response schema are generated from whichever ones are ticked
+> (`agent/score.py: org_context`). A program she adds on Sunday is searchable on
+> Wednesday with nobody editing Python.
+>
+> The three tables below are the seed content for the priority cards — they came from
+> the intake conversation, so they are real. The other four ship **empty**, with only a
+> name and their real risesandiego.org URL, because inventing a description of a real
+> organisation's programme is the same failure §6 forbids for award amounts. Filling
+> them in is what the card assistant is for.
+>
+> Also worth raising with Mauri: risesandiego.org/programs actually lists **ten**
+> programs, including three we were not told about (Community Impact Showcase, RISE
+> Urban Breakfast Club, RISE Consult). See `STAKEHOLDER.md`.
+
+Do **not** run one search across all of them. They live in different funder universes.
 
 | Program | Funder-facing language | Funder type |
 |---|---|---|
@@ -330,17 +394,19 @@ human-AI collaboration you will produce all weekend.
 
 ## 11. Open questions — blocking
 
-| # | Question | Blocks | Owner |
+| # | Question | Blocks | Status |
 |---|---|---|---|
-| 1 | **What is the smallest award worth 10 hours of team time?** | `MIN_AWARD`, the primary filter | Mauri |
-| 2 | Does RISE have Candid / Foundation Directory / Instrumentl access? If not, which ~20 funder pages should we watch? | `sources.py` — the whole crawl scope | Mauri |
-| 3 | Government contracts and RFPs too, or grants only? | doubles source scope (SAM.gov, County/City procurement) | Mauri |
-| 4 | Can RISE meet a 1:1 match requirement? | hard filter | Mauri |
-| 5 | Forced-rank: award size / win likelihood / program fit / funder warmth / low reporting burden | score weights §7 | Mauri |
-| 6 | Who owns the Anthropic API key and this repo after Sunday? Name + payment method. | handoff, §12 | RISE |
-| 7 | Annual operating budget and EIN | Org Profile tab; funders filter on these | Mauri |
+| 1 | **What is the smallest award worth 10 hours of team time?** | `MIN_AWARD`, the primary filter | ✅ **$10,000.** Editable on the dashboard. |
+| 2 | Candid / Foundation Directory / Instrumentl access? If not, which ~20 funder pages? | the crawl scope | ⚠️ Partial — the list is now editable, so this stops being a code question |
+| 3 | Government contracts and RFPs too, or grants only? | source scope | ✅ **Yes.** Ticking the sector raises the crawl tier. |
+| 4 | Can RISE meet a 1:1 match requirement? | hard filter | ❌ Open. Still flagged, not filtered. |
+| 5 | Forced-rank: award size / win likelihood / program fit / funder warmth / low reporting burden | score weights §7 | ❌ Open. Prompt says PROVISIONAL. |
+| 6 | Who owns the Anthropic API key and this repo after Sunday? Name + payment method. | handoff, §12 | ❌ Open — but now concrete: whoever pastes the key on the Settings page owns the bill. |
+| 7 | Annual operating budget and EIN | funders filter on these | ❌ Open. |
 
-Do not guess at #1. Everything downstream depends on it.
+`STAKEHOLDER.md` carries the full list, including four more that came out of building
+(the real time-spent figure, the four sectors, the ten-vs-seven programs, and the
+calibration fixtures).
 
 ---
 

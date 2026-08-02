@@ -27,13 +27,13 @@ problem worse. Everything in this repo follows from that one sentence.
 
 | # | Question | Blocks | Status |
 |---|---|---|---|
-| 1 | **Smallest award worth 10 hours of team time?** | `MIN_AWARD`, the primary filter | ❌ **UNANSWERED — top priority.** Running on a `$25,000` placeholder that is labeled as such in the Config tab, in the run output, and here. Not an answer. |
-| 2 | Candid / Foundation Directory / Instrumentl access? If not, which ~20 funder pages? | crawl scope | ⚠️ Partial. Built from the 8 warm funders in §7. See "New questions" below. |
-| 3 | Government contracts and RFPs too, or grants only? | doubles source scope | ❌ Unanswered. Tier 3 registered but disabled. |
-| 4 | Can RISE meet a 1:1 match requirement? | hard filter | ❌ Unanswered. Filter not written. |
-| 5 | Forced-rank: award size / win likelihood / program fit / funder warmth / low reporting burden | score weights §7 | ❌ Unanswered. §7's placeholder 35/25/20/15/5 is in the scoring prompt, labeled PROVISIONAL. |
-| 6 | Who owns the Anthropic API key and this repo after Sunday? Name + payment method. | handoff §12 | ❌ Unanswered. **An unmaintained scheduled job is a liability, not an asset.** |
-| 7 | Annual operating budget and EIN | Org Profile tab | ❌ Unanswered. Funders filter on these. |
+| 1 | **Smallest award worth 10 hours of team time?** | `MIN_AWARD`, the primary filter | ✅ **ANSWERED: $10,000.** The placeholder and all its machinery are gone. Now editable on the dashboard, so it can be tuned after a fortnight of real results without a code change. |
+| 2 | Candid / Foundation Directory / Instrumentl access? If not, which ~20 funder pages? | crawl scope | ⚠️ Partial — and it has stopped being a *code* question. The funder list is CRUD-editable in the dashboard, so adding twenty pages is data entry, not a deploy. Still worth asking which twenty. |
+| 3 | Government contracts and RFPs too, or grants only? | source scope | ✅ **ANSWERED: yes, both.** Ticking the "Government RFPs & contracts" sector raises the crawl tier. Live — the first scored run attempted County of San Diego (it timed out; their site is slow, not missing). |
+| 4 | Can RISE meet a 1:1 match requirement? | hard filter | ❌ Unanswered. Filter still not written; matches are flagged and passed through rather than guessed at. |
+| 5 | Forced-rank: award size / win likelihood / program fit / funder warmth / low reporting burden | score weights §7 | ❌ Unanswered. §7's 35/25/20/15/5 is in the scoring prompt, labeled PROVISIONAL. |
+| 6 | Who owns the Anthropic API key and this repo after Sunday? Name + payment method. | handoff §12 | ❌ Unanswered — but now **concrete**: whoever pastes a key into the Settings page is paying. Measured cost is **$0.18/run, under $1/month**, so this is a decision about ownership, not budget. |
+| 7 | Annual operating budget and EIN | funders filter on these | ❌ Unanswered. |
 
 **Also blocking, and missing from CLAUDE.md §11:**
 
@@ -42,6 +42,13 @@ problem worse. Everything in this repo follows from that one sentence.
 | 8 | **The 5 clear-yes and 5 clear-no opportunities for the calibration test.** | `tests/calibration.py` — §10 calls it "the only test that matters" | ❌ Unanswered. Block 2 cannot be verified without it. |
 | 9 | **How much time does searching for funding actually take you in a week?** | the before/after claim in the demo and in every doc | ❌ Unanswered. An earlier draft carried "~16 hours/week"; RISE's team says that figure is not correct, so it has been **removed from every file in this repo** rather than left standing. We would rather have a gap than a wrong stat about a real person. |
 | 10 | **What are the four sectors you want funding found in?** | `sector` tags on the funder registry and the sector checkboxes in the dashboard | ❌ Unanswered. Seeded with `warm_partner / foundation / government / arts_agency / intermediary` as a placeholder taxonomy; her answer is a label change, not a code change. |
+
+---
+
+| # | Question | Blocks | Status |
+|---|---|---|---|
+| 11 | **risesandiego.org lists TEN programs, not seven.** We were told seven; the site also shows Community Impact Showcase, RISE Urban Breakfast Club, and RISE Consult. Do those need funding too, or are they not fundraising targets? | which cards ship seeded | ❌ Open. All seven named ones are seeded; the other three are not. Adding one is a button press. |
+| 12 | **The four non-priority program cards are empty.** ILIA, RISE Now, On the RISE, Nonprofit Partnerships Training have a name and a real URL and nothing else — we would not invent descriptions of RISE's own programmes. | how well those programs get matched | ❌ Open, and it takes ten minutes: Edit → paste the program's link → "Read this page for me" → correct it → Save. Demonstrated working on ILIA (evidence E14). |
 
 ---
 
@@ -105,3 +112,28 @@ A quota forces the agent to pad the list with low-value opportunities — which 
 precisely the problem she is hiring us to solve. Six good results is a good week.
 This was a deliberate refusal, made because we understood the underlying need better
 than the literal request. (CLAUDE.md §8.)
+
+---
+
+## Decisions we made against our own earlier work
+
+These are corrections, not features. Worth saying out loud for the same reason.
+
+**We deleted a statistic about her.** An early draft of the spec recorded "~16 hours a
+week searching for funding" and it propagated into five files — including
+`agent/score.py`, where it was being asserted to the model as fact on every scoring
+call. RISE says the number is not right. It is now gone from every file, replaced by
+nothing rather than by another estimate, and logged above as Q9. The argument for the
+product never depended on the number, only on her own sentence about low award amounts.
+
+**We nearly claimed a win we had not earned.** The accuracy gate fired three times on
+the first real scored run, discarding two award amounts and a geography the model had
+reported. That reads like the guard working exactly as designed, and we were one
+paragraph from writing it up that way. Checking the funder pages first showed the
+opposite: the model had read *"Up to $150,000"* correctly, and our own parser had
+mangled it into `$\n150\n,\n000`, so the gate was throwing away a **true** value.
+
+Both halves got fixed and records with a sourced award amount went 0 → 1 on the same
+crawl. The full sequence is in `evidence/README.md` E12. The point is not the bug — it
+is that "our safety check fired" is not the same as "our safety check was right", and
+the difference only shows up if you go and look.

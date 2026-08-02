@@ -168,59 +168,184 @@ the `MIN_AWARD` placeholder warning surfaces. **It is not a real run.**
 The check earned its keep: the "Last run" timestamp wrapped onto two lines at the
 default stat size. Fixed with a `compact` variant.
 
+### E10 — Does the paid tier actually work? (the big one)
+**When:** 2026-08-02
+**Assumption tested:** everything above E9 was written and statically checked but had
+**never executed against the real API**. This file said so in bold: *"treat every score
+in this repo as unproven until someone runs it with a key."*
+**Method:** full pipeline against live funder pages with a real `ANTHROPIC_API_KEY` —
+crawl → deterministic filters → Haiku triage → Sonnet scoring.
+**Result:** ✅ **It runs.** 28 pages parsed, 17 survived the free filters, Haiku killed
+11 more as not-an-opportunity, Sonnet scored 6.
+
+| | |
+|---|---|
+| Cost, one full run | **$0.2056** |
+| §8 per-run ceiling | $1.00 — used 21% of it |
+| Projected monthly | ~$0.88, against a <$6 target and a $20 ceiling |
+| Killed for $0.00 before any model call | 22 of 28 |
+
+**Artifact:** `runs/block5-first-real-llm-run.txt`
+**What this closes:** the single largest gap in this package. Every score in the repo
+was previously hypothetical.
+
+### E11 — Does the accuracy gate catch a real confabulation, or only a fixture?
+**Assumption tested:** `agent/verify.py` passes 13 unit tests against hand-written
+inputs. Unit tests prove the function works; they do not prove the failure it guards
+against ever happens.
+**Result:** ✅ **It fired three times on the first real run**, unprompted:
+
+```
+⚠ award unverified (quote not on page) — nulling None/250000
+⚠ award unverified (quote not on page) — nulling None/150000
+⚠ geography_stated unverified (quote not on page) — dropping 'San Diego'
+```
+
+Two award amounts and a geography were reported by the model and **thrown away** before
+they could reach Mauri, because the verbatim sentence backing them was not on the page
+we fetched. §6 calls a wrong number in the demo fatal; this is the mechanism that
+prevents it, working on live data rather than in a test.
+
+### E12 — Were those actually confabulations? (they were not, and that mattered more)
+**How it surfaced:** E11 looked like a clean win, so we went and checked the pages
+rather than claiming it. **We were wrong about what happened.**
+
+The Prebys *2026 Rooted and Rising* page really does say **"Anticipated Grant Awards: Up
+to $150,000"**. But each digit group sits in its own HTML element, so the text we
+extract reads:
+
+```
+Up to $\n150\n,\n000
+```
+
+So the model was **right** and our parser was wrong — and the damage went two ways:
+
+- the **free tier** found no award amount on the page at all, because the money regex
+  cannot match across those newlines;
+- the **gate** then discarded Sonnet's correct $150,000 because its quote could not be a
+  literal substring of our own mangled text.
+
+The gate was not wrong to fire — it failed in the safe direction, showing *"amount not
+stated"* rather than an unconfirmable number. But a gate that discards *true* values is
+still costing RISE opportunities, and "our parser mangled the page" is a bad reason to
+drop a $150,000 grant.
+
+**Fix:** repair split figures at source (anchored to `$`, so the rewrite can only touch
+the inside of a money amount) plus a whitespace-insensitive second pass in the gate that
+forgives **layout only** — every other character must still appear in order.
+
+**Before / after, same crawl, same funders:**
+
+| | Before | After |
+|---|---|---|
+| Records with a sourced award amount | **0** | **1** |
+| Prebys *Rooted and Rising* | *amount not stated* | **$150,000, verified** |
+| Run cost | $0.2056 | $0.1824 |
+
+**Artifacts:** `runs/block5-first-real-llm-run.txt`, `runs/block5-after-split-amount-fix.txt`
+
+Four regression tests added, including one asserting that a fabricated `$500,000` quote
+is *still* rejected against the same repaired page — the fix must not launder a
+hallucination on its way to fixing a layout bug.
+
+**This is the most useful thing in this directory.** Not because the bug was hard, but
+because the sequence was: run it for real → believe the win → go and check → find the
+opposite of what we assumed → fix the actual defect → prove the guard still holds.
+
+### E13 — Does the monthly archive stop Mauri re-reading the same grant?
+**Assumption tested:** dedup keyed on `stable_id` in the free tier kills repeats before
+they cost anything.
+**Result:** ✅ A second run over the same funders in the same month rejected
+**17 of 17 candidates** as `already_seen_this_month` for **$0.00**, and surfaced nothing.
+
+That also exposed a bug worth more than the test: `run.json` was being written with only
+*that run's* output, so a re-run mid-week **blanked the page** that should still have
+shown everything found so far this month. Fixed — the file now carries the month's
+findings while the run block still reports the run honestly.
+
+### E14 — Can the card assistant replace Mauri writing a prompt?
+**Assumption tested:** CLAUDE.md §2 forbids any workflow where she has to phrase a
+request to an AI. A blank "describe this program in funder-facing language" box is
+exactly that. Can pasting a link do the job instead?
+**Method:** `POST /api/programs/draft` with `risesandiego.org/programs/ilia` — a program
+we deliberately shipped as an **empty** card rather than inventing a description for.
+**Result:** ✅ Returned a complete, sourced draft for **$0.014**: name, summary, what it
+funds, 10 funder-facing keywords, 5 search queries, funder types.
+
+Most importantly it reported its own limits without being asked:
+
+> `page_confidence: 62`
+> `fields_missing: ["program budget or funding goal", "sponsorship tiers and benefits",
+> "geographic focus beyond San Diego (e.g., Imperial County)", "501c3 fiscal details",
+> "attendance/reach metrics"]`
+
+So the draft arrives with its caveats attached instead of looking uniformly confident,
+and the card stays marked `AI draft — unreviewed` until a human saves it.
+
 ---
 
 ## What is NOT evidenced yet
 
 Stated plainly, because claiming otherwise is the failure mode the rubric penalizes:
 
-- ❌ **No stakeholder conversation logged since intake.** `STAKEHOLDER.md` shows 7 of 8
-  blocking questions unanswered.
+- ❌ **No stakeholder conversation logged since intake.** `STAKEHOLDER.md` now shows
+  **10** open questions, three of which came out of this build rather than speculation
+  (the four sectors, the real time-spent figure, and the fact that risesandiego.org
+  lists **ten** programs where we were told seven).
 - ❌ **No commitments secured.** That table is empty. 10 points and the first tie-breaker.
-- ❌ **Nothing written to a real Google Sheet.** The Sheets sink is built, the Config
-  tab auto-creates, and the Runs row was verified against a stub worksheet (11 cells,
-  headers aligned, plain-English stop reasons). But **no Sheet has been shared with a
-  service account**, so the sink has never talked to Google.
-- ❌ **The workflow has never executed.** `.github/workflows/weekly.yml` is validated
-  as YAML — triggers, cron, concurrency, timeout, 7 steps, both `always()` guards —
-  and the cron arithmetic is checked. It has **not run on GitHub**: the three required
-  secrets do not exist yet, and `ANTHROPIC_API_KEY` is a placeholder.
-- ❌ **The dashboard has never been deployed, and has never read a real Sheet.** It
-  builds, both states render in a browser, and the API handler's edge cases are
-  tested — but the data path to Google is unexercised.
-- ❌ **The LLM tiers have never run.** `ANTHROPIC_API_KEY` is not set in this
-  environment, so Haiku triage and Sonnet scoring are **written and statically checked
-  but never executed against the real API.** Verified statically: model IDs, schemas
-  (all-required, `additionalProperties: false`), no `temperature`/`top_p`/`top_k`/
-  `budget_tokens` (removed/deprecated on Sonnet 4.6), `max_tokens` headroom for adaptive thinking.
-  Not verified: that a real call returns what the schema promises. **Treat every score
-  in this repo as unproven until someone runs it with a key.**
+- ❌ **Nothing written to a real Google Sheet.** The Sheets sink is built and the Runs
+  row was verified against a stub worksheet, but **no Sheet has been shared with a
+  service account**, so it has never talked to Google. Note this matters less than it
+  did: the Sheet is now an *export* target, not the product (docs/PLAN.md §0).
+- ❌ **The GitHub Actions workflow has never executed, and v2 opened a gap in it.** The
+  scheduled run reads config from the Google Sheet; the dashboard reads it from
+  `data/rise.db`, which is gitignored (it holds the encrypted key). **Neither can see
+  the other's settings**, so a floor Mauri changes on the dashboard would not change
+  what the cron does. Documented at the top of `weekly.yml` with three ways out. The
+  workflow stays off until one is chosen — two agents with two different ideas of what
+  she wants is worse than one agent she has to press a button for.
+- ❌ **Nothing is deployed.** The app runs locally by design (docs/PLAN.md §1) and has
+  only ever run on a developer laptop. **Mauri has not used it herself.** Everything
+  below about her workflow is a claim about a UI she has not yet touched.
 - ❌ **Calibration fixtures are not Mauri's.** The harness is real and runs; the ten
   fixtures are placeholders derived from CLAUDE.md §1 and §7. `tests/calibration.py`
-  says so on every run and refuses to claim calibration. Blocked on question 8.
-- ❌ **Score weights are provisional.** §7's 35/25/20/15/5 split is explicitly marked
-  TBD pending Mauri's forced-rank (§11 Q5). They are in the scoring prompt as stated,
-  labeled PROVISIONAL.
-- ❌ **Prompt caching is off.** The scoring system prompt is ~554 tokens, below
-  Sonnet 4.6's 2048-token cache minimum, so `cache_control` would be silently ignored.
-  The code checks the threshold and only attaches the marker when it would do
-  something; it turns on by itself once the Org Profile boilerplate lands.
+  says so on every run and refuses to claim calibration. Blocked on question 8. The
+  fixtures were also written against the old $25,000 placeholder floor and have **not**
+  been re-checked against the real $10,000 one.
+- ❌ **Score weights are provisional.** §7's 35/25/20/15/5 split is still marked TBD
+  pending Mauri's forced-rank (§11 Q5), and is in the scoring prompt labelled PROVISIONAL.
+- ❌ **The "search beyond our partners" checkbox does nothing yet.** `agent/discovery.py`
+  is the interface and a null provider; the implementation is on a teammate's branch.
+  A run with it ticked reports `provider=none` rather than pretending.
+- ❌ **`form_990_available` is never populated.** The column exists and is always `None`.
+  Nothing has checked, and `None` means unknown — not "no".
+- ⚠️ **Deadline enforcement is only as good as the deadline.** The first scored run
+  surfaced a Prebys program whose deadline had passed; Sonnet said so in the rationale,
+  but the date failed the quote gate, so `deadline` was `None` and the post-scoring
+  "reject if passed" guard never fired. It scored 15 and is flagged for a human, which
+  is the safe outcome — but a closed grant still reached the list. **Open item.**
+- ⚠️ **Prompt caching is still effectively off.** The scoring prompt is now generated
+  from the program cards and runs ~1,130 characters — still under Sonnet 4.6's
+  2048-token cache minimum, so the marker is deliberately not attached. It turns on by
+  itself as Mauri fills in more cards.
 
 ---
 
 ## Reproducing
 
 ```bash
+./start.sh                                        # the whole app on localhost:8000
+
+# or, the pipeline on its own:
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
-# Free tiers only — fetch, parse, deterministic filters. $0.00, no key needed.
-.venv/bin/python -m agent.run --no-llm --sink jsonl --out evidence/runs
-.venv/bin/python -m tests.calibration --dry-run
+.venv/bin/python -m pytest tests/ -q              # 66 tests, offline, no key
+.venv/bin/python -m agent.run --no-llm            # free tiers only, $0.00
+.venv/bin/python -m tests.calibration --dry-run   # the §10 test, filters only
 
-# Full pipeline including scoring. Needs ANTHROPIC_API_KEY. ~$0.42/run.
-.venv/bin/python -m agent.run --sink jsonl --out evidence/runs
-.venv/bin/python -m tests.calibration
+# Full pipeline including scoring. Needs a key. ~$0.18/run.
+.venv/bin/python -m agent.run
 ```
 
-The `--no-llm` and `--dry-run` paths are the ones actually exercised in this repo.
-The scoring paths are written but unrun — see "What is NOT evidenced yet" above.
+Every path above has now been run for real. The scored runs in `runs/block5-*.txt` were
+produced by the commands here, against live funder pages, with a real key.

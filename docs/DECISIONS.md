@@ -20,6 +20,39 @@ Format: decision · date · rationale.
 | T4 | Drop to one parser where practical; keep gspread with batched single append + local JSON artifact before the Sheets write. | Remove untested fallback surface; the artifact doubles as evidence. |
 | C | Ship the A1 gate first (Sat night); capture calibration before/after + `/evidence` during the build; fix model-ID + dashboard contradictions before freeze. | ~20 of our 55 Execution+Use-of-AI points + the demo spine. |
 
+## Sun Aug 2, 2026 — v2, after the stakeholder follow-up
+
+Full reasoning in `docs/PLAN.md` §0. The decisions, and what each one cost:
+
+| # | Decision | Rationale | What we gave up |
+|---|---|---|---|
+| B1 | **Local FastAPI + SQLite**, not a static site and not a hosted service. | Everything she asked for — an API-key box, CRUD, an archive, a re-run button, an AI assistant — is impossible on a static page. Local means no hosting bill, no deploy to break mid-demo, and no public endpoint holding a key. | She cannot open it from her own laptop until someone installs it. Written up honestly in HANDOFF.md rather than glossed. |
+| B2 | **Reverse `CLAUDE.md` §3**: config moves into the dashboard. | A spreadsheet cell cannot express "search these three programs, with these terms, at this floor, this week". The non-goal was written before we knew she wanted a control surface. | The "she never leaves Sheets" simplicity. Mitigated by keeping `sinks/sheets.py` as an export. |
+| B3 | **Demote the Sheet** from "the product" to an export target. | Follows from B2 — two sources of truth for config is worse than either one alone. | The "if everything else dies she still has her data" argument, partly. The DB is one file she can copy, which is the closest honest equivalent. |
+| B4 | **Programs become editable cards; the scoring prompt is generated from them.** | RISE has seven programs, not three, and the three-value enum made adding one a code change. Generating `org_context` from the cards means a program added Sunday is searchable Wednesday. | A byte-stable prompt across runs. Still stable *within* a run, so caching is unaffected. |
+| B5 | **The card assistant reads a link instead of taking a prompt.** | §2 forbids any workflow where she phrases a request to an AI. Reviewing a filled-in draft about her own programme is a job she can actually check; composing a prompt blind is not. | Nothing. This is strictly better than the textarea it replaced. |
+| B6 | **Seed the four non-priority programs EMPTY.** | We only had names and URLs. Writing plausible descriptions of a real organisation's programmes is the same failure §6 forbids for award amounts. | A demo that looks more complete out of the box. Worth it — and it makes the assistant's value obvious. |
+| B7 | **Sourced vs inferred fields are visually distinct.** | Mauri asked for funder type, service areas, and a confidence %. None of those can be quote-gated. Rendering them identically to a sourced award amount would quietly break the §6 promise at the UI layer. | Some visual noise. `.chip.inferred` is marked in the CSS as a correctness requirement so it survives the redesign. |
+| B8 | **Monthly purge, deliberately blunt.** | Bounds the file and stops her re-reading the same grant. A grant seen in July resurfacing in August is intended, not a bug — it may still be open. | Long-term history. The row count purged is logged so it is never silent. |
+| B9 | **Re-run is a subprocess, not a thread.** | Stop has to actually stop, and §8 promises her a kill switch. A thread mid-`httpx` call cannot be interrupted; a process can. Bonus: identical code path to the cron. | Slightly more machinery than an in-process call. |
+| B10 | **Encrypt the API key at rest; never return it.** | §2 said she never sees an API key. §11 Q6 means someone at RISE must hold one. Write-only in one box is the smallest surface that satisfies both. | Not much. The threat model (shared DB file, screenshot, bug report) is stated honestly in `app/secrets.py` — it is not defence against a compromised machine. |
+| B11 | **Build only the discovery *seam*; the provider is the teammate's branch.** | Two people writing beyond-the-partner-list search is wasted work and a guaranteed merge conflict. | The checkbox does nothing yet — and says so, rather than failing silently. |
+
+### Corrections we made to our own work
+
+- **`MIN_AWARD` $25,000 → $10,000.** Not a tweak: the placeholder was a guess we had
+  loudly labelled as one, and the real number came from the stakeholder. All the
+  placeholder machinery came out with it.
+- **The "~16 hours a week" stat was deleted from every file**, including
+  `agent/score.py`'s prompt, where it was being asserted to the model as fact about a
+  real person on every scoring call. RISE says the figure is wrong. Logged as an open
+  question rather than replaced with another guess.
+- **E12 — we were wrong about a win.** The accuracy gate fired on live data and we
+  nearly wrote it up as "caught two confabulations". Checking the pages first showed the
+  model was right and our parser was mangling `$150,000` into `$\n150\n,\n000`. The gate
+  was discarding *true* values. Fixed both halves; records with a sourced amount went
+  0 → 1 on the same crawl.
+
 ## Ownership split
 - Phyo + teammate own **Execution (30)** and **Use of AI (25)**.
 

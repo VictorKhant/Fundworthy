@@ -1,80 +1,63 @@
-# Dashboard
+# dashboard/
 
-Read-only run history for the RISE funding agent. (CLAUDE.md §4, §12 Block 4)
+The React UI. Vite build, served by the FastAPI app in `app/` — **not** deployed
+anywhere. See `docs/PLAN.md` §1 for why local, and `HANDOFF.md` → "If you deploy it"
+for what has to change first.
 
-It answers three questions and deliberately nothing else: **is the agent on, what has
-it cost, and what happened on each run.** No accounts, no login, no settings — §3 rules
-those out for v1, which removes the entire OAuth surface. Config lives in the `Config`
-tab of the Sheet, where Mauri already knows how to edit it.
-
-## Run it locally
+> This used to be a read-only run-history page reading a committed `run.json`. `CLAUDE.md`
+> §3 ruled out settings in the dashboard, so there were none. Both changed in v2 —
+> the dashboard is now the control surface, and the reasoning is in `docs/PLAN.md` §0.
 
 ```bash
-cd dashboard
-npm install
-npm run dev        # http://localhost:5173
+./start.sh              # from the repo root — builds this and serves it on :8000
+./start.sh --dev        # + Vite dev server with hot reload on :5173
 ```
 
-With no credentials set you get the honest "not connected to a Sheet yet" state,
-which is what the deployed page shows until the Sheet exists.
+In dev the page runs on `:5173` and calls the API on `:8000`; in production both come
+from `:8000` and requests are same-origin. That switch is the only environment-dependent
+line in the front end (`src/api.js`).
 
-`npm run dev` mounts the real `api/runs.js` handler as dev middleware (see
-`vite.config.js`), so local and deployed behave the same — Vite alone knows nothing
-about Vercel functions and every fetch would fail.
+## Layout
 
-## Deploy
+```
+src/
+├── App.jsx                 shell — collapsible sidebar, three views, no router
+├── api.js                  every API call, plus shared formatting
+├── styles.css              light/dark, deliberately plain
+├── pages/
+│   ├── Dashboard.jsx       run controls → programs → funders → findings
+│   ├── Archive.jsx         findings by month
+│   └── Settings.jsx        the API key
+└── components/
+    ├── RunPanel.jsx        weekly knobs, Re-run button, live log, cost bar
+    ├── Programs.jsx        program cards + the "read this page for me" assistant
+    ├── Funders.jsx         the partner list
+    └── Findings.jsx        one finding, and the two-block reading order
+```
 
-Vercel, root directory `dashboard/`. Two environment variables:
+No router library and no state library. Three views and one `/api/state` call do not
+justify dependencies RISE would have to keep updated.
 
-| Variable | Value |
-|---|---|
-| `RISE_SHEET_ID` | The id in the Sheet URL |
-| `GOOGLE_SHEETS_CREDENTIALS` | The whole service-account JSON, pasted in |
+## Two things that look cosmetic and are not
 
-Same service account as the agent. It needs only read access here.
+**`.chip.inferred`** marks a value the AI judged rather than read off the funder's page
+— funder type, service areas, fit confidence, the hours estimate. `CLAUDE.md` §6 forbids
+stating a number that was not on a page we fetched, and a correctly-nulled field still
+misleads if the page renders a guess right beside it without saying which is which. If a
+redesign drops that distinction, the UI starts making claims the pipeline refuses to.
 
-## Why there is a serverless function at all
+**The two-block order** — everything the agent is confident about first, everything
+needing a human at the bottom — is what Mauri asked for directly. It is enforced in SQL
+(`app/repo.py: list_opportunities`) so every surface agrees; the split here is
+presentational only.
 
-A purely static page would have to make the Sheet **public** to read it, exposing
-everything on it. Instead `api/runs.js` reads it server-side with the service account
-and returns only run history and settings. The Sheet stays unpublished.
+## Not built here
 
-The function is read-only by construction: the OAuth scope is
-`spreadsheets.readonly`, only the `Runs` and `Config` tabs are requested, and there is
-no write path or POST handler in the file. Non-GET returns 405.
+- No auth. The app is localhost-only, which is what makes that honest (`CLAUDE.md` §3).
+- No editing of findings. The agent produces a ranked list; deciding is the human's job.
+- No Google export UI yet. `sinks/sheets.py` can write a Sheet from the CLI.
 
-## The security tradeoff, stated plainly
-
-§3 rules out auth for v1, so **this endpoint is unauthenticated**. Anyone with the
-deploy URL can read the run history. That is an accepted tradeoff, not an oversight:
-
-- It exposes run metadata and Config values — no credentials, and nothing beyond what
-  is already in a Sheet Mauri shares with her team.
-- `X-Robots-Tag: noindex` and a `<meta name="robots">` tag keep it out of search
-  results.
-- **Treat the deploy URL as the secret.** Share by link, not publicly.
-
-If RISE ever wants this locked down, Vercel's built-in password protection is the
-smallest change — it needs no code and keeps §3's "no auth code we maintain" intact.
-
-## Files
-
-| | |
-|---|---|
-| `api/runs.js` | Serverless function. Reads the Runs and Config tabs. |
-| `src/App.jsx` | The whole UI. One file on purpose. |
-| `src/styles.css` | Light and dark, no framework |
-| `vercel.json` | Build config and security headers |
-
-## Verified
-
-- `npm run build` succeeds (~146 kB JS, 47 kB gzipped)
-- Unconfigured → clean `200` with `configured: false`, not an error
-- `POST` → `405`, endpoint is read-only
-- Malformed credentials → `502` with a generic message; the credential and stack are
-  logged server-side, never returned to the browser
-- Both states rendered in a real browser — see `evidence/screenshots/`
-
-**Not verified:** it has never read a real Google Sheet, and it has never been deployed
-to Vercel. The populated screenshot uses fixture data through a temporary local stub
-that was reverted; it proves the layout renders, not that the data path works.
+`dashboard/public/run.json` is still written on every run as a static export, so the
+built site also works opened directly with no backend. It carries the month's findings,
+not just the last run's — otherwise a mid-week re-run that legitimately finds nothing new
+would blank a page that should still show everything found so far (evidence E13).
