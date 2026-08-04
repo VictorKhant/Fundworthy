@@ -320,6 +320,69 @@ def test_junk_in_the_authorization_header_is_refused(signed_in, header):
     assert signed_in.get("/api/state", headers=header).status_code == 401
 
 
+# --- failures on the way to the key, before the token is ever decoded --------------
+#
+# These use the real PyJWKClient rather than the fixture's stand-in, because the bug they
+# cover lived in exactly the gap the stand-in papers over: it answers every call with a
+# key, so nothing above ever exercised what happens when looking the key *up* fails.
+# `Bearer garbage` used to come back 500 with a stack trace.
+
+@pytest.fixture()
+def unmocked(tmp_path, monkeypatch, keypair):
+    """Sign-in on, with the JWKS client left as it really is."""
+    with _client(tmp_path, monkeypatch, keypair,
+                 FIREBASE_PROJECT_ID=PROJECT,
+                 FIREBASE_WEB_API_KEY="AIza-not-a-secret",
+                 ALLOWED_EMAILS=ALLOWED) as c:
+        monkeypatch.setattr(auth, "_jwks_client", None)
+        yield c
+
+
+@pytest.mark.parametrize("token", [
+    "garbage",              # not a JWT at all
+    "a.b.c",                # three segments of nonsense
+    "eyJhbGciOiJSUzI1NiJ9", # a lone header, no payload or signature
+    "....",
+])
+def test_a_bearer_token_that_is_not_a_jwt_is_a_clean_401(unmocked, token):
+    """No network is reached: the token cannot be parsed far enough to look a key up.
+
+    A 500 here would be wrong twice over — the caller is refused either way, but an
+    unauthenticated stranger should not be able to write stack traces into the log.
+    """
+    r = unmocked.get("/api/state", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 401
+    assert r.json()["detail"] == "Sign in to use Fundworthy."
+
+
+def test_a_token_whose_kid_google_does_not_publish_is_a_401(unmocked, monkeypatch, token_for):
+    """A well-formed token signed by a key Google never issued."""
+    import jwt as pyjwt
+
+    def no_such_key(_token):
+        raise pyjwt.exceptions.PyJWKClientError("Unable to find a signing key that matches")
+
+    monkeypatch.setattr(auth, "_jwks_client",
+                        SimpleNamespace(get_signing_key_from_jwt=no_such_key))
+    assert unmocked.get("/api/state",
+                        headers=auth_header(token_for())).status_code == 401
+
+
+def test_being_unable_to_reach_google_is_a_503_not_a_401(unmocked, monkeypatch, token_for):
+    """The one failure that is ours, not the user's. Answering 401 would send a valid
+    person round the sign-in loop forever chasing a problem on our end."""
+    import jwt as pyjwt
+
+    def offline(_token):
+        raise pyjwt.exceptions.PyJWKClientConnectionError("connection refused")
+
+    monkeypatch.setattr(auth, "_jwks_client",
+                        SimpleNamespace(get_signing_key_from_jwt=offline))
+    r = unmocked.get("/api/state", headers=auth_header(token_for()))
+    assert r.status_code == 503
+    assert "Could not reach Google" in r.json()["detail"]
+
+
 # --- the one thing the mocks cannot check ----------------------------------------
 
 @pytest.mark.network

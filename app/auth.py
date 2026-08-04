@@ -187,7 +187,7 @@ def verify(token: str) -> User:
 
     try:
         signing_key = _jwks_client.get_signing_key_from_jwt(token)
-    except jwt.exceptions.PyJWKClientError as exc:
+    except jwt.exceptions.PyJWKClientConnectionError as exc:
         # We could not fetch Google's signing keys — an outage, no egress, or a machine
         # with no CA store. That is our problem, not the user's, and answering 401 would
         # send a perfectly valid person round the sign-in loop forever.
@@ -195,6 +195,16 @@ def verify(token: str) -> User:
         raise HTTPException(
             503, "Could not reach Google to check your sign-in. Try again in a moment."
         ) from exc
+    except jwt.exceptions.PyJWTError as exc:
+        # Everything else this call can raise is about the token, not about us: it is not
+        # a JWT at all, or its `kid` matches no key Google publishes. Both are 401.
+        #
+        # This clause is here because it was missing: `Bearer garbage` reached the JWKS
+        # client, raised DecodeError on the way to reading the header, escaped, and came
+        # back as a 500 with a stack trace — an unauthenticated caller able to fill the
+        # log with tracebacks, and the wrong answer besides.
+        log.warning("Rejected an ID token before key lookup: %s", type(exc).__name__)
+        raise HTTPException(401, "Sign in to use Fundworthy.") from exc
 
     try:
         claims = jwt.decode(

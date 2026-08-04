@@ -122,7 +122,7 @@ chmod 600 .env
 Smoke-test it before wiring anything else up:
 
 ```bash
-.venv/bin/python -m pytest tests/ -q          # expect 167 passed
+.venv/bin/python -m pytest tests/ -q          # expect 173 passed, 1 skipped
 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 &
 sleep 3 && curl -s localhost:8000/api/health  # expect {"ok":true}
 kill %1
@@ -238,8 +238,12 @@ Two separate questions, and Firebase only answers the first:
 1. **console.firebase.google.com** → **Create a project**, e.g. `fundworthy`. Sign in as
    the shared Gmail. Google Analytics: **off**, you don't need it. (A Firebase project
    *is* a Google Cloud project, so this adds nothing to the handoff.)
-2. **Build → Authentication → Get started → Google → Enable.** Set the project support
-   email to the shared Gmail. **Save.**
+2. **Authentication → Get started → Sign-in method → Google → Enable.** Set the project
+   support email to the shared Gmail. **Save.**
+   > Finding Authentication: the left nav has no "Build" section any more — it is under
+   > **Product categories → Security**, and once visited it pins itself to **Project
+   > shortcuts** at the top. **Get started** sits at the very top of that page, above the
+   > "How does Authentication work?" cards, so scroll up if you land mid-page.
 3. **Authentication → Settings → Authorized domains → Add domain** → your hostname from
    step 7 (e.g. `fundworthy.duckdns.org`). Hostname only — no `https://`, no path.
 4. **⚙ Project settings → General → Your apps → Web (`</>`)**. Nickname it `Fundworthy`,
@@ -252,30 +256,105 @@ thing as the Anthropic key, which still has no endpoint that returns it.
 
 ### 8b. Configure the server
 
-Add to `.env`:
+Three lines go into `.env`, the file the systemd unit reads (step 5). Only two of them
+come from the Firebase console; the third is yours to decide.
 
-```bash
-FIREBASE_PROJECT_ID=fundworthy-1a2b3
-FIREBASE_WEB_API_KEY=AIzaSy...
-ALLOWED_EMAILS=admin@your-org.org,the-shared-gmail@gmail.com
-```
+| Line | Where it comes from |
+|---|---|
+| `FIREBASE_PROJECT_ID` | `projectId` in the config block from 8a.4 |
+| `FIREBASE_WEB_API_KEY` | `apiKey` in the same block |
+| `ALLOWED_EMAILS` | You. Every address that may sign in, comma-separated. |
 
-Then:
+Nothing else from that config block is used. `authDomain` is derived
+(`<project>.firebaseapp.com`); `storageBucket`, `messagingSenderId` and `appId` belong to
+Firebase products this app does not use.
+
+Open the file:
 
 ```bash
 cd ~/Rise-Fund-Finder
-git pull
-.venv/bin/pip install -r requirements.txt     # adds pyjwt
+nano .env
+```
+
+Add the three lines, so the whole file looks something like this:
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-...          # optional — see the note below
+FUNDWORTHY_STRICT_CONFIG=0
+FIREBASE_PROJECT_ID=your-project-id
+FIREBASE_WEB_API_KEY=AIzaSy-YOUR-WEB-API-KEY
+ALLOWED_EMAILS=admin@your-org.org,the-shared-gmail@gmail.com
+```
+
+> Placeholders, deliberately. Firebase's web API key is public by design — it ships in
+> the page source of every Firebase web app — but a real one does not belong in a public
+> repo: it names a specific project, and committing anything credential-shaped teaches
+> the wrong habit and trips secret scanners. Paste yours into `.env` on the VM and
+> nowhere else.
+
+`Ctrl-O`, `Enter`, `Ctrl-X` to save and quit in nano. Then lock the file down and
+restart:
+
+```bash
+chmod 600 .env                      # it is a secrets file; only you should read it
 sudo systemctl restart fundworthy
 ```
 
-No rebuild of the dashboard. The browser reads whether sign-in exists from
-`GET /api/auth/config` at page load, so one build works with it on or off — changing any
-of this is `.env` plus a restart.
+#### The syntax rules that actually bite
 
-**`ALLOWED_EMAILS` is not optional.** With `FIREBASE_PROJECT_ID` set and the allow-list
-empty, the app refuses to start and says why in `journalctl`. That is deliberate: the
-alternative was an app that boots and lets in every Google account in existence.
+systemd reads this file itself, and it is **not** a shell script. Four ways to get a
+value that looks right and is not:
+
+- **No spaces around `=`.** `ALLOWED_EMAILS = a@b.org` sets nothing.
+- **No `export`.** This is not bash.
+- **No command substitution.** `SECRET=$(openssl rand -hex 32)` is stored as that literal
+  string, dollar sign and all.
+- **No trailing comments.** `FIREBASE_PROJECT_ID=fundworthy-v1 # the project` makes the
+  value `fundworthy-v1 # the project`. Comments go on their own line.
+
+Quotes are unnecessary. Commas in `ALLOWED_EMAILS` need no escaping. Addresses are
+compared case-insensitively, so `Admin@Org.org` and `admin@org.org` are the same person.
+
+Editing `.env` needs only `systemctl restart`. `daemon-reload` is for changes to the
+`.service` file itself — you do not need it here.
+
+#### Two things that will stop the service dead
+
+- **`ALLOWED_EMAILS` empty or missing.** With `FIREBASE_PROJECT_ID` set, the app refuses
+  to start. That is deliberate: Firebase decides *who* someone is and never whether they
+  are allowed in, so an empty list would mean every Google account on earth. The reason
+  is printed in `journalctl`.
+- **`.env` deleted.** The unit has `EnvironmentFile=` with no leading `-`, so systemd will
+  not start a service whose environment file is missing. Keep the file even if you have
+  nothing optional to put in it.
+
+> **You do not need `ANTHROPIC_API_KEY` here.** A key saved on the Settings page is
+> encrypted at rest and wins over this file — `app/runner.py` hands it to the pipeline
+> itself. Put it in `.env` only if you want scoring to work before the org has pasted
+> their own key. Note that a *scheduled* run (`python -m agent.run` from cron or a
+> systemd timer) reads the environment directly and has no such fallback: with a
+> Settings-only key it will run the free tiers and score nothing.
+
+#### Check it took
+
+```bash
+sudo systemctl status fundworthy --no-pager        # active (running)
+sudo journalctl -u fundworthy -n 20 --no-pager | grep -i sign-in
+```
+
+You want exactly this, with your own project and count:
+
+```
+INFO     app.auth: Sign-in is on. Firebase project fundworthy-v1, 2 address(es) allowed.
+```
+
+If it says **`Sign-in is off (no FIREBASE_PROJECT_ID)`**, the file was not read — check
+the spelling of the variable, that there are no spaces around `=`, and that you edited
+the `.env` in `/home/ubuntu/Rise-Fund-Finder/` and not somewhere else.
+
+No rebuild of the dashboard at any point. The browser reads whether sign-in exists from
+`GET /api/auth/config` at page load, so one build works with it on or off, and adding a
+colleague later is one line in this file plus a restart.
 
 ### 8c. Check it
 

@@ -459,6 +459,17 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
+    # uvicorn configures its own three loggers and leaves the root logger with no
+    # handler, so until this line every log call in this application went nowhere:
+    # "Fundworthy ready.", which mode sign-in came up in, and — the one that matters —
+    # who was refused and why. On a VM `journalctl -u fundworthy` showed four uvicorn
+    # lines and nothing else, which is not enough to debug a locked-out user.
+    #
+    # basicConfig is a no-op when the root logger already has handlers, so a caller with
+    # its own logging setup keeps it. journald stamps the time and the unit, so the
+    # format only has to say which logger spoke.
+    logging.basicConfig(level=logging.INFO, format="%(levelname)-8s %(name)s: %(message)s")
+
     # Before anything is mounted, because a bad sign-in configuration is a refusal to
     # start, never a fallback to open. Same doctrine as FUNDWORTHY_STRICT_CONFIG.
     auth.configure()
