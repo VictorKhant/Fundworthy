@@ -2,9 +2,9 @@
 
 Copy-paste, in order. Roughly **60–90 minutes** the first time, most of it waiting.
 
-Do this **after** the demo, not before — several steps can fail for reasons outside your
-control (capacity errors, card verification), and none of them are things you want to
-discover with an audience.
+Do this **after** you've confirmed the app runs locally, not before — several steps can
+fail for reasons outside your control (capacity errors, card verification), and none of
+them are things you want to discover under pressure.
 
 > **Read this first — the order is forced.**
 > Google sign-in needs a redirect URI that exactly matches your deployed address. So you
@@ -114,7 +114,7 @@ Create the environment file:
 ```bash
 cat > .env <<'EOF'
 ANTHROPIC_API_KEY=sk-ant-PUT-THE-REAL-KEY-HERE
-RISE_STRICT_CONFIG=0
+FUNDWORTHY_STRICT_CONFIG=0
 EOF
 chmod 600 .env
 ```
@@ -137,7 +137,7 @@ So it survives reboots and crashes.
 ```bash
 sudo tee /etc/systemd/system/fundworthy.service > /dev/null <<'EOF'
 [Unit]
-Description=Fundworthy — RISE funding researcher
+Description=Fundworthy — nonprofit funding researcher
 After=network.target
 
 [Service]
@@ -218,8 +218,8 @@ loads.
 ## Step 8 · Google sign-in
 
 > ⚠️ **Do not skip this.** The app now stores an Anthropic API key and is reachable from
-> the internet. Without a login, anyone who finds the URL can spend RISE's money. This is
-> prerequisite #1 in `HANDOFF.md`.
+> the internet. Without a login, anyone who finds the URL can spend the org's money. This is
+> prerequisite #1 in `FUTURE.md`.
 
 ### 8a. Configure the Google side
 
@@ -228,7 +228,7 @@ loads.
    - User type **External**
    - App name `Fundworthy`, support email = the shared Gmail
    - Scopes: just `openid`, `email`, `profile` — you need nothing else
-   - **Test users:** add the shared Gmail **and Mauri's email**
+   - **Test users:** add the shared Gmail **and the user's email**
    - Leave it in **Testing**. Publishing triggers Google verification, which takes days
      to weeks. Testing mode allows up to 100 named users, which is the right size here.
 3. **Credentials → Create credentials → OAuth client ID**:
@@ -260,7 +260,7 @@ Add to `.env`:
 GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
 SESSION_SECRET=$(openssl rand -hex 32)
-ALLOWED_EMAILS=mauri@risesandiego.org,the-shared-gmail@gmail.com
+ALLOWED_EMAILS=admin@your-org.org,the-shared-gmail@gmail.com
 ```
 
 Then rebuild the front end with auth on:
@@ -283,9 +283,9 @@ sudo systemctl status fundworthy --no-pager   # active (running)
 sudo certbot renew --dry-run                  # renewal works
 ```
 
-- Back up **`data/rise.db`** and **`data/.fernet-key`** somewhere private. That is her
-  settings, funders, findings, and the encrypted key. Losing it loses everything.
-- Give Mauri the URL and `docs/handoff/Fundworthy-guide-for-RISE.pdf`.
+- Back up **`data/rise.db`** and **`data/.fernet-key`** somewhere private. That is the
+  org's settings, funders, findings, and the encrypted key. Losing it loses everything.
+- Give the user the URL.
 - Put a name against the API key.
 
 ### Updating it later
@@ -329,4 +329,4 @@ and keeps everything in **SQLite on disk**. On Vercel the Re-run button would ti
 and every setting, funder, and finding would vanish between requests.
 
 A small always-on VM is the honest shape for this app — and Oracle's Always Free tier
-means the thing RISE inherits has no bill attached to it.
+means the thing the org inherits has no bill attached to it.

@@ -1,493 +1,258 @@
-# CLAUDE.md — RISE San Diego Funding Opportunity Agent
+# CLAUDE.md — Fundworthy
 
-Working spec for Claude Code. Read this before writing any code in this repo.
-
-Built at the AI Trailblazers Social Impact Hack-AI-thon, San Diego, Aug 1–2 2026.
-The partner organization (RISE San Diego) owns this work.
-
-> ### ⚠️ v2 — five rules below are deliberately reversed
->
-> After a follow-up conversation with RISE, five things in this file are no longer
-> correct. They were changed on purpose, with the reasoning recorded in
-> **`docs/PLAN.md` §0** and **`docs/DECISIONS.md`** — not drifted away from.
->
-> | This file says | Now | Where |
-> |---|---|---|
-> | §3 "❌ Editing configuration in the dashboard" | **Reversed** — config lives in the dashboard, backed by SQLite | §3, §4 |
-> | §4 "The Sheet *is* the product" | **Demoted** — the dashboard is; the Sheet is an export target | §4 |
-> | §5 "No server to maintain" | **Reversed** — a local FastAPI backend | §5 |
-> | §11 Q1 "Do not guess at MIN_AWARD" | **Answered: $10,000** | §7, §11 |
-> | §11 Q3 government RFPs? | **Answered: yes** | §7, §11 |
->
-> Everything else still binds — in particular **§6's accuracy rules**, **§8's cost
-> ceilings and kill switch**, and **§3's remaining non-goals** (no accounts, no auth,
-> no writing applications, no email). Those were never the parts that were wrong.
+The working spec for this repo. Read it before writing any code. It describes **what
+Fundworthy is and how it works today** — not history, not roadmap. The roadmap
+(multi-tenant, accounts, hosting-at-scale) lives in [FUTURE.md](FUTURE.md).
 
 ---
 
-## 1. The problem, in the stakeholder's own words
+## 1. What it is
 
-Mauri Hamilton is COO at RISE San Diego. She is responsible for finding funding.
+Fundworthy is a **funding-opportunity agent for nonprofits**. Once a week it reads the
+funders a nonprofit cares about, and leaves a short, sourced, ranked list of what is
+actually worth applying for.
 
-What she told us:
+**The problem it solves is not "find more grants."** A nonprofit's staff can already
+find grants; the problem is that most of what they find is too small to justify the
+hours an application takes. So Fundworthy is deliberately built to return **few**
+results — every one above an award floor — and to say *"amount not stated"* rather than
+guess. A run that surfaces six opportunities, all above the floor, is a good run. A low
+count is not a failure.
 
-- Searching for funding takes a **substantial, recurring block of her week**.
-  (TODO: capture the real number from Mauri and put it here. An earlier draft of this
-  file carried a specific figure that turned out not to be hers — it has been removed
-  rather than left in, because a made-up stat about a real person is worse than a gap.)
-- She reports findings at a **Thursday meeting**.
-- The team will spend **no more than 10 collective hours** on any single application.
-- All that searching **"doesn't guarantee the grants found are worth the application —
-  mainly due to the low award amount."**
+The whole cost strategy is tiered so that a weekly run costs about **$1** and stops
+itself before it can cost more.
 
-Read that last line carefully. The bottleneck is **not** discovery volume. It is that
-discovery yields opportunities too small to justify a 10-hour application. An agent
-that finds *more* grants makes her problem worse.
+### The user, and the one hard rule
 
-### Success metric
+The user is a nonprofit administrator with **no AI experience**. That is the binding
+design constraint:
 
-| | Today | Target |
-|---|---|---|
-| Hours spent searching | a recurring block of her week | ~0 |
-| Hours spent reviewing | — | 1 / week (Thursday AM) |
-| Opportunities surfaced | many, mostly too small | few, all above the award floor |
-| Cost | COO time | < $20 / month |
-
-If the agent surfaces six opportunities and all six clear the award floor, that is a
-**successful run**. Do not treat a low count as failure.
+- **The user never writes a prompt.** Any workflow that requires phrasing a request to
+  an AI is wrong. Where the agent needs program context, the user *pastes a link* and
+  reviews a draft (see `app/assistant.py`) — they correct a draft, never compose an
+  instruction.
+- The user's surface is a **web dashboard**: read a list, tick boxes, edit a card, paste
+  an API key. No terminal, no config file, no repo.
 
 ---
 
-## 2. The user
+## 2. Status — what is built, what is stubbed
 
-**Mauri Hamilton, COO.** Zero AI experience. This is the binding design constraint.
+**Built and working, end to end:**
 
-Hard rules:
+- FastAPI backend + React dashboard, run with one command (`./start.sh`).
+- SQLite store for all config and results (settings, programs, funders, findings, runs).
+- The pipeline: fetch → parse → free deterministic filters → Haiku triage → Sonnet
+  scoring, behind a hard per-run budget ceiling.
+- The accuracy gate (`agent/verify.py`): a sourced value is nulled unless the model
+  returns the verbatim sentence it came from and that sentence is on the fetched page.
+- Dashboard controls: award floor, deadline runway, result cap, spend limit, sector
+  selection, program cards with CRUD + an AI "build from a link" assistant, an editable
+  funder list, a monthly archive, a Re-run button with a live streaming log, a real Stop.
+- Settings page storing the Anthropic API key **encrypted at rest, write-only** (no
+  endpoint ever returns it).
+- CSV export of the week's findings.
 
-- **Mauri never writes a prompt.** If any workflow requires her to phrase a request to
-  an AI, that workflow is wrong. Her surface area is: type in a spreadsheet, read a
-  page.
-- **Mauri never sees a terminal, a repo, a config file, or an API key.**
-- She works in **Google Sheets** by choice — shareable, multi-editor, familiar. Do not
-  move her off it.
-- She has a RISE Google account and can authorize sharing.
+**Deliberately single-tenant and local.** The server binds to `127.0.0.1`. It stores an
+API key, so the honest way to have no accounts and no auth is to not be reachable from
+the network. That is a real decision, written down — see [FUTURE.md](FUTURE.md) for what
+has to change before it is exposed or made multi-tenant.
 
-Secondary user: **Veronica Baker, Grant Writer.** The agent hands off to her. It does
-not do her job (see Non-goals).
+**Stubbed (present but not wired to a backend):**
+
+- **Auth.** `dashboard/src/auth.js` is a stub gated on the `VITE_SHOW_AUTH` build flag.
+  There is no server-side session, login, or allow-list yet. This is prerequisite #1
+  before the app is exposed to the internet.
+- The **org switcher** shows this install's org name but cannot switch or add orgs.
+- The **GitHub Actions weekly cron** (`.github/workflows/weekly.yml`) and the **Google
+  Sheets sink** exist but are legacy: never run in production, and superseded by the
+  dashboard + on-demand runs. Scheduling for a hosted deployment should be a systemd
+  timer or cron on the host, not GitHub Actions.
+
+### Pilot / seed data
+
+The app ships **seeded for a first pilot org**: 44 researched San Diego / California
+funders (`agent/sd_funders.py`), a funder registry (`agent/sources.py`), seven program
+cards (`app/db.py: SEED_PROGRAMS`, three active by default), and a San Diego / Imperial
+County service-area geography filter (`agent/filters.py: SERVICE_AREA_GEOGRAPHY`). This
+is configuration, not branding — a real install edits it in the dashboard. Making it
+per-org is multi-tenant work (see FUTURE.md); until then it is the working setup the
+pilot inherits.
 
 ---
 
-## 3. Non-goals — refuse these
-
-Explicitly out of scope for v1. If you find yourself building one of these, stop.
-
-- ❌ User accounts, login, or auth on the dashboard. **Still true, and it is what makes
-  the local-only design necessary rather than lazy:** the app stores an API key, so if
-  it is not reachable from the network there is nothing to authenticate. It binds to
-  localhost. `HANDOFF.md` says what has to change before it is ever exposed.
-- ❌ Multi-tenant / other-org support. Preserve *optionality* via the adapter pattern
-  (§6), build nothing more.
-- ❌ Writing or submitting applications. The agent stops at a ranked, sourced list.
-- ❌ Sending any email on RISE's behalf.
-- ~~❌ Editing configuration in the dashboard.~~ **REVERSED (v2).** Config is now the
-  dashboard's whole job — award floor, deadline runway, result cap, spend limit, which
-  sectors, which programs, which funders. A spreadsheet cell cannot express "search
-  these three programs, with these terms, at this floor, this week", and that is what
-  she asked for. See `docs/PLAN.md` §0.
-- ❌ Any unbounded loop. Every run has a hard cost ceiling and a hard stop.
-
----
-
-## 4. Architecture
-
-> **v2 supersedes this section.** The current shape is in `docs/PLAN.md` §1:
->
-> ```
->   ./start.sh ──▶ FastAPI (localhost:8000) ──▶ dashboard/dist (React)
->                        │
->                        ├── data/rise.db  ← settings · programs · funders
->                        │                    findings · runs · the API key
->                        │
->                        └── subprocess: python -m agent.run  (unchanged pipeline)
->                                          │
->                                          └── sinks/{sqlite,webjson,sheets}.py
-> ```
->
-> The pipeline below is intact — fetch, parse, deterministic filters, Haiku triage,
-> Sonnet scoring, `Opportunity` records, sinks. What changed is where config comes from
-> (SQLite, not the Sheet), where results go (SQLite first), and that there is now a
-> local server so Mauri has controls. The GitHub Actions cron still exists and still
-> works; it is no longer the only way to run.
-
-The original v1 shape, for reference:
+## 3. Architecture
 
 ```
-                     ┌──────────────────────────────┐
-   Wed 11pm PT ─────▶│  GitHub Actions (cron)       │
-                     │  reads config from Sheet     │
-                     └──────────────┬───────────────┘
-                                    │
-                     ┌──────────────▼───────────────┐
-                     │  agent/  (Python)            │
-                     │  1. load source registry     │
-                     │  2. fetch + parse            │
-                     │  3. deterministic filters    │
-                     │  4. cheap-model triage       │
-                     │  5. strong-model scoring     │
-                     │  6. emit Opportunity records │
-                     └──────────────┬───────────────┘
-                                    │
-                     ┌──────────────▼───────────────┐
-                     │  sinks/sheets.py             │
-                     │  (service-account write)     │
-                     └──────────────┬───────────────┘
-                                    │
-        ┌───────────────────────────▼────────────────────────────┐
-        │  Google Sheet  — the product                            │
-        │  ├── Opportunities   (agent appends; Mauri reviews)     │
-        │  ├── Config          (Mauri edits; agent reads)         │
-        │  ├── Org Profile     (boilerplate, edited rarely)       │
-        │  ├── Funders         (warmth ratings, exclusions)       │
-        │  └── Runs            (run log: cost, counts, stop reason)│
-        └───────────────────────────┬────────────────────────────┘
-                                    │ read-only
-                     ┌──────────────▼───────────────┐
-                     │  dashboard/ (static, Vercel) │
-                     │  run history, cost, progress │
-                     └──────────────────────────────┘
+  ./start.sh ──▶ FastAPI (uvicorn, 127.0.0.1:8000) ──▶ dashboard/dist  (built React SPA)
+                      │
+                      ├── data/rise.db   ← SQLite (WAL): settings · programs · funders
+                      │                     findings · runs · the encrypted API key
+                      │   data/.fernet-key ← the key that encrypts the API key
+                      │
+                      └── subprocess: python -m agent.run --sink db --run-id <id>
+                                        │  (one run at a time; Stop terminates it)
+                                        │
+                                        ├─ crawl()     fetch + parse + free filters   $0
+                                        ├─ enrich_990() one-time IRS 990 lookup/funder
+                                        ├─ evaluate()  Haiku triage → Sonnet score  ≤ $1
+                                        └─ sinks: sqlite (primary) + webjson (run.json)
 ```
 
-**Why this shape:**
+- `app/main.py` — REST API + static host for the dashboard. Every endpoint is a small
+  SQLite read/write. There is **no endpoint that returns the API key**.
+- `app/runner.py` — the Re-run button. Launches the pipeline as a **subprocess** (not a
+  thread) so Stop is real and a crawl crash cannot take down the settings page. One run
+  at a time (a global lock) — concurrency would double-spend the budget. *This global,
+  in-process run state is the main thing that has to change to scale — see FUTURE.md.*
+- `app/db.py` — schema, migrations, connection. One SQLite file, no ORM.
+- `app/secrets.py` — API key storage: Fernet-encrypted, write-only, resolves from
+  Settings first then the environment.
+- `app/assistant.py` — the "paste a link, get a program card" assistant (one Sonnet
+  call, capped at $0.10). The answer to "the user never writes a prompt."
+- `agent/run.py` — the pipeline entrypoint and orchestration; owns the budget ceiling
+  and the stop conditions. Identical whether triggered by the button or a scheduler.
+- `agent/fetch.py` — httpx with retries, robots.txt, and **one request per host at a
+  time** with a politeness delay. We are a small nonprofit's agent; behave like one.
+- `agent/parse.py` / `agent/filters.py` / `agent/score.py` / `agent/verify.py` — page →
+  candidate → deterministic rejects → tiered LLM scoring → the accuracy gate.
+- `sinks/` — `sqlite.py` (primary, what the dashboard reads), `webjson.py` (a static
+  `run.json`), `sheets.py` + `jsonl.py` (optional export targets).
 
-- No server to maintain. GitHub Actions cron is free and versioned.
-- No hosting bill. Vercel free tier for a static read-only page.
-- The Sheet *is* the product. If every other piece dies, Mauri still has her data in a
-  tool she owns and understands.
-- Service account auth means Mauri's only setup step is clicking **Share** on the Sheet
-  and pasting in an email address.
+### Tech stack
+
+Python 3.11+ · FastAPI + uvicorn · SQLite (WAL) · httpx · selectolax/BeautifulSoup ·
+dateparser · **Anthropic API** (Haiku triage, Sonnet scoring) · cryptography (Fernet) ·
+Vite + React (static build). A headless run needs API credits, not a chat seat.
+
+### Environment variables
+
+| Var | Purpose |
+|---|---|
+| `ANTHROPIC_API_KEY` | Fallback key if none is saved in Settings |
+| `FUNDWORTHY_DB_PATH` | Override the SQLite path (default `data/rise.db`) |
+| `FUNDWORTHY_KEYFILE` | Override the Fernet key path (default `data/.fernet-key`) |
+| `FUNDWORTHY_PORT` | Port for `start.sh` (default 8000) |
+| `FUNDWORTHY_STRICT_CONFIG` | Scheduled-job mode: a config that can't be read is a refusal to run, never a fallback to defaults (protects the kill switch) |
+| `FUNDWORTHY_SHEET_ID` | Google Sheet id for the legacy Sheets export sink |
 
 ---
 
-## 5. Tech stack
+## 4. Data model
 
-| Layer | Choice | Why |
-|---|---|---|
-| Agent | **Python 3.11+** | Best parsing ecosystem; grant pages are the hard part |
-| HTTP | `httpx` | async, timeouts, retries |
-| Parsing | `selectolax` (fast) + `BeautifulSoup` (fallback) | |
-| Dates | `dateparser` | funder deadline formats are chaotic |
-| LLM | **Anthropic API** — Haiku for triage, Sonnet for final scoring | cost tiering, see §8 |
-| Sheets | `gspread` + Google service account | no OAuth dance, no token refresh |
-| Scheduler | **GitHub Actions** `schedule:` cron | free, versioned, no server |
-| Secrets | GitHub Actions Secrets | never commit a key |
-| Dashboard | **Vite + React**, static build on Vercel | read-only, no backend needed |
-| Dashboard data | Vercel serverless fn reading the Sheet via service account | keeps the Sheet unpublished |
+One normalized `Opportunity` record (`agent/models.py`); sinks render it. Fields split
+into **sourced** (must be backed by a verbatim quote on the fetched page, else nulled and
+`needs_human_check=True`) and **inferred** (a model judgement, always labelled as such in
+the UI so it can't be mistaken for a fact off the funder's page).
 
-Not using a subscription plan for the pipeline — a headless scheduled job needs API
-credits, not a chat seat. Expected real cost is a few dollars a month (see §8).
+**Accuracy rules — not optional:**
 
----
+- **Never state a deadline or award amount that isn't on a page we fetched.** No source
+  → null the field and flag it.
+- `source_url` is required — no URL, no record. It points at the funder's own page or a
+  named public database, and the UI shows which.
+- `needs_human_check` rows sort **last** and are shown as their own block.
 
-## 6. Data model
-
-One normalized record. **The agent emits this; sinks render it.** Adding a non-Sheets
-sink later means writing one file in `sinks/`, not touching the agent.
-
-```python
-@dataclass
-class Opportunity:
-    # identity
-    id: str                      # stable hash of source_url + title
-    title: str
-    funder: str
-
-    # the numbers that decide everything
-    award_min: int | None
-    award_max: int | None
-    deadline: date | None
-    estimated_effort_hours: int | None   # vs the 10-hour cap
-
-    # matching
-    program_match: list[str]     # ["RULFP", "RESILIENCE", "ARTS"]
-    score: int                   # 0-100
-    score_rationale: str         # one sentence, human-readable
-
-    # trust — non-negotiable
-    source_url: str              # REQUIRED. no URL, no record.
-    verified: bool               # did we read the funder's own page?
-    needs_human_check: bool      # ambiguous deadline/amount → flag, don't guess
-    fetched_at: datetime
-```
-
-### Accuracy rules — these are not optional
-
-- **Never state a deadline or an award amount that is not on a page we fetched.** If it
-  can't be sourced, leave the field null and set `needs_human_check = True`.
-- `source_url` must point at the funder's own page, not an aggregator summary.
-- Judges include working funders. A wrong deadline in the demo is fatal.
+**Storage & dedup** (`app/db.py`): `opportunities.id = stable_id(source_url, title)` is a
+`TEXT PRIMARY KEY`, so "have we shown this already this month?" is an index probe in the
+free tier — a repeat costs $0.00. Findings are partitioned by `month_key` (`YYYY-MM`);
+at the start of every run, rows from earlier months are purged, so a grant seen in one
+month may legitimately resurface the next.
 
 ---
 
-## 7. Scoring
+## 5. Scoring & cost control
 
-### Hard filters (reject before any LLM call — these are free)
+**Tiers, cheapest first (the whole cost strategy):**
 
-```
-REJECT if award_max < MIN_AWARD                    # ← $10,000. ANSWERED. The main filter.
-REJECT if deadline is within 14 days               # can't do a 10-hr app well
-REJECT if geography excludes San Diego County,
-          Imperial County, California, or national
-REJECT if funder is a religious organization       # Mauri, explicit
-REJECT if funder is a political party              # Mauri, explicit
-REJECT if on the remove list                       # ← Mauri's, editable. See below.
-REJECT if requires a match RISE cannot meet        # ← TBD
-```
+1. **Free.** Fetch + parse + deterministic filters (award floor, deadline runway,
+   geography, remove list, thin-page + dedup rejects). Kills most candidates at $0.
+2. **Cheap.** Haiku triage on survivors only, on stripped text.
+3. **Expensive.** Sonnet scoring + rationale on the top N, where N is the result cap.
 
-Geography note: RISE operates across **San Diego AND Imperial Counties** (Far
-South/Border North spans both). Do not hardcode San Diego County alone.
+**Hard filters (free rejects), before any model call:** award below the floor
+(default **$10,000**), deadline inside the runway (default 14 days), geography outside
+the service area, funder on the **remove list**. Match-requirement is *flagged, not
+filtered*.
 
-### The remove list — one mechanism, and it is hers
+**The remove list** is the single exclusion lever, and it is the user's: a funder (or a
+single named program, matched on page title) that is un-ticked is never fetched, never
+triaged, never scored. Existing funder relationships go here — the org already receives
+that money and doesn't want to reapply, so a relationship is a reason to *exclude*, never
+to rank higher. The model is never told whether the org knows a funder.
 
-> There used to be TWO exclusion lists: this hardcoded reject, and the remove list.
-> That is one too many — "excluded" meant two different things and only one of them was
-> visible to Mauri. Worse, **the hardcoded one never fired**: it matched on the funder
-> name, and no source is called "County of San Diego Equity Impact Grant" (the registry
-> has "County of San Diego"). Zero hits across every recorded run, while presenting
-> itself as a working §7 filter.
->
-> Everything now lives on the remove list, which matches the funder name **and** the
-> page title — so a single named programme can be excluded without excluding its funder.
-> That is what this section always asked for and never got: *"that is one program, not
-> the whole County. Other County solicitations stay eligible."*
->
-> Seeded on the list: the eight below (*already funded by them — no need to reapply*)
-> and the County Equity Impact Grant (*done, no more funding*). Every one is a single
-> click from being searched again.
+**Score (0–100)** = program fit **40** + award size vs the floor **35** + can-the-app-be
+-finished-before-the-deadline **25**. Funder warmth is not a factor. The 990 is shown as
+data, never scored.
 
-### ~~Warm funders (score boost)~~ → the remove list
+**Budget & stop conditions.** Default ceiling **$1.00/run**; the run aborts and logs
+`stop_reason: budget` if exceeded. A run ends on the first of: `target_met` (cap
+reached), `budget`, `sources_exhausted`, `disabled`, or `error`. It's a **cap, not a
+quota** — the agent will not pad with weak results to hit a number.
 
-> **REVERSED.** These are no longer a boost. RISE already receives money from them
-> consistently and does not want to reapply, so warmth is a reason to *exclude*. The
-> list below is seeded like any other funder and Mauri ticks the ones she means onto
-> the remove list, which filters in the free Python tier — never fetched, never read,
-> never scored. What replaced them as the actual target is `agent/sd_funders.py`: 44
-> San Diego / California funders, every URL fetched and read before admission.
-
-From the 2025 Impact Report, originally recorded as warm:
-
-San Diego Foundation · Alliance Healthcare Foundation · Prebys Foundation ·
-City of San Diego Economic Development · City of San Diego Commission for Arts and
-Culture · California Arts Council · The Morales Fund · The Villegas Fund
-
-Also relevant as intermediaries/networks: Catalyst of San Diego & Imperial Counties,
-USD Nonprofit Institute, Live Well San Diego, San Diego Regional Arts and Culture
-Coalition.
-
-### Programs, and their vocabularies
-
-> **v2:** RISE has **seven** programs it wants funded, not three — Inclusive Leadership
-> in Action (ILIA) Awards, RISE Now, RISE Urban Leadership Fellows, On the RISE, RISE
-> Resilience & Renewal, Nonprofit Partnerships Training, RISE Arts. The three below are
-> the priorities Mauri named and the only ones ticked on by default.
->
-> They are no longer hardcoded. Programs are **editable cards** in the dashboard, and the
-> scoring prompt and response schema are generated from whichever ones are ticked
-> (`agent/score.py: org_context`). A program she adds on Sunday is searchable on
-> Wednesday with nobody editing Python.
->
-> The three tables below are the seed content for the priority cards — they came from
-> the intake conversation, so they are real. The other four ship **empty**, with only a
-> name and their real risesandiego.org URL, because inventing a description of a real
-> organisation's programme is the same failure §6 forbids for award amounts. Filling
-> them in is what the card assistant is for.
->
-> Also worth raising with Mauri: risesandiego.org/programs actually lists **ten**
-> programs, including three we were not told about (Community Impact Showcase, RISE
-> Urban Breakfast Club, RISE Consult). See `STAKEHOLDER.md`.
-
-Do **not** run one search across all of them. They live in different funder universes.
-
-| Program | Funder-facing language | Funder type |
-|---|---|---|
-| **RISE Urban Leadership Fellows** | leadership pipeline, adaptive leadership, resident-led civic engagement, BIPOC leadership development, cohort fellowship, DEIA capacity building | leadership / equity / community foundations |
-| **RISE Resilience & Renewal** | nonprofit leader burnout, whole-body leadership, somatic practice, polyvagal theory, wellness, workforce retention, health tech | **health & behavioral health funders** — this program was born out of Alliance Healthcare Foundation's i2 Challenge |
-| **RISE Arts** | arts and social justice, artists from historically marginalized communities, creative placemaking, cultural equity, arts capacity building | public arts agencies (CAC, City Arts & Culture), arts foundations |
-
-### Score composition (0–100)
-
-**ANSWERED (§11 Q5).** These are Mauri's own, given directly:
-
-- **Program fit — 40**
-- **Award size relative to the floor — 35**
-- **Can the application realistically be finished before the deadline — 25**
-
-Funder **warmth is gone**, and its removal is the important part. RISE already receives
-money from the funders it has relationships with and does not want to reapply — so a
-relationship is now a reason to leave a funder *out of the search entirely*, via the
-remove list, never a reason to rank it higher. The model is not told whether RISE knows
-a funder, because it must not change the score.
-
-She also separated two kinds of time we had conflated into one "effort" field:
-
-| | what it measures | why it is separate |
-|---|---|---|
-| `estimated_effort_hours` | working hours | the 10-hour cap |
-| `application_lead_time_days` | **calendar** days to be ready to submit | audited financials and board resolutions depend on other people and add weeks no hours estimate sees — her *"due in 2 weeks but the application takes 3 weeks"* case |
-| `time_to_funds_days` | days from submitting to money in the bank | a nonprofit's cash flow depends on it, and funders rarely state it |
-
-The **990 is shown as data, never scored** — her call. It is used in the prompt to judge
-program fit better, not as a criterion of its own.
-
----
-
-## 8. Cost control
-
-Budget: **$20/month ceiling**, target actual spend under $6/month.
-
-Weekly run budget: **$1.00 hard ceiling.** The run aborts and logs `stop_reason:
-budget` if exceeded. No exceptions, no retries past the ceiling.
-
-Tiering — the whole cost strategy:
-
-1. **Free tier.** Fetch and parse. Deterministic filters (regex on dollar amounts,
-   `dateparser` on deadlines, keyword geography match). Kills most candidates at zero
-   LLM cost.
-2. **Cheap tier.** Haiku triage on survivors only. Strip HTML to text first, cap at
-   ~2k tokens per candidate. Binary relevant/not.
-3. **Expensive tier.** Sonnet scoring + `score_rationale` on the top N only, where N is
-   the cap from Config.
+**Kill switch.** The `enabled` setting. If off, a run exits before any network call. In
+`FUNDWORTHY_STRICT_CONFIG` mode a config that can't be read is a refusal to run, so an
+outage can't silently re-enable a switched-off agent.
 
 Never send a full HTML page to a model.
 
-### Stop conditions
-
-The run ends on the **first** of:
-
-- `target_met` — cap reached
-- `budget` — $1.00 spent
-- `sources_exhausted` — registry fully crawled
-
-Log which one fired. This is what the dashboard displays.
-
-> **Design note — cap, not quota.** The stakeholder asked for "the agent won't stop
-> until it finds the target number." We deliberately did not build that. A quota forces
-> the agent to pad with low-value opportunities, which is exactly the problem she is
-> hiring us to solve. Six good results is a good week. This decision is intentional and
-> should be stated in the demo.
-
-### Kill switch
-
-Config tab, cell `ENABLED`. If `FALSE`, the Action exits immediately at step 0. Mauri
-can stop the agent herself, from a spreadsheet, without calling anyone.
-
 ---
 
-## 9. Schedule
+## 6. Running it
 
-- Agent runs **Wednesday 11:00 PM PT** via cron.
-- Brief is sitting in the Sheet when Mauri opens it **Thursday morning**.
-- She spends her **1 hour** reviewing before the Thursday meeting.
+```bash
+./start.sh                 # deps + dashboard build + API on http://localhost:8000
+./start.sh --dev           # + Vite dev server on :5173 (hot reload)
+./start.sh --rebuild       # force a fresh dashboard build
 
-Size the output for one hour. That is roughly 8–15 opportunities with real depth, not
-50 rows. Sort by score descending. Put `score_rationale` in a column she can read
-without scrolling.
-
-Config tab controls: `run_day`, `run_time`, `max_opportunities`, `min_award`,
-`programs_active`, `ENABLED`. All plain-English, all editable by her, no technical
-vocabulary anywhere on that tab.
-
----
-
-## 10. Repo layout
-
-```
-rise-funding-agent/
-├── CLAUDE.md                    ← this file
-├── .github/workflows/weekly.yml ← cron trigger
-├── agent/
-│   ├── run.py                   ← entrypoint, orchestration, budget ceiling
-│   ├── sources.py               ← the source registry (see §11 Q2)
-│   ├── fetch.py                 ← httpx + retry + politeness delays
-│   ├── parse.py                 ← page → raw candidate
-│   ├── filters.py               ← deterministic rejects, zero LLM cost
-│   ├── score.py                 ← tiered LLM scoring
-│   └── models.py                ← Opportunity dataclass
-├── sinks/
-│   ├── base.py                  ← Sink protocol
-│   └── sheets.py                ← the only implementation we ship
-├── dashboard/                   ← Vite + React, read-only
-├── tests/
-│   └── calibration.py           ← Mauri's 5 yes / 5 no. MUST PASS.
-└── HANDOFF.md                   ← written Sunday, for RISE
+python -m agent.run --no-llm          # free tiers only, $0.00, no key
+python -m agent.run                   # + LLM scoring; needs a key; ~$1/run ceiling
+python -m agent.run --dry-run         # crawl + report, write nothing
+python -m pytest tests/ -q            # the test suite (offline, no key)
 ```
 
-### Calibration test
-
-`tests/calibration.py` holds five opportunities Mauri says are a clear yes and five she
-says are a clear no. The scoring model must rank all five yeses above all five noes.
-
-This is the only test that matters. Run it after every scoring change. Screenshot the
-before/after when you correct the model — that screenshot is the strongest evidence of
-human-AI collaboration you will produce all weekend.
+Setup: open the page → **Settings** → paste an Anthropic API key → **Check it works**.
+Everything else (funders, programs, this month's findings) is already seeded.
 
 ---
 
-## 11. Open questions — blocking
+## 7. Repo layout
 
-| # | Question | Blocks | Status |
-|---|---|---|---|
-| 1 | **What is the smallest award worth 10 hours of team time?** | `MIN_AWARD`, the primary filter | ✅ **$10,000.** Editable on the dashboard. |
-| 2 | Candid / Foundation Directory / Instrumentl access? If not, which ~20 funder pages? | the crawl scope | ⚠️ Partial — the list is now editable, so this stops being a code question |
-| 3 | Government contracts and RFPs too, or grants only? | source scope | ✅ **Yes.** Ticking the sector raises the crawl tier. |
-| 4 | Can RISE meet a 1:1 match requirement? | hard filter | ❌ Open. Still flagged, not filtered. |
-| 5 | Forced-rank: award size / win likelihood / program fit / funder warmth / low reporting burden | score weights §7 | ❌ Open. Prompt says PROVISIONAL. |
-| 6 | Who owns the Anthropic API key and this repo after Sunday? Name + payment method. | handoff, §12 | ❌ Open — but now concrete: whoever pastes the key on the Settings page owns the bill. |
-| 7 | Annual operating budget and EIN | funders filter on these | ❌ Open. |
-
-`STAKEHOLDER.md` carries the full list, including four more that came out of building
-(the real time-spent figure, the four sectors, the ten-vs-seven programs, and the
-calibration fixtures).
-
----
-
-## 12. Build order — timeboxed
-
-Hackathon reality: showcase is Sunday afternoon. Ship in this order and stop when the
-clock says stop.
-
-**Block 1 — Saturday night, 3 hrs. Must complete.**
-Source registry (start with the 8 warm funders' own pages) → fetch → parse → normalized
-record → append to Sheet. Run it once against real pages. **A Sheet with real, sourced
-opportunities in it is a complete demo on its own.**
-
-**Block 2 — Saturday night, 1 hr.**
-Hard filters + scoring. Run `tests/calibration.py`. Fix until it passes.
-
-**Block 3 — Sunday morning, 2 hrs.**
-GitHub Actions cron. Cost ceiling. Runs tab. Kill switch.
-
-**Block 4 — Sunday morning/midday, 3 hrs. Cut this first if behind.**
-Read-only dashboard.
-
-**HARD CUTOFF — Sunday 2:00 PM.** Freeze code. Write `HANDOFF.md`. Assemble the
-evidence package. Rehearse the demo twice.
-
-The rubric awards 10 points for what you built and 20 for stakeholder evidence and
-commitments. Do not spend Sunday afternoon coding.
+```
+├── start.sh                     one command to run everything
+├── app/                         FastAPI backend
+│   ├── main.py                  REST API + static host for the SPA
+│   ├── db.py / repo.py          SQLite schema, migrations, CRUD
+│   ├── secrets.py               encrypted, write-only API-key storage
+│   ├── runner.py                the Re-run button (subprocess + live log)
+│   ├── archive.py / export.py   monthly dedup/purge · CSV export
+│   └── assistant.py             "paste a link → program card" (Sonnet)
+├── agent/                       the pipeline
+│   ├── run.py                   entrypoint, orchestration, budget ceiling
+│   ├── fetch.py / parse.py      polite fetch · page → candidate
+│   ├── filters.py               free deterministic rejects
+│   ├── score.py / verify.py     Haiku→Sonnet scoring · the accuracy gate
+│   ├── sources.py / apis.py     funder registry · CA Grants Portal + Grants.gov
+│   ├── sd_funders.py            44 researched pilot funders (seed data)
+│   ├── irs990.py                one-time IRS 990 lookup, cached
+│   └── models.py                the Opportunity dataclass
+├── sinks/                       sqlite (primary) · webjson · sheets · jsonl
+├── dashboard/src/               React UI (sidebar, dashboard, archive, settings)
+├── tests/                       pytest — calibration.py is the ranking test
+├── docs/DEPLOY-ORACLE.md        putting it on an Oracle free-tier VM
+├── CLAUDE.md                    this file — current state
+└── FUTURE.md                    the roadmap (multi-tenant, accounts, scale)
+```
 
 ---
 
-## 13. Handoff
+## 8. Non-goals — still refuse these
 
-`HANDOFF.md` must contain, in plain language:
+- ❌ Writing or submitting applications. The agent stops at a ranked, sourced list.
+- ❌ Sending email on anyone's behalf.
+- ❌ Any unbounded loop. Every run has a hard cost ceiling and a hard stop.
+- ❌ A workflow that requires the user to write a prompt.
+- ❌ Any accuracy shortcut. No URL → no record; no sourced quote → null the field.
 
-- What the agent does, in three sentences.
-- How to change what it looks for (→ the Config tab, with a screenshot).
-- How to stop it (→ set `ENABLED` to `FALSE`).
-- Who owns the API key and what it costs per month.
-- What to do when it breaks, and whose name to call.
-
-Sustainability question to answer honestly in the demo: **an unmaintained scheduled job
-is a liability, not an asset.** Name who owns it. AI Trailblazers runs a paid
-apprenticeship program that places people with nonprofits for exactly this kind of
-ongoing maintenance — worth raising with Mauri as the 30-day answer.
+Multi-tenancy, accounts, auth, and scale are **not** non-goals anymore — they are the
+next phase. They are just not built yet. See [FUTURE.md](FUTURE.md).
