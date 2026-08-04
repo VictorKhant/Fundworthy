@@ -1,10 +1,10 @@
-"""The REST API and the static host for the dashboard. (docs/PLAN.md §1)
+"""The REST API and the static host for the dashboard. (CLAUDE.md)
 
-Runs on Mauri's machine, not on the internet. That is a deliberate scoping decision,
-not an oversight: CLAUDE.md §3 rules out accounts and auth for v1, and the honest way to
+Runs on the user's machine, not on the internet. That is a deliberate scoping decision,
+not an oversight: CLAUDE.md rules out accounts and auth for v1, and the honest way to
 keep that promise while also storing an API key is to not be reachable from the network
-in the first place. The server binds to localhost, and `HANDOFF.md` says what has to
-change before it is ever exposed — that is a real decision RISE gets to make, with the
+in the first place. The server binds to localhost, and `FUTURE.md` says what has to
+change before it is ever exposed — that is a real decision the org gets to make, with the
 tradeoff written down, rather than a default we slid into.
 
 Everything the browser can do:
@@ -18,7 +18,7 @@ Everything the browser can do:
     POST   /api/programs/draft         the card assistant — drafts, never saves
     GET    /api/funders                POST to add
     PUT    /api/funders/{id}           DELETE to remove
-    GET    /api/opportunities          this month's findings, in her reading order
+    GET    /api/opportunities          this month's findings, in their reading order
     GET    /api/opportunities/export.csv  ← the "Download as a spreadsheet" button
     GET    /api/archive                the archive, by month
     GET    /api/runs                   run history
@@ -252,7 +252,7 @@ def delete_program(program_id: str) -> dict:
 
 @api.post("/programs/draft")
 async def draft_program(body: DraftIn) -> dict:
-    """The assistant. Returns a draft for Mauri to review — saves nothing."""
+    """The assistant. Returns a draft for the user to review — saves nothing."""
     from .assistant import AssistantError, draft_program_card
 
     with session() as conn:
@@ -309,7 +309,7 @@ def list_opportunities(month: str | None = None, run_id: str | None = None) -> d
     return {
         "month": month or month_key(),
         "opportunities": rows,
-        # Split out so the UI never has to re-derive Mauri's reading order. She asked
+        # Split out so the UI never has to re-derive the user's reading order. They asked
         # for the clean results first and the ambiguous ones at the bottom.
         "clear": [r for r in rows if not r["needs_human_check"]],
         "needs_check": [r for r in rows if r["needs_human_check"]],
@@ -318,14 +318,14 @@ def list_opportunities(month: str | None = None, run_id: str | None = None) -> d
 
 @api.get("/opportunities/export.csv")
 def export_opportunities(month: str | None = None, run_id: str | None = None):
-    """Download the brief as a spreadsheet file. (docs/DECISIONS.md B3)
+    """Download the brief as a spreadsheet file. (CLAUDE.md)
 
-    Deliberately not the Phase 3 OAuth push into her live Sheet: this needs no Google
+    Deliberately not the Phase 3 OAuth push into their live Sheet: this needs no Google
     credential, so there is nothing here that can expire, get revoked, or need a
-    consent screen re-verified before a demo. She opens the file in Sheets.
+    consent screen re-verified before a demo. They open the file in Sheets.
 
     Same rows and same order as GET /opportunities — one query, one sort, so the file
-    can never disagree with the page she downloaded it from.
+    can never disagree with the page they downloaded it from.
     """
     key = month or month_key()
     with session() as conn:
@@ -416,14 +416,14 @@ def health() -> dict:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    log.info("RISE Fund Finder ready.")
+    log.info("Fundworthy ready.")
     yield
 
 
 def create_app() -> FastAPI:
     app = FastAPI(
-        title="RISE Fund Finder",
-        description="Local control surface for RISE San Diego's funding agent.",
+        title="Fundworthy",
+        description="Control surface for a nonprofit's funding-opportunity agent.",
         version="2.0.0",
         docs_url="/api/docs",
         lifespan=lifespan,

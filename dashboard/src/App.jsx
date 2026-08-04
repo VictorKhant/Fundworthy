@@ -125,8 +125,7 @@ export default function App() {
         {page === "archive" && <Archive />}
 
         <footer>
-          Built at the AI Trailblazers Social Impact Hack-AI-thon, San Diego, Aug 2026.
-          RISE San Diego owns this work.
+          Fundworthy — a funding-opportunity agent for nonprofits.
         </footer>
       </main>
     </div>

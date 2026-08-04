@@ -3,7 +3,7 @@
 The interesting tests here are not "does it produce a CSV". They are:
 
   - a value the funder's page never stated must not gain one on the way out, and
-  - a cell must not become a formula when Mauri opens the file.
+  - a cell must not become a formula when the user opens the file.
 
 The second is the one worth having. Titles come from scraped funder pages, and a
 spreadsheet treats a leading '=' or '-' as executable. A grant titled "-30% match
@@ -81,7 +81,7 @@ def test_empty_findings_still_produce_a_usable_file():
     assert rows_of(export.to_csv([])) == [export.HEADERS]
 
 
-# --- the promise the whole project rests on (CLAUDE.md §6) --------------------
+# --- the promise the whole project rests on (CLAUDE.md) --------------------
 
 def test_a_missing_award_stays_missing():
     """Null in the DB must be blank in the file — never a 0, never a guess."""
@@ -134,8 +134,8 @@ def test_file_is_utf8_bom_so_excel_reads_accents():
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
-    monkeypatch.setenv("RISE_DB_PATH", str(tmp_path / "rise.db"))
-    monkeypatch.setenv("RISE_KEYFILE", str(tmp_path / ".fernet-key"))
+    monkeypatch.setenv("FUNDWORTHY_DB_PATH", str(tmp_path / "rise.db"))
+    monkeypatch.setenv("FUNDWORTHY_KEYFILE", str(tmp_path / ".fernet-key"))
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     init_db()
 

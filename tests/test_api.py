@@ -26,8 +26,8 @@ FAKE_KEY = "sk-ant-api03-THIS-IS-NOT-A-REAL-KEY-0000000000-4f2a"
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
-    monkeypatch.setenv("RISE_DB_PATH", str(tmp_path / "rise.db"))
-    monkeypatch.setenv("RISE_KEYFILE", str(tmp_path / ".fernet-key"))
+    monkeypatch.setenv("FUNDWORTHY_DB_PATH", str(tmp_path / "rise.db"))
+    monkeypatch.setenv("FUNDWORTHY_KEYFILE", str(tmp_path / ".fernet-key"))
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     init_db()
 
@@ -166,8 +166,8 @@ def test_program_crud_through_the_api(client):
     assert created.status_code == 201
     pid = created.json()["program"]["id"]
 
-    updated = client.put(f"/api/programs/{pid}", json={"summary": "Edited by Mauri"})
-    assert updated.json()["program"]["summary"] == "Edited by Mauri"
+    updated = client.put(f"/api/programs/{pid}", json={"summary": "Edited by the user"})
+    assert updated.json()["program"]["summary"] == "Edited by the user"
     assert updated.json()["program"]["keywords"] == ["capacity building"], \
         "a partial edit must not wipe the rest of the card"
 
@@ -329,7 +329,7 @@ def test_deleting_the_saved_key_admits_the_environment_still_scores(client, monk
 
 # --- the remove list ----------------------------------------------------------
 #
-# The stakeholder does not want opportunities from funders RISE already receives money
+# The stakeholder does not want opportunities from funders the organization already receives money
 # from — they get the cheque without reapplying. So warmth stopped being a priority
 # signal and became a reason to EXCLUDE, and the exclusion happens in the Python stage
 # where it costs nothing.
@@ -380,7 +380,7 @@ def test_warmth_no_longer_orders_the_funder_list(client):
 
 def test_stopping_a_run_is_not_recorded_as_a_failure():
     """Pressing Stop sends SIGTERM, so the child exits with a negative code. The pump
-    thread reached _finalize before stop() could mark the row, and a run Mauri ended
+    thread reached _finalize before stop() could mark the row, and a run the user ended
     deliberately reported "failed (exit -15)". Decided from the exit code now, so there
     is no race to lose."""
     from app.db import init_db, session

@@ -1,4 +1,4 @@
-"""API adapters for the two indexed sources. (CLAUDE.md §11 Q2/Q3)
+"""API adapters for the two indexed sources. (CLAUDE.md Q2/Q3)
 
 Only two, deliberately. Both are complete lists rather than one funder's page, and
 both stay up for a structural reason rather than because someone maintains them:
@@ -58,9 +58,9 @@ class ApiResult:
     # Free rejects made inside the adapter, folded into the run's reject counters
     # so the Runs tab shows them next to every other zero-cost filter.
     rejected: dict[str, int] = field(default_factory=dict)
-    # Things Mauri needs to READ, as opposed to `note`, which describes what the
+    # Things the user needs to READ, as opposed to `note`, which describes what the
     # adapter did. A ticked program that searched nothing belongs here: it is an
-    # action she can take, not a statistic, and burying it in a source's detail line
+    # action they can take, not a statistic, and burying it in a source's detail line
     # means the one person who can fix it never sees it.
     warnings: list[str] = field(default_factory=list)
 
@@ -126,14 +126,14 @@ def _deadline_evidence(raw: str) -> list[Evidence]:
 CA_BASE = "https://data.ca.gov/api/3/action"
 CA_PACKAGE = "california-grants-portal"
 
-# The portal's own category taxonomy, mapped onto RISE's three programs (§7). This is
+# The portal's own category taxonomy, mapped onto the org's three programs (§7). This is
 # free, structured relevance: without it every run pays Haiku to read dairy, archery
 # and dam-safety grants. A record with no category at all is kept, following the same
 # permissive convention as the geography filter — absence is not exclusion.
-# Keyed by program SLUG rather than by the old three-value enum. RISE has seven
-# programs and Mauri can create more from the dashboard, so anything keyed on a fixed
+# Keyed by program SLUG rather than by the old three-value enum. The org has seven
+# programs and the user can create more from the dashboard, so anything keyed on a fixed
 # enum silently ignores every program beyond the original three — which is worse than
-# it sounds, because the fallback below then searches ALL categories, making her
+# it sounds, because the fallback below then searches ALL categories, making their
 # program selection do nothing at all for this source.
 CA_CATEGORIES: dict[str, set[str]] = {
     "RULFP": {
@@ -152,11 +152,11 @@ CA_CATEGORIES: dict[str, set[str]] = {
 
 # Cross-cutting tags that describe who a grant serves, not what it funds. "Disadvantaged
 # Communities" sits on urban watershed restoration, sea level rise adaptation and archery
-# in schools — real programs, none of them RISE's. So it can support a match but never
+# in schools — real programs, none of them the org's. So it can support a match but never
 # make one on its own, or the category filter stops filtering anything.
 CA_SUPPORTING = {"Disadvantaged Communities"}
 
-# RISE needs grant money, not credit. The portal marks these explicitly, so bond
+# The org needs grant money, not credit. The portal marks these explicitly, so bond
 # programs and revolving loan funds cost nothing to exclude — and they are otherwise
 # the loudest rows in the list, because a $5B commercial paper facility outranks
 # every real opportunity on award size.
@@ -209,14 +209,14 @@ async def fetch_ca_grants_portal(fetcher, cfg) -> ApiResult:
     # the three we tuned) contributes nothing here, so the run says which ones and why
     # rather than either silently narrowing to the other programs' categories or
     # silently widening to everything. Both of those look identical to a working
-    # filter from the outside, and one of them quietly drops her opportunities.
+    # filter from the outside, and one of them quietly drops their opportunities.
     active = list(cfg.programs_active)
     mapped = [p for p in active if p in CA_CATEGORIES]
     unmapped = [p for p in active if p not in CA_CATEGORIES]
 
     if not mapped:
         # Nothing ticked has a category mapping. Filtering on an empty set would reject
-        # every row; filtering on all categories would ignore her selection entirely.
+        # every row; filtering on all categories would ignore their selection entirely.
         # Neither is honest, so we don't narrow, and we say so.
         wanted = set().union(*CA_CATEGORIES.values())
         result.warn(
@@ -240,7 +240,7 @@ async def fetch_ca_grants_portal(fetcher, cfg) -> ApiResult:
             result.reject("ca_record_missing_title_or_url")  # §6: no URL, no record
             continue
 
-        # RISE is a 501(c)(3). A grant open only to public agencies or tribal
+        # The org is a 501(c)(3). A grant open only to public agencies or tribal
         # governments is not an opportunity, and this is a free way to know that.
         eligibility = _first(rec, "ApplicantType", "Eligibility")
         if eligibility and "nonprofit" not in eligibility.lower():
@@ -275,8 +275,8 @@ async def fetch_ca_grants_portal(fetcher, cfg) -> ApiResult:
             f"Funding type: {_first(rec, 'Type')}" if types else "",
             f"Estimated award amounts: {amounts_raw}" if amounts_raw else "",
             f"Estimated funds available in total: {funds_raw}" if funds_raw else "",
-            # Surfaced, not filtered: §11 Q4 (can RISE meet a match?) is unanswered,
-            # so the run flags it for Mauri rather than deciding on her behalf.
+            # Surfaced, not filtered: §11 Q4 (can the org meet a match?) is unanswered,
+            # so the run flags it for the user rather than deciding on their behalf.
             f"Matching funds required: {match_raw}" if match_raw else "",
             f"Application deadline: {deadline_raw}" if deadline_raw else "",
             f"Geography: {geography}.",
@@ -310,9 +310,9 @@ GG_DETAIL = "https://api.grants.gov/v1/api/fetchOpportunity"
 # §7: one vocabulary per program, never one search across all of them.
 #
 # These are the tuned defaults for the three programs we had when this adapter was
-# written, keyed by slug. They are DEFAULTS, not the whole story: a program Mauri
+# written, keyed by slug. They are DEFAULTS, not the whole story: a program the user
 # creates has no entry here and draws its vocabulary from its own card instead
-# (ProgramCard.api_vocabulary). Keeping them means her federal results for the three
+# (ProgramCard.api_vocabulary). Keeping them means their federal results for the three
 # priority programs do not change shape because someone edited a keyword list.
 GG_SEED_KEYWORDS: dict[str, str] = {
     "RULFP": "community leadership development civic engagement",
@@ -326,7 +326,7 @@ def program_vocabularies(cfg) -> tuple[list[tuple[str, str]], list[str]]:
 
     Returns the ticked programs paired with their search terms, plus the slugs of any
     ticked program whose card is still empty. An empty card is a real state — four of
-    RISE's seven ship that way on purpose — and the honest response is to search
+    the org's seven ship that way on purpose — and the honest response is to search
     nothing for it and say so, not to invent terms from the programme's internal name.
     """
     searchable: list[tuple[str, str]] = []
@@ -351,7 +351,7 @@ async def fetch_grants_gov(fetcher, cfg) -> ApiResult:
 
     result = ApiResult()
     if skipped:
-        # Loud, not silent. She ticked it, so she is expecting results from it, and a
+        # Loud, not silent. They ticked it, so they are expecting results from it, and a
         # program that quietly searched nothing is indistinguishable from one that
         # searched and found nothing — which is the ambiguity this whole project exists
         # to remove.

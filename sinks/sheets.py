@@ -1,9 +1,9 @@
-"""The Google Sheets sink — the product. (CLAUDE.md §4)
+"""The Google Sheets sink — the product. (CLAUDE.md)
 
-Mauri's whole surface area is this Sheet: she reads Opportunities, edits Config, and
-turns the agent off from a cell. So the rendering rules matter as much as the data:
+the user's whole surface area is this Sheet: they read Opportunities, edit Config, and
+turn the agent off from a cell. So the rendering rules matter as much as the data:
 
-  - score_rationale sits in a column she can read without scrolling (§9).
+  - score_rationale sits in a column they can read without scrolling (§9).
   - Rows whose award amount was never stated go in their own block below the ranked
     list, clearly labeled, so they cannot be mistaken for scored results.
   - Each run archives last week's brief to a dated "Archive <date>" tab, then writes
@@ -31,7 +31,7 @@ ARCHIVE_PREFIX = "Archive"   # last week's brief is snapshotted to "Archive <dat
 
 HEADERS = [
     "Score",
-    "Why this one",          # score_rationale — kept early, she reads left to right
+    "Why this one",          # score_rationale — kept early, they read left to right
     "Where it came from",    # provenance — a curated funder page vs a public database
     "Funder",
     "Opportunity",
@@ -40,12 +40,12 @@ HEADERS = [
     "Deadline",
     "Days left",
     "Est. hours",
-    # The COO's own ranking criteria (§11 Q5). Two different kinds of time, which she
+    # The COO's own ranking criteria (§11 Q5). Two different kinds of time, which they
     # separated: days to BE READY to submit, vs days from submitting to money arriving.
     "Days to prepare",
     "Months to funds",
     "Fit %",                 # the AI's own confidence — inferred, labelled in the UI
-    "Their 990",             # shown as data, never scored — her call
+    "Their 990",             # shown as data, never scored — their call
     "Programs",
     "Needs a human check",
     "Link",
@@ -63,8 +63,8 @@ RUN_HEADERS = [
     "Which ones failed",
 ]
 
-# §9: no technical vocabulary on anything Mauri reads. StopReason values are for
-# the log and the dashboard; this is what she sees.
+# §9: no technical vocabulary on anything the user reads. StopReason values are for
+# the log and the dashboard; this is what they see.
 STOP_REASON_PLAIN = {
     "target_met": "Found enough — stopped at the weekly limit",
     "budget": "Hit the spending limit for the week and stopped",
@@ -82,17 +82,17 @@ SECTION_BANNER = (
 KIND_BANNER = {
     SourceKind.FUNDER_PAGE: (
         "FROM FUNDERS WE WATCH DIRECTLY — read off the funder's own page. These are "
-        "organizations on RISE's list, several of them already warm."
+        "organizations on the organization's list, several of them already warm."
     ),
     SourceKind.INDEXED_DATABASE: (
         "FROM PUBLIC GRANT DATABASES — the California Grants Portal and Grants.gov. "
-        "Complete public lists, so these are cold leads: nobody at RISE has a "
+        "Complete public lists, so these are cold leads: nobody at the organization has a "
         "relationship with these funders yet."
     ),
 }
 
 
-# Everything Mauri reads is in her own timezone. The agent runs Wednesday 11pm PT so
+# Everything the user reads is in their own timezone. The agent runs Wednesday 11pm PT so
 # the brief is waiting Thursday morning (§9) — in UTC that run is stamped Thursday,
 # which reads as a day late for a job that ran on time.
 #
@@ -142,18 +142,18 @@ def _row(opp: Opportunity) -> list:
 
 
 class SheetsSink:
-    """Service-account write path. Mauri's only setup step is clicking Share (§4)."""
+    """Service-account write path. the user's only setup step is clicking Share (§4)."""
 
     name = "sheets"
 
     def __init__(self, sheet_id: str | None = None, credentials_path: str | None = None) -> None:
-        self.sheet_id = sheet_id or os.environ.get("RISE_SHEET_ID")
+        self.sheet_id = sheet_id or os.environ.get("FUNDWORTHY_SHEET_ID")
         self.credentials_path = (
             credentials_path or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
         )
         if not self.sheet_id or not self.credentials_path:
             raise RuntimeError(
-                "SheetsSink needs RISE_SHEET_ID and GOOGLE_APPLICATION_CREDENTIALS. "
+                "SheetsSink needs FUNDWORTHY_SHEET_ID and GOOGLE_APPLICATION_CREDENTIALS. "
                 "Use --sink jsonl to run without credentials."
             )
         import gspread
@@ -172,7 +172,7 @@ class SheetsSink:
           rows, which silently changes what every past row claims to say.
         - Opportunities is archived and cleared on every write, so no row outlives its
           header. A full rewrite is safe there, and it is the only way a new column can
-          be placed anywhere except last — which matters, because Mauri reads this tab
+          be placed anywhere except last — which matters, because the user reads this tab
           left to right and provenance belongs near the front, not past the id column.
         """
         import gspread
@@ -221,7 +221,7 @@ class SheetsSink:
     def _archive_and_reset(self, ws) -> None:
         """Option C: snapshot last week's brief to a dated tab, then clear the live
         Opportunities tab so this run writes a clean current-week brief. Preserves
-        history without ever letting weeks pile up in the tab Mauri reviews."""
+        history without ever letting weeks pile up in the tab the user reviews."""
         import re
 
         from gspread.utils import rowcol_to_a1
@@ -260,8 +260,8 @@ class SheetsSink:
         rows: list[list] = []
 
         # Coverage first, above the results. The Runs tab has the full picture, but
-        # Mauri reviews this tab (§9) — so if a source was down, it has to say so
-        # here, or she reads a short list as a quiet week and never finds out.
+        # the user reviews this tab (§9) — so if a source was down, it has to say so
+        # here, or they read a short list as a quiet week and never find out.
         banner = coverage_banner(run)
         if banner:
             for line in banner:
@@ -274,8 +274,8 @@ class SheetsSink:
         # The other way round buries it: a funder page that never publishes an award
         # amount lands entirely in the not-stated block, so a section headed "from
         # funders we watch" renders empty even on a week when four of them reported.
-        # Where a record came from is the thing she needs first — it decides whether
-        # she is looking at a warm relationship or a cold lead.
+        # Where a record came from is the thing they need first — it decides whether
+        # they are looking at a warm relationship or a cold lead.
         for kind in (SourceKind.FUNDER_PAGE, SourceKind.INDEXED_DATABASE):
             ranked = [o for o in scored if o.source_kind is kind]
             unranked = [o for o in not_stated if o.source_kind is kind]
@@ -299,7 +299,7 @@ class SheetsSink:
         return len(scored) + len(not_stated)
 
     def write_run_log(self, run: RunLog) -> None:
-        """One row per run. This is how Mauri can tell the agent is still alive —
+        """One row per run. This is how the user can tell the agent is still alive —
         and, when it isn't, roughly why, without calling anyone."""
         ws = self._tab(RUNS_TAB, RUN_HEADERS)
         d = run.to_dict()
@@ -316,7 +316,7 @@ class SheetsSink:
         stop = STOP_REASON_PLAIN.get(d["stop_reason"] or "", d["stop_reason"] or "")
 
         # Names, not just a count. "Couldn't reach: 2" is not actionable; "Couldn't
-        # reach: Grants.gov, Prebys Foundation" tells her exactly what to check herself.
+        # reach: Grants.gov, Prebys Foundation" tells them exactly what to check themselves.
         failed_names = ", ".join(h.funder for h in run.degraded_sources) or "—"
 
         ws.append_row(
@@ -340,7 +340,7 @@ class SheetsSink:
     def ensure_config_tab(self) -> None:
         """Create the Config tab with plain-English labels if it is missing (§9).
 
-        No technical vocabulary on this tab. Mauri has never seen a config file and
+        No technical vocabulary on this tab. the user has never seen a config file and
         should not be able to tell that this is one.
         """
         from agent.config import CONFIG_TAB, MIN_AWARD_DEFAULT

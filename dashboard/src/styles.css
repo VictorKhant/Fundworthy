@@ -1,7 +1,7 @@
-/* Fundworthy — warm paper, sage, clay. (UI-ROADMAP.md, Phase 1)
+/* Fundworthy — warm paper, sage, clay. (FUTURE.md)
 
    What is NOT cosmetic and must survive any future restyle. These are correctness
-   requirements from CLAUDE.md §6, not preferences:
+   requirements from CLAUDE.md, not preferences:
 
      .chip.inferred    marks a value the AI judged rather than read off the funder's
                        page. Dashed --dash border + a visible "AI" mark. If that
@@ -16,7 +16,7 @@
 
    Dark mode: deliberately dropped in this pass. The old cool-grey dark palette would
    have clashed with the warm light one, and shipping a half-converted dark theme is
-   worse than shipping none. See UI-ROADMAP.md Phase 1. */
+   worse than shipping none. See FUTURE.md. */
 
 :root {
   --bg: #F7F5F1;          /* warm paper */

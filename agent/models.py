@@ -1,4 +1,4 @@
-"""Normalized records. The agent emits these; sinks render them. (CLAUDE.md §6)
+"""Normalized records. The agent emits these; sinks render them. (CLAUDE.md)
 
 Accuracy rules enforced here rather than left to convention:
   - No source_url, no record. `Opportunity.__post_init__` refuses to build one.
@@ -15,7 +15,7 @@ from enum import Enum
 
 
 class Program(str, Enum):
-    """RISE's three programs. Each lives in a different funder universe (§7)."""
+    """The org's three programs. Each lives in a different funder universe (§7)."""
 
     RULFP = "RULFP"            # RISE Urban Leadership Fellows
     RESILIENCE = "RESILIENCE"  # RISE Resilience & Renewal
@@ -23,11 +23,11 @@ class Program(str, Enum):
 
 
 class FunderType(str, Enum):
-    """What kind of funder this is. Mauri asked for this column explicitly.
+    """What kind of funder this is. the user asked for this column explicitly.
 
     This is an AI *judgement*, not something copied off the page, and the UI labels it
-    as one. Getting it wrong costs her a moment of confusion; getting an award amount
-    wrong costs her ten hours. The two are held to different standards on purpose.
+    as one. Getting it wrong costs them a moment of confusion; getting an award amount
+    wrong costs them ten hours. The two are held to different standards on purpose.
     """
 
     PRIVATE_FOUNDATION = "private_foundation"
@@ -40,7 +40,7 @@ class FunderType(str, Enum):
 
 
 class DeadlineType(str, Enum):
-    """Mauri asked to distinguish "rolling / multiple deadlines" from one fixed date —
+    """the user asked to distinguish "rolling / multiple deadlines" from one fixed date —
     they mean completely different things for planning a 10-hour application."""
 
     FIXED = "fixed"        # one specific date, sourced from the page
@@ -52,7 +52,7 @@ class SourceKind(str, Enum):
     """Where a record came from — a hand-picked funder page, or an indexed database.
 
     Worth carrying on the record rather than inferring later, because the two have
-    different trust profiles. A funder page is one organization Mauri already knows,
+    different trust profiles. A funder page is one organization the user already knows,
     read directly. A database row is a complete public list nobody curated, so it is
     broader but arrives with no relationship attached.
     """
@@ -62,7 +62,7 @@ class SourceKind(str, Enum):
 
     @property
     def label(self) -> str:
-        """§9: no technical vocabulary on anything Mauri reads."""
+        """§9: no technical vocabulary on anything the user reads."""
         return {
             SourceKind.FUNDER_PAGE: "Funder's own page",
             SourceKind.INDEXED_DATABASE: "Public grants database",
@@ -115,7 +115,7 @@ class RawCandidate:
 
 @dataclass
 class Opportunity:
-    """The record Mauri reads. Field set is §6 verbatim."""
+    """The record the user reads. Field set is §6 verbatim."""
 
     # identity
     id: str
@@ -128,8 +128,8 @@ class Opportunity:
     deadline: date | None
     estimated_effort_hours: int | None   # vs the 10-hour cap
 
-    # matching. Plain strings, not the three-value Program enum: RISE has seven
-    # programs and Mauri can add more from the dashboard, so a program she invents
+    # matching. Plain strings, not the three-value Program enum: the org has seven
+    # programs and the user can add more from the dashboard, so a program they invent
     # must not be something the pipeline drops for being missing from Python source.
     program_match: list[str]
     score: int                   # 0-100
@@ -141,7 +141,7 @@ class Opportunity:
     needs_human_check: bool      # ambiguous deadline/amount → flag, don't guess
     fetched_at: datetime
 
-    # --- the columns Mauri asked for, added after the follow-up conversation.
+    # --- the columns the user asked for, added after the follow-up conversation.
     #
     # Two classes of field, and the distinction is load-bearing:
     #
@@ -170,7 +170,7 @@ class Opportunity:
 
     # --- the COO's own ranking criteria (§11 Q5, answered) ---
     #
-    # Two different kinds of time, which she separated and we had conflated:
+    # Two different kinds of time, which they separated and we had conflated:
     #   application_lead_time_days  CALENDAR days to be READY to submit. Audited
     #                               financials and board resolutions depend on other
     #                               people and add weeks that no hours estimate sees.
@@ -199,7 +199,7 @@ class Opportunity:
         if not self.source_url or not self.source_url.startswith(("http://", "https://")):
             raise ValueError(
                 f"Opportunity {self.title!r} has no usable source_url. "
-                "CLAUDE.md §6: no URL, no record."
+                "CLAUDE.md: no URL, no record."
             )
         # NOTE: a missing amount or deadline used to force needs_human_check here.
         # It no longer does, and that is a correction rather than a relaxation.
@@ -279,7 +279,7 @@ class StopReason(str, Enum):
 class SourceStatus(str, Enum):
     """Per-source outcome. One broken source must never look like a quiet week.
 
-    The distinction that matters to Mauri is UNREACHABLE vs NO_RESULTS. Both produce
+    The distinction that matters to the user is UNREACHABLE vs NO_RESULTS. Both produce
     zero rows, but one means "go look yourself" and the other means "nothing new".
     Collapsing them into a short list with no explanation is the failure mode this
     enum exists to prevent.
@@ -294,7 +294,7 @@ class SourceStatus(str, Enum):
 
 @dataclass
 class SourceHealth:
-    """What happened at one source this run. Rendered above the list Mauri reads."""
+    """What happened at one source this run. Rendered above the list the user reads."""
 
     name: str
     funder: str

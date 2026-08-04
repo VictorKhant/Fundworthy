@@ -1,28 +1,28 @@
-"""The program-card assistant: paste a link, get a draft card. (docs/PLAN.md §3)
+"""The program-card assistant: paste a link, get a draft card. (CLAUDE.md)
 
-The problem this solves is a design problem, not a technical one. Mauri has to tell the
-agent what each RISE program is looking for, and CLAUDE.md §2 is unambiguous:
+The problem this solves is a design problem, not a technical one. The user has to tell
+the agent what each program is looking for, and CLAUDE.md is unambiguous:
 
-    "Mauri never writes a prompt. If any workflow requires her to phrase a request to
-     an AI, that workflow is wrong."
+    "The user never writes a prompt. If any workflow requires them to phrase a request
+     to an AI, that workflow is wrong."
 
 A blank "describe what this program funds in funder-facing language" textarea is exactly
-that wrong workflow. So the interaction is inverted: she pastes the program's own page
-from risesandiego.org, Sonnet reads it, and the card comes back **filled in and
-editable**. Her job is to correct a draft, which is a job she already does every day —
-not to compose an instruction for a model.
+that wrong workflow. So the interaction is inverted: the user pastes the program's own
+page from the org's website, Sonnet reads it, and the card comes back **filled
+in and editable**. Their job is to correct a draft, which is a job they already do every
+day — not to compose an instruction for a model.
 
-That inversion is also what makes the output trustworthy. She is reviewing concrete
-sentences about her own programme, so a wrong one is obvious to her. A prompt she wrote
-blind would produce output she has no basis to check.
+That inversion is also what makes the output trustworthy. They are reviewing concrete
+sentences about their own programme, so a wrong one is obvious to them. A prompt written
+blind would produce output they have no basis to check.
 
 Two guarantees the code enforces rather than hopes for:
 
   - **Nothing is saved automatically.** `draft_program_card` returns a draft. Creating
-    the card is a separate call the dashboard makes only after she clicks save, and the
-    card is stamped `drafted_by_ai` until she does.
-  - **It only reads the page she gave it.** No search, no recall, no filling gaps from
-    what the model happens to know about RISE San Diego. A field the page does not
+    the card is a separate call the dashboard makes only after they click save, and the
+    card is stamped `drafted_by_ai` until they do.
+  - **It only reads the page they gave it.** No search, no recall, no filling gaps from
+    what the model happens to know about the org. A field the page does not
     support comes back empty, and the response says which fields those were.
 """
 
@@ -41,25 +41,25 @@ PAGE_TEXT_CAP = 14_000
 ASSISTANT_COST_CEILING_USD = 0.10
 
 SYSTEM = """\
-You are helping the COO of RISE San Diego, a nonprofit in San Diego and Imperial \
-Counties, set up a search for grant funding for one of RISE's own programs.
+You are helping the COO of the organization, a nonprofit in San Diego and Imperial \
+Counties, set up a search for grant funding for one of the org's own programs.
 
-You will be given the text of a page from RISE's own website describing one program.
+You will be given the text of a page from the org's own website describing one program.
 Turn it into a card that a grant-search agent can use.
 
-Write for FUNDERS, not for RISE. The keywords and search queries you produce are used
+Write for FUNDERS, not for the org. The keywords and search queries you produce are used
 to match against foundation and government funding pages, so they must use the language
 those funders use to describe what they fund — "BIPOC leadership development",
-"creative placemaking", "behavioral health workforce" — not RISE's internal names for
+"creative placemaking", "behavioral health workforce" — not the org's internal names for
 things.
 
 Rules:
 - Use only what is on the page you are given. You are not being asked what you know
-  about RISE San Diego; you are being asked what this page says.
+  about the organization; you are being asked what this page says.
 - If the page does not support a field, leave it empty and name that field in
   `fields_missing`. An empty field the COO can fill in is useful. An invented one is
-  worse than useless, because she has no way to tell it apart from a real one.
-- `summary` is one or two plain sentences she would recognise as her own program.
+  worse than useless, because they have no way to tell it apart from a real one.
+- `summary` is one or two plain sentences they would recognise as their own program.
 - `keywords` are the phrases a matching funder would use. 5-10 of them.
 - `search_queries` are 3-5 complete searches, each one specific enough to return
   funders rather than articles.
@@ -109,14 +109,14 @@ SCHEMA = {
 
 
 class AssistantError(RuntimeError):
-    """Something the dashboard should show to Mauri in plain language."""
+    """Something the dashboard should show to the user in plain language."""
 
 
 async def fetch_page_text(url: str) -> tuple[str, str]:
     """(title, text) for a URL, using the pipeline's own fetcher and parser.
 
     Reusing them rather than writing a second fetch path means the assistant obeys the
-    same robots.txt, timeouts and politeness delays the crawl does. RISE's own site is
+    same robots.txt, timeouts and politeness delays the crawl does. The org's own site is
     still someone's website.
     """
     from agent.fetch import Fetcher

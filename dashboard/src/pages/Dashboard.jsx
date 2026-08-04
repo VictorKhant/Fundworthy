@@ -8,11 +8,11 @@ import SearchSettings from "../components/SearchSettings";
 import StatusStrip from "../components/StatusStrip";
 import { useRun } from "../useRun";
 
-// "This week" — the page Mauri opens on Thursday morning.
+// "This week" — the page the user opens on Thursday morning.
 //
 // The findings moved to the top in this pass. The old order put the controls above the
 // list they produce, which was the right instinct and the wrong execution: it meant four
-// screens of knobs before the thing she came to read. The controls are still above the
+// screens of knobs before the thing they came to read. The controls are still above the
 // list, condensed into one always-visible status strip; the knobs themselves fold away
 // behind it, because a floor set in March does not need re-reading every week.
 //

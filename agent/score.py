@@ -1,4 +1,4 @@
-"""Tiered LLM scoring. (CLAUDE.md §7, §8)
+"""Tiered LLM scoring. (CLAUDE.md)
 
 Three tiers, cheapest first:
 
@@ -91,28 +91,28 @@ class Budget:
 # --- prompts ------------------------------------------------------------------
 
 _ORG_PREAMBLE = """\
-You are screening funding opportunities for RISE San Diego, a nonprofit working \
+You are screening funding opportunities for the organization, a nonprofit working \
 across San Diego County and Imperial County (the Far South / Border North region \
 spans both).
 
-The person reading your output is RISE's COO. She has one hour on Thursday morning
-and a hard cap of 10 collective team-hours per application. Her stated problem is
-NOT that she cannot find grants — she can already find plenty. It is that what she
-finds is too small to justify a 10-hour application.
+The person reading your output is the organization's COO. They have one hour on Thursday morning
+and a hard cap of 10 collective team-hours per application. Their stated problem is
+NOT that they cannot find grants — they can already find plenty. It is that what they
+find is too small to justify a 10-hour application.
 
-So: surfacing a marginal opportunity costs her more than missing one. Be strict.
+So: surfacing a marginal opportunity costs them more than missing one. Be strict.
 
-This week she is looking for funding for these programs, and they live in different
+This week they are looking for funding for these programs, and they live in different
 funder universes:
 """
 
 
 def org_context(cfg: Config) -> str:
-    """The shared prompt prefix, built from the program cards Mauri ticked.
+    """The shared prompt prefix, built from the program cards the user ticked.
 
     This used to be a hardcoded description of three programs. It is now generated
-    from the cards, which is the entire point of making them editable: when she adds
-    RISE Now or rewrites what RISE Arts is looking for, the model's instructions change
+    from the cards, which is the entire point of making them editable: when they add
+    RISE Now or rewrite what RISE Arts is looking for, the model's instructions change
     with it and nobody edits Python.
 
     Still byte-stable *within* a run — every candidate in a run sees the same prefix —
@@ -133,39 +133,39 @@ def org_context(cfg: Config) -> str:
         if floor != cfg.min_award:
             lines.append(f"  Award floor for this program: ${floor:,}.")
         if not (card.summary or card.keywords):
-            # An un-filled card is a real state — she added the program but has not
+            # An un-filled card is a real state — they added the program but have not
             # described it yet. Say so rather than letting the model invent a remit.
             lines.append("  (No description recorded yet. Judge fit conservatively and "
                          "say in the rationale that this program's card is empty.)")
     return "\n".join(lines) + "\n"
 
 _TRIAGE_RULES = """
-Your job is one binary decision: is this page an open funding opportunity that RISE
+Your job is one binary decision: is this page an open funding opportunity that the organization
 could actually apply for?
 
 Answer false for: past grantee lists, panelist calls, annual reports, staff pages,
-programs for individual artists only, programs restricted to organizations RISE is
+programs for individual artists only, programs restricted to organizations the organization is
 not, and anything already closed.
 """
 
 _SCORING_RULES = """
-Score this opportunity 0-100 for RISE, write one sentence explaining the score in
-language the COO can act on, and fill in the funder profile she asked for.
+Score this opportunity 0-100 for the organization, write one sentence explaining the score in
+language the COO can act on, and fill in the funder profile they asked for.
 
-Weights — these are the COO's own, given directly (CLAUDE.md §11 Q5, answered):
+Weights — these are the COO's own, given directly (CLAUDE.md Q5, answered):
   40  program fit
   35  award size relative to the floor
   25  can this application realistically be finished before the deadline
 
 Nothing else moves the score. In particular:
 
-- Funder warmth is gone. RISE already receives money from the funders it has
+- Funder warmth is gone. The organization already receives money from the funders it has
   relationships with and does not want to reapply, so a relationship is a reason to
   leave a funder out of the search entirely — never a reason to rank it higher. You are
-  not told whether RISE knows a funder, because it must not change the score.
+  not told whether the organization knows a funder, because it must not change the score.
 - The funder's 990 filing history is shown to the COO as data next to the result. It is
   not a scoring criterion. Where 990 context is given to you below, use it to judge
-  PROGRAM FIT better — a funder whose past grants look nothing like RISE's work is a
+  PROGRAM FIT better — a funder whose past grants look nothing like the organization's work is a
   weak fit however well the page reads — not as a score of its own.
 
 On the 25 points for finishing in time: judge the application against the deadline, not
@@ -196,7 +196,7 @@ application with no estimate cannot be weighed against one that has it — it si
 drops out of the only comparison that matters. If the page is thin, estimate from what
 the funder is asking for and how much money is at stake: a two-page letter of interest
 is not a full proposal with audited financials. A rough number you would defend is far
-more useful to her than no number. If the page is an index or overview rather than a
+more useful to them than no number. If the page is an index or overview rather than a
 single application, estimate the typical application it leads to.
 
 Also:
@@ -206,7 +206,7 @@ Also:
 - award_typical_stated is what the funder says they TYPICALLY or on AVERAGE award —
   not the maximum, and never a total program budget or a since-inception figure.
 - contact_note: only a name, email, or phone number that literally appears on the page.
-- confidence_pct is how confident you are that this funder would fund one of the RISE
+- confidence_pct is how confident you are that this funder would fund one of the organization's
   programs listed above. Be honest and use the low end when the fit is thin.
 - estimated_effort_hours is your read of what a competitive application costs this
   team in WORKING HOURS, counting drafting, gathering attachments, and internal
@@ -221,7 +221,7 @@ Also:
   exceeds the days left before the deadline, the opportunity is not feasible — score
   the "finish in time" component at or near zero and say so plainly in the rationale.
 - time_to_funds_days is your estimate of how long AFTER submitting before the money
-  would actually reach RISE's bank account — decision timeline plus disbursement. A
+  would actually reach the organization's bank account — decision timeline plus disbursement. A
   nonprofit's cash flow depends on this and funders rarely state it, so estimate from
   what the page says about review cycles and award dates. This is a judgement, and it
   is labelled as one; null if you have nothing to go on.
@@ -244,7 +244,7 @@ TRIAGE_SCHEMA = {
     "properties": {
         "is_opportunity": {
             "type": "boolean",
-            "description": "True only if RISE could submit an application to this.",
+            "description": "True only if the organization could submit an application to this.",
         },
         "reason": {"type": "string", "description": "At most 15 words."},
     },
@@ -270,7 +270,7 @@ def scoring_schema(program_slugs: list[str]) -> dict:
     """The response schema, with program_match restricted to the ticked programs.
 
     Built per run rather than hardcoded, because the programs are now editable cards.
-    A program Mauri adds on Sunday has to be selectable by the model on Wednesday
+    A program the user adds on Sunday has to be selectable by the model on Wednesday
     without anyone editing this file.
     """
     return {
@@ -401,7 +401,7 @@ def scoring_schema(program_slugs: list[str]) -> dict:
             "confidence_pct": {
                 "type": ["integer", "null"],
                 "description": "0-100: how confident you are this funder would fund a "
-                               "RISE program listed above.",
+                               "program listed above.",
             },
 
             "needs_human_check": {
@@ -492,7 +492,7 @@ def score_one(candidate: RawCandidate, source: Source, cfg: Config,
     body = _text_block(
         f"Award floor for this run: ${cfg.min_award:,}\n"
         f"Today: {date.today().isoformat()}\n"
-        # The "[WARM — RISE has an existing relationship]" hint used to be appended
+        # The "[WARM — the org has an existing relationship]" hint used to be appended
         # here. Removed with the warmth weight: telling the model about a relationship
         # it must not score on is just an invitation to score on it anyway.
         f"Funder: {candidate.funder}"
@@ -556,7 +556,7 @@ def score_one(candidate: RawCandidate, source: Source, cfg: Config,
                         deadline_iso)
             needs_check = True
 
-    # The same gate, applied to the columns Mauri added. Each is only kept if its own
+    # The same gate, applied to the columns the user added. Each is only kept if its own
     # verbatim quote is literally on the page; otherwise it is dropped and flagged. The
     # point of routing these through one helper is that a new sourced column cannot be
     # added to the schema and quietly skip verification.
@@ -591,7 +591,7 @@ def score_one(candidate: RawCandidate, source: Source, cfg: Config,
 
     active = cfg.programs_active
     # The rationale is prose, so it never passed through the quote gate — and it is the
-    # part Mauri actually reads. A real run produced `award_max = None` (honest) beside
+    # part the user actually reads. A real run produced `award_max = None` (honest) beside
     # a sentence saying "~$80k inferred from public announcements" (not). Flag it and
     # say so on the row rather than silently letting the number stand.
     rationale = str(data["score_rationale"]).strip()

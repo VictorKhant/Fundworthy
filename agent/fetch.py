@@ -1,9 +1,9 @@
-"""Fetching: httpx + retry + politeness delays. (CLAUDE.md §10)
+"""Fetching: httpx + retry + politeness delays. (CLAUDE.md)
 
 We are a small nonprofit's agent hitting funders' own websites once a week. Behave
 accordingly: identify ourselves honestly, obey robots.txt, one request at a time per
-host, and back off rather than hammer. A funder blocking RISE's IP would be a real
-cost to the organization.
+host, and back off rather than hammer. A funder blocking our IP would be a real
+cost to the nonprofits that rely on this.
 """
 
 from __future__ import annotations
@@ -20,8 +20,8 @@ import httpx
 log = logging.getLogger(__name__)
 
 USER_AGENT = (
-    "RISE-San-Diego-Funding-Agent/0.1 "
-    "(+https://risesd.org; nonprofit grant research; contact: RISE San Diego)"
+    "Fundworthy/0.1 "
+    "(+https://github.com/VictorKhant/Rise-Fund-Finder; nonprofit grant research)"
 )
 
 REQUEST_TIMEOUT = httpx.Timeout(20.0, connect=10.0)

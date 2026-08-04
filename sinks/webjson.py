@@ -1,9 +1,9 @@
-"""Static JSON sink for the website. (CLAUDE.md §4; decision A6 Opt 2)
+"""Static JSON sink for the website. (CLAUDE.md; decision A6 Opt 2)
 
 Writes ONE committed file the read-only site loads directly — no serverless reader, no
 Google credential in a browser, and the Sheet stays private. The website renders these
-opportunities for Mauri to review and prune; the ones she keeps get exported to her own
-Google Sheet via her Gmail later (Phase 3). This sink only produces the data file.
+opportunities for the user to review and prune; the ones they keep get exported to their own
+Google Sheet via their Gmail later (Phase 3). This sink only produces the data file.
 
 Only public-safe fields are emitted (an explicit allowlist). Any award or deadline that
 did not survive the accuracy gate (agent/verify.py) is already null on the record, so

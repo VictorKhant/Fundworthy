@@ -2,12 +2,12 @@
 
 This file exists because of a defect the merge produced and no existing test caught:
 `agent/apis.py` keyed its California category map and its Grants.gov vocabulary on the
-old three-value `Program` enum. Once programs became editable cards, a program Mauri
+old three-value `Program` enum. Once programs became editable cards, a program the user
 ticked that was not one of the original three contributed nothing — and, worse, both
-adapters then hit their "nothing matched, search everything" fallback. Her selection
-silently did the opposite of what she asked for.
+adapters then hit their "nothing matched, search everything" fallback. Their selection
+silently did the opposite of what they asked for.
 
-The tests below are all of the form "what she ticked is what gets searched", because
+The tests below are all of the form "what they ticked is what gets searched", because
 that is the invariant that broke.
 
     .venv/bin/python -m pytest tests/test_program_wiring.py -q
@@ -61,8 +61,8 @@ def test_a_tuned_default_beats_the_cards_own_queries():
 
 
 def test_a_new_program_draws_vocabulary_from_its_own_card():
-    """The point of editable cards: a program Mauri creates has no tuned default, so
-    what she (or the assistant) wrote is what gets searched."""
+    """The point of editable cards: a program the user creates has no tuned default, so
+    what they (or the assistant) wrote is what gets searched."""
     card = ProgramCard(slug="RISE_NOW", name="RISE Now",
                        keywords=["rapid response", "community organizing"])
     assert card.api_vocabulary(None) == "rapid response community organizing"
@@ -120,17 +120,17 @@ def test_unticking_arts_removes_the_arts_category():
     assert "Health & Human Services" in mapped
 
 
-# --- the spend ceiling is hers ------------------------------------------------
+# --- the spend ceiling is theirs ----------------------------------------------
 
 def test_the_run_budget_is_customizable_end_to_end(tmp_path, monkeypatch):
-    """She sets the ceiling on the dashboard; the pipeline must actually run to it.
+    """They set the ceiling on the dashboard; the pipeline must actually run to it.
 
     Three hops, each of which has silently broken before: settings row -> Config ->
     the Budget object that refuses the call. A default that looks right in the UI and
     is ignored by the run is worse than no control at all.
     """
-    monkeypatch.setenv("RISE_DB_PATH", str(tmp_path / "rise.db"))
-    monkeypatch.setenv("RISE_KEYFILE", str(tmp_path / ".fernet-key"))
+    monkeypatch.setenv("FUNDWORTHY_DB_PATH", str(tmp_path / "rise.db"))
+    monkeypatch.setenv("FUNDWORTHY_KEYFILE", str(tmp_path / ".fernet-key"))
 
     from agent.config import load_from_db
     from agent.score import Budget, BudgetExceeded
@@ -148,7 +148,7 @@ def test_the_run_budget_is_customizable_end_to_end(tmp_path, monkeypatch):
     budget = Budget(ceiling_usd=cfg.weekly_budget_usd)
     budget.check("claude-sonnet-4-6", 1_000, 500)          # well under — fine
     with pytest.raises(BudgetExceeded):
-        budget.check("claude-sonnet-4-6", 10_000_000, 1)   # over her ceiling — refused
+        budget.check("claude-sonnet-4-6", 10_000_000, 1)   # over their ceiling — refused
 
 
 # --- the COO's ranking criteria (§11 Q5, answered) ----------------------------
@@ -163,9 +163,9 @@ def test_the_scoring_prompt_carries_her_weights_and_nothing_else():
 
 
 def test_warmth_no_longer_buys_a_candidate_the_scoring_budget():
-    """`warm` used to lead the spend-ordering tuple, so RISE's existing relationships
-    consumed the budget first — which is precisely the funders the stakeholder says she
-    does not want. Ordering must now depend only on the opportunity."""
+    """`warm` used to lead the spend-ordering tuple, so the organization's existing relationships
+    consumed the budget first — which is precisely the funders the stakeholder says they
+    do not want. Ordering must now depend only on the opportunity."""
     from agent.run import _rank_for_scoring
     from agent.parse import ParsedPage
     from agent.sources import Confidence, Source, Tier
@@ -260,7 +260,7 @@ def test_a_near_miss_is_not_a_match():
 
 # --- effort estimate is mandatory --------------------------------------------
 #
-# CLAUDE.md §7 weights effort against a hard 10-hour cap, and §1 is explicit that the
+# CLAUDE.md weights effort against a hard 10-hour cap, and §1 is explicit that the
 # cap is the decision the whole product exists to serve. A null cannot be compared
 # against 10, so an opportunity without an estimate silently drops out of that
 # comparison instead of failing it. These tests keep the field non-nullable: it is an
@@ -280,7 +280,7 @@ def test_effort_hours_is_required_and_not_nullable():
 def test_sourced_fields_stay_nullable():
     """The opposite rule, asserted so the change above cannot be widened by accident.
 
-    Award amounts and deadlines must stay nullable — CLAUDE.md §6 forbids inventing
+    Award amounts and deadlines must stay nullable — CLAUDE.md forbids inventing
     them. Only the inferred estimate is mandatory.
     """
     from agent.score import scoring_schema

@@ -1,4 +1,4 @@
-"""Deterministic rejects. Zero LLM cost. (CLAUDE.md §7, §8 tier 1)
+"""Deterministic rejects. Zero LLM cost. (CLAUDE.md tier 1)
 
 These run before any model call, so they are free. Everything they kill is a
 candidate we never pay to think about.
@@ -35,7 +35,7 @@ class Reject(str, Enum):
     BELOW_MIN_AWARD = "below_min_award"
     DEADLINE_TOO_SOON = "deadline_too_soon"
     DEADLINE_PASSED = "deadline_passed"
-    GEOGRAPHY = "geography_excludes_rise"
+    GEOGRAPHY = "geography_excludes_service_area"
     RELIGIOUS = "religious_organization"
     POLITICAL = "political_party"
     EXCLUDED_FUNDER = "excluded_funder"
@@ -60,16 +60,17 @@ class FilterResult:
 
 # --- §7 rejects ---------------------------------------------------------------
 
-# RISE operates across San Diego AND Imperial Counties — Far South/Border North
-# spans both. Never hardcode San Diego alone (§7 geography note).
-RISE_GEOGRAPHY = re.compile(
+# The pilot org operates across San Diego AND Imperial Counties — Far South/Border
+# North spans both. Never hardcode San Diego alone. This service-area pattern is seed
+# configuration; in a multi-tenant build it comes from each org's own settings.
+SERVICE_AREA_GEOGRAPHY = re.compile(
     r"(san\s+diego|imperial\s+count|border\s+north|far\s+south|"
     r"southern\s+california|\bcalifornia\b|\bstatewide\b|\bnational\b|"
     r"\bnationwide\b|united\s+states|all\s+50\s+states)",
     re.IGNORECASE,
 )
 
-# A page that restricts itself to somewhere RISE is not.
+# A page that restricts itself to somewhere the organization is not.
 GEOGRAPHY_EXCLUSIVE = re.compile(
     r"((?:only|exclusively|solely|limited\s+to|restricted\s+to|must\s+be\s+located\s+in|"
     r"serving\s+only)\s+(?:organizations?\s+)?(?:in|within|serving)?\s*"
@@ -104,9 +105,9 @@ POLITICAL = re.compile(
 #      and no source is named "County of San Diego Equity Impact Grant" — the registry
 #      has "County of San Diego". It has been sitting here since day one presented as a
 #      working §7 hard filter while rejecting nothing.
-#   2. Even working, it was a second exclusion list. Mauri now has a remove list she
-#      controls; a hardcoded one beside it means "excluded" has two meanings, only one
-#      of which she can see or change.
+#   2. Even working, it was a second exclusion list. the user now has a remove list they
+#      control; a hardcoded one beside it means "excluded" has two meanings, only one
+#      of which they can see or change.
 #
 # Both now live on the remove list (app/db.py seeds them), which matches on the funder
 # name AND the page title — so a single named PROGRAM can be excluded without excluding
@@ -115,7 +116,7 @@ POLITICAL = re.compile(
 
 # NOT in §7. Added after the first crawl surfaced "CALL FOR PANELISTS",
 # "Grant Panels", "Recent Grants Search", and "Volunteer Opportunities" as
-# candidates. None are money RISE can apply for. Killing them here is free;
+# candidates. None are money the organization can apply for. Killing them here is free;
 # letting them through means paying Haiku to tell us what a regex already knows.
 NOT_AN_OPPORTUNITY = re.compile(
     r"(call\s+for\s+panelists?|grant\s+panels?|panelist\s+application|"
@@ -135,14 +136,14 @@ MATCH_REQUIREMENT = re.compile(
 
 
 def _geography_ok(text: str) -> tuple[bool, str]:
-    """Does this page's geography include where RISE works?
+    """Does this page's geography include where the organization works?
 
     Deliberately permissive: absence of any geographic statement is treated as
     eligible, because rejecting on silence would drop most national funders. Only an
     explicit restriction to somewhere else is a reject.
     """
     exclusive = GEOGRAPHY_EXCLUSIVE.search(text)
-    if exclusive and not RISE_GEOGRAPHY.search(exclusive.group(0)):
+    if exclusive and not SERVICE_AREA_GEOGRAPHY.search(exclusive.group(0)):
         return False, exclusive.group(0)[:160]
     return True, ""
 
@@ -199,7 +200,7 @@ def apply_filters(page: ParsedPage, funder: str, cfg: Config) -> FilterResult:
                 "not enough runway for a 10-hour application",
             )
 
-    # §11 Q4 is unanswered — we do not know what match RISE can meet, so we cannot
+    # §11 Q4 is unanswered — we do not know what match the organization can meet, so we cannot
     # write this filter. Flagging is the honest behavior; guessing is not.
     if MATCH_REQUIREMENT.search(text):
         flags.append(Flag.MATCH_REQUIREMENT)

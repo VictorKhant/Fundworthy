@@ -1,4 +1,4 @@
-"""Entrypoint and orchestration. (CLAUDE.md §10)
+"""Entrypoint and orchestration. (CLAUDE.md)
 
 The three tiers of §8, cheapest first:
 
@@ -10,7 +10,7 @@ sources_exhausted, disabled, or error.
 
     python -m agent.run --no-llm              # free tiers only, $0.00
     python -m agent.run --sink jsonl          # needs ANTHROPIC_API_KEY to score
-    python -m agent.run --sink sheets         # + RISE_SHEET_ID and a service account
+    python -m agent.run --sink sheets         # + FUNDWORTHY_SHEET_ID and a service account
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ log = logging.getLogger("rise")
 def _is_thin_landing_page(page: ParsedPage) -> bool:
     """No amount, no deadline, barely any text — a nav page, not an opportunity.
 
-    Dropping these is what keeps the Sheet readable in the one hour Mauri has (§9).
+    Dropping these is what keeps the Sheet readable in the one hour the user has (§9).
     """
     return (page.award_max is None
             and page.earliest_deadline is None
@@ -56,10 +56,10 @@ def _is_thin_landing_page(page: ParsedPage) -> bool:
 def resolve_sources(cfg: Config, run: RunLog) -> tuple[list[Source], list[Source]]:
     """Which funder pages this run visits.
 
-    The funders table wins when it exists — that is the list Mauri edits. The shipped
+    The funders table wins when it exists — that is the list the user edits. The shipped
     registry in sources.py is the fallback for a fresh clone with no database. Either
-    way, sources she has deactivated never get fetched, and a partner who stopped
-    funding RISE stops costing us requests without losing its record.
+    way, sources they have deactivated never get fetched, and a partner who stopped
+    funding the organization stops costing us requests without losing its record.
     """
     from .sources import sources_from_db
 
@@ -77,7 +77,7 @@ def resolve_sources(cfg: Config, run: RunLog) -> tuple[list[Source], list[Source
 
 
 def _discover_extra(cfg: Config, run: RunLog) -> list[Source]:
-    """Sources from beyond the partner list, when Mauri asked for them.
+    """Sources from beyond the partner list, when the user asked for them.
 
     The provider itself lives on another branch (agent/discovery.py explains why). What
     matters here is that the run log distinguishes "we looked and found nothing" from
@@ -145,12 +145,12 @@ async def enrich_990(run: RunLog) -> dict[str, dict]:
 
 
 def excluded_funders() -> set[str]:
-    """The remove list — funders Mauri has taken out of the search, casefolded.
+    """The remove list — funders the user has taken out of the search, casefolded.
 
     Sources on it are never fetched (they are `active=0`, so `sources_from_db` does not
     return them at all). This set closes the other door: the two indexed databases
     return grants from every funder in the state, so an excluded funder can still reach
-    her through Grants.gov or the CA portal unless we drop it on the way in.
+    them through Grants.gov or the CA portal unless we drop it on the way in.
     """
     try:
         from app.db import db_path, session
@@ -227,9 +227,9 @@ async def crawl(cfg: Config, run: RunLog,
             run.rejected_by_filter[key] = run.rejected_by_filter.get(key, 0) + 1
             return
 
-        # Already shown to Mauri this month. Dropping it here — in the free tier,
+        # Already shown to the user this month. Dropping it here — in the free tier,
         # before triage — is the point: a repeat finding costs $0.00 rather than a
-        # Haiku call, and she does not re-read the same row four Thursdays running.
+        # Haiku call, and they do not re-read the same row four Thursdays running.
         # The archive resets monthly, so it can legitimately come back later.
         if stable_id(page.url, page.title) in already_seen:
             key = "already_seen_this_month"
@@ -278,8 +278,8 @@ async def crawl(cfg: Config, run: RunLog,
                     status=SourceStatus.OK, detail=result.note,
                 ))
                 log.info("  ✓ %-46s %s", source.funder, result.note)
-                # Warnings are things Mauri can act on — a ticked program whose card is
-                # empty searched nothing. They go in the run notes, where she reads
+                # Warnings are things the user can act on — a ticked program whose card is
+                # empty searched nothing. They go in the run notes, where they read
                 # them, not only in this source's detail line.
                 for warning in result.warnings:
                     run.notes.append(warning)
@@ -352,7 +352,7 @@ async def crawl(cfg: Config, run: RunLog,
 def _note_match_requirements(run: RunLog, titles: list[str]) -> None:
     """One line about matching funds, not one per record.
 
-    §11 Q4 (can RISE meet a match?) is unanswered, so these are surfaced rather than
+    §11 Q4 (can the organization meet a match?) is unanswered, so these are surfaced rather than
     filtered — but surfacing has to stay readable to count as surfacing.
     """
     if not titles:
@@ -384,10 +384,10 @@ def _rank_for_scoring(survivors: list[tuple[ParsedPage, Source]], cfg: Config) -
     """
     def key(item):
         page, source = item
-        # `1 if source.warm else 0` used to lead this tuple, so RISE's existing
+        # `1 if source.warm else 0` used to lead this tuple, so the organization's existing
         # relationships always spent the scoring budget first. The stakeholder has since
         # said they already receive money from those funders and do not want to reapply,
-        # so warmth is no longer a priority signal anywhere — a warm funder she wants
+        # so warmth is no longer a priority signal anywhere — a warm funder they want
         # skipped goes on the remove list and is never fetched at all.
         return (
             page.award_max or 0,
@@ -595,7 +595,7 @@ async def main_async(args: argparse.Namespace) -> int:
     )
     # httpx logs every request at INFO, which drowns the run's own output — hundreds of
     # "HTTP Request: GET ... 200 OK" lines around the handful that say what happened.
-    # It is also what the dashboard streams under the Re-run button, so Mauri was
+    # It is also what the dashboard streams under the Re-run button, so the user was
     # reading raw request logs instead of progress. -v still turns it back on.
     if not args.verbose:
         for noisy in ("httpx", "httpcore", "urllib3"):
@@ -606,12 +606,12 @@ async def main_async(args: argparse.Namespace) -> int:
     # Create and seed the settings database before reading config, so a first run picks
     # up the defaults from the same place every later run reads them.
     #
-    # Deliberately NOT done under RISE_STRICT_CONFIG. Strict mode is the scheduled job,
+    # Deliberately NOT done under FUNDWORTHY_STRICT_CONFIG. Strict mode is the scheduled job,
     # where the database is not checked in — auto-creating it there would hand back a
     # fresh `enabled=1` on every run and silently defeat the kill switch, which is the
-    # exact failure evidence/README.md E7 was written about. In strict mode a config we
-    # cannot read stays a refusal to run.
-    strict = os.environ.get("RISE_STRICT_CONFIG", "").strip().lower() in {
+    # exact failure this guards against. In strict mode a config we cannot read stays a
+    # refusal to run.
+    strict = os.environ.get("FUNDWORTHY_STRICT_CONFIG", "").strip().lower() in {
         "1", "true", "yes", "on"}
     if not strict and not args.no_archive:
         try:
@@ -658,7 +658,7 @@ async def main_async(args: argparse.Namespace) -> int:
     budget = Budget(ceiling_usd=args.budget or cfg.weekly_budget_usd)
 
     # The monthly archive, both halves. The purge bounds the file; `already_seen` is
-    # what keeps Mauri from re-reading the same grant every Thursday. Both are skipped
+    # what keeps the user from re-reading the same grant every Thursday. Both are skipped
     # silently if there is no database — the agent still has to run from a fresh clone.
     already_seen: set[str] = set()
     if not args.no_archive:
@@ -689,7 +689,7 @@ async def main_async(args: argparse.Namespace) -> int:
         opportunities = evaluate(survivors, cfg, run, budget, use_llm=use_llm,
                                  funder_990=funder_990)
     except Exception as exc:  # noqa: BLE001
-        # Whatever went wrong, Mauri still gets what we did find, plus a run log
+        # Whatever went wrong, the user still gets what we did find, plus a run log
         # saying it was incomplete. A silent empty Sheet on Thursday morning is
         # worse than a short one with an explanation on it.
         failed = True
@@ -737,7 +737,7 @@ async def main_async(args: argparse.Namespace) -> int:
 
     # Per sink, not per run: with two sinks a failure writing run.json must not cost
     # us the SQLite write that next week's dedup depends on. Whatever happens, we
-    # still try to write a run log — a row saying the write failed is how Mauri finds
+    # still try to write a run log — a row saying the write failed is how the user finds
     # out, without having to call anyone (§13).
     written = 0
     for sink in sinks:
@@ -760,7 +760,7 @@ async def main_async(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="RISE San Diego funding opportunity agent")
+    p = argparse.ArgumentParser(description="the organization funding opportunity agent")
     p.add_argument("--sink", choices=["db", "web", "jsonl", "sheets"], default="db",
                    help="db (default) writes SQLite + run.json; sheets is now export-only")
     p.add_argument("--run-id", help="attach this run's findings to an existing run row")

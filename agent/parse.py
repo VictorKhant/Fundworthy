@@ -1,4 +1,4 @@
-"""page -> raw candidate. (CLAUDE.md §10)
+"""page -> raw candidate. (CLAUDE.md)
 
 Everything extracted here carries the snippet it came from. That is not decoration:
 §6 forbids stating an amount or a deadline that was not on a page we fetched, and the
@@ -59,7 +59,7 @@ _AWARD_DISQUALIFIER = re.compile(
 # Widened after the calibration test caught "must be submitted by <date>" slipping
 # through a `submit by` cue — a 5-day deadline passed the 14-day runway filter
 # because the sentence never matched. Deadline phrasing is the highest-risk part of
-# this parser: a missed cue means a too-soon grant reaches Mauri as if it had runway.
+# this parser: a missed cue means a too-soon grant reaches the user as if it had runway.
 _DEADLINE_CUE = re.compile(
     r"(deadline|due\s+(?:by|date|on)?|"
     r"applications?\s+(?:close|closing|are\s+due|due|must\s+be|period\s+ends)|"

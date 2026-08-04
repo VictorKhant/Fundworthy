@@ -1,13 +1,13 @@
-"""The calibration test. (CLAUDE.md §10)
+"""The calibration test. (CLAUDE.md)
 
-    "tests/calibration.py holds five opportunities Mauri says are a clear yes and
-     five she says are a clear no. The scoring model must rank all five yeses above
+    "tests/calibration.py holds five opportunities the user says are a clear yes and
+     five they say are a clear no. The scoring model must rank all five yeses above
      all five noes. This is the only test that matters."
 
 ⚠️  THE FIXTURES BELOW ARE NOT MAURI'S.  ⚠️
 
-She has not supplied them yet — see STAKEHOLDER.md question 8. They are placeholders
-written from the criteria stated in CLAUDE.md §1 and §7, so the harness is real and
+She has not supplied them yet — see FUTURE.md. They are placeholders
+written from the criteria stated in CLAUDE.md and §7, so the harness is real and
 runnable today. **A pass here does not mean the model is calibrated.** It means the
 pipeline can rank, and the plumbing works. The test says so on every run, loudly,
 and refuses to report success without that caveat.
@@ -34,7 +34,7 @@ from agent.parse import parse_page
 from agent.score import Budget, BudgetExceeded, score_one
 from agent.sources import Confidence, Source, Tier
 
-# Flip to True only when the ten fixtures below are the ones Mauri actually gave us.
+# Flip to True only when the ten fixtures below are the ones the user actually gave us.
 FIXTURES_ARE_FROM_MAURI = False
 
 REJECTED_SCORE = -1  # a candidate the free filters killed never reaches the model
@@ -236,7 +236,7 @@ def evaluate(fixture: Fixture, expected: str, cfg: Config,
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="RISE scoring calibration")
+    p = argparse.ArgumentParser(description="the organization's scoring calibration")
     p.add_argument("--dry-run", action="store_true",
                    help="filters only — no API calls, $0.00")
     p.add_argument("--budget", type=float, default=1.00)
@@ -247,14 +247,14 @@ def main() -> int:
     budget = Budget(ceiling_usd=args.budget)
 
     print("=" * 88)
-    print("CALIBRATION — CLAUDE.md §10")
+    print("CALIBRATION — CLAUDE.md")
     print("=" * 88)
     if not FIXTURES_ARE_FROM_MAURI:
         print(
             "\n  ⚠️  THESE FIXTURES ARE NOT MAURI'S.\n"
-            "     They are placeholders derived from CLAUDE.md §1 and §7 so the harness\n"
+            "     They are placeholders derived from CLAUDE.md and §7 so the harness\n"
             "     runs today. A PASS HERE DOES NOT MEAN THE MODEL IS CALIBRATED — it means\n"
-            "     the pipeline can rank. See STAKEHOLDER.md question 8.\n"
+            "     the pipeline can rank. See FUTURE.md.\n"
         )
     print(f"  Award floor for this run: ${cfg.min_award:,} (§11 Q1, answered).\n")
 

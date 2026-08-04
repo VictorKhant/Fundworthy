@@ -1,9 +1,9 @@
-"""API-key storage. (docs/PLAN.md §3, deliverable 5)
+"""API-key storage. (CLAUDE.md, deliverable 5)
 
-CLAUDE.md §2 says "Mauri never sees a terminal, a repo, a config file, or an API key."
-The second half of that has changed: she now pastes a key into a Settings page, because
-she is the one who owns the bill (§11 Q6) and there is no other honest place to put it.
-The rule that survives is the one that matters — she should never have to *handle* a key
+CLAUDE.md says "the user never sees a terminal, a repo, a config file, or an API key."
+The second half of that has changed: they now paste a key into a Settings page, because
+they are the one who owns the bill (§11 Q6) and there is no other honest place to put it.
+The rule that survives is the one that matters — they should never have to *handle* a key
 outside that single box.
 
 Three properties, each of which is tested:
@@ -18,7 +18,7 @@ Honest about the threat model: the key file sits next to the database, so anyone
 read access to `data/` has both. This defends against the realistic cases — the DB
 getting copied into a shared folder, attached to a bug report, or committed by accident
 — not against an attacker who already owns the machine. Full key management is a
-deployment concern and is written up in HANDOFF.md rather than pretended at here.
+deployment concern and is written up in FUTURE.md rather than pretended at here.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ SETTING_NAME = "anthropic_api_key"
 def _keyfile_path() -> Path:
     from .db import db_path
 
-    override = os.environ.get("RISE_KEYFILE")
+    override = os.environ.get("FUNDWORTHY_KEYFILE")
     if override:
         return Path(override)
     return db_path().parent / KEYFILE_NAME
@@ -127,7 +127,7 @@ SOURCE_ENVIRONMENT = "environment"
 def resolve_api_key(conn=None) -> tuple[str | None, str | None]:
     """(key, where it came from) — 'settings', 'environment', or (None, None).
 
-    Settings wins over the environment: the point of the Settings page is that RISE can
+    Settings wins over the environment: the point of the Settings page is that the org can
     change the key without anyone touching a file. `ANTHROPIC_API_KEY` stays as the
     fallback so the CLI, the tests, and the GitHub Actions run all keep working.
 

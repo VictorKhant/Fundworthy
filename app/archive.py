@@ -1,8 +1,8 @@
 """The monthly archive: dedup on the way in, purge on the way out.
 
-The problem this solves is Mauri's, not the database's. If the agent runs every week
-and the same San Diego Foundation page is open all month, she sees the same row four
-Thursdays running and starts skimming past the whole list. So: a finding is shown once
+The problem this solves is the user's, not the database's. If the agent runs every week
+and the same San Diego Foundation page is open all month, they see the same row four
+Thursdays running and start skimming past the whole list. So: a finding is shown once
 per month, and the month resets.
 
 Two operations, both cheap:
@@ -15,10 +15,10 @@ Two operations, both cheap:
 `purge_old_months`  — `DELETE FROM opportunities WHERE month_key < <this month>`, run once
                      at the start of each run. Bounds the file, and lets a grant seen in
                      July legitimately resurface in August. That resurfacing is the
-                     intended, documented exception (docs/PLAN.md §2b) — the archive is a
+                     intended, documented exception (CLAUDE.md) — the archive is a
                      "don't repeat yourself this month" index, not a permanent record.
 
-Nothing here decides *what* to keep; it only decides what Mauri has already been shown.
+Nothing here decides *what* to keep; it only decides what the user has already been shown.
 """
 
 from __future__ import annotations

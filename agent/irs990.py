@@ -2,13 +2,13 @@
 
 What this gives you, and what it does not
 -----------------------------------------
-Mauri asked for the 990 so she can see "who they have given to and how much". Only half
+the user asked for the 990 so they can see "who they have given to and how much". Only half
 of that is reachable at a cost this project can justify, and the honest thing is to say
 which half.
 
   ✅ REACHABLE — ProPublica's free API: the funder's EIN, its most recent filing year,
      total revenue and total expenses, and a direct link to the filing. That answers
-     "is this an organisation that moves money at RISE's scale, or a $40k family fund
+     "is this an organisation that moves money at the organization's scale, or a $40k family fund
      whose page happens to read well?" — which is a real screening question.
 
   ❌ NOT REACHABLE cheaply — the grantee list (Schedule I / 990-PF Part XV). It is not
@@ -19,13 +19,13 @@ which half.
      own stated bar: cost-optimised, sustainable, no fragile dependencies.
 
 So the link is the bridge. Every result carries a one-click "view their 990" that lands
-on the filing, where the grantee list is a scroll away for the cases where she wants it.
-If RISE later gets Candid/Foundation Directory access (§11 Q2, still unanswered), that
+on the filing, where the grantee list is a scroll away for the cases where they want it.
+If the organization later gets Candid/Foundation Directory access (§11 Q2, still unanswered), that
 is the clean way to close the gap — it is a paid API that serves grantee data directly.
 
 Why this is not scored
 ----------------------
-Her instruction was "also look at 990 form", and the weight split she chose puts the
+Their instruction was "also look at 990 form", and the weight split they chose puts the
 100 points on program fit, award size and feasibility. So this is context, not a score:
 it is shown next to the result, and the scoring prompt is told to use it to judge
 PROGRAM FIT better rather than as a criterion of its own.
@@ -94,7 +94,7 @@ async def lookup(name: str, fetcher=None) -> dict | None:
     """Return 990 facts for a funder, or None if we could not confidently identify it.
 
     Deliberately conservative about identity. Matching the wrong EIN would attach one
-    organisation's finances to another's name on Mauri's screen, which is exactly the
+    organisation's finances to another's name on the user's screen, which is exactly the
     class of confident-but-wrong output §6 exists to prevent — so a fuzzy match is no
     match.
     """
@@ -147,7 +147,7 @@ def _best_match(query: str, orgs: list[dict]) -> dict | None:
 
     ProPublica returns 202 results for "San Diego Foundation", most of them unrelated
     organisations that merely share a word. Taking result [0] would attach one charity's
-    finances to another charity's name on Mauri's screen — a confident wrong answer,
+    finances to another charity's name on the user's screen — a confident wrong answer,
     which is the specific failure §6 exists to prevent. So: exact token match, and when
     that is ambiguous, nothing.
     """

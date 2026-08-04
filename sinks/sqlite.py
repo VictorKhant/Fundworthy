@@ -1,9 +1,9 @@
-"""The SQLite sink — now the primary destination. (docs/PLAN.md §0)
+"""The SQLite sink — now the primary destination. (CLAUDE.md)
 
-CLAUDE.md §4 said "the Sheet *is* the product". That is no longer true: the dashboard is,
+CLAUDE.md said "the Sheet *is* the product". That is no longer true: the dashboard is,
 and this sink is what feeds it. `sinks/sheets.py` survives unchanged as an *export*
-target for the shortlist Mauri keeps, so the argument that mattered — she still ends up
-owning her data in a tool she understands — survives the change.
+target for the shortlist the user keeps, so the argument that mattered — they still end up
+owning their data in a tool they understand — survives the change.
 
 Writing through the sink protocol rather than straight from the runner is what keeps
 that possible. The agent still emits Opportunity records and knows nothing about where

@@ -113,8 +113,9 @@ export function pacificStamp(value) {
   return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")} ${get("timeZoneName")}`;
 }
 
-// Whoever this install is for. The UI used to say "RISE" in a dozen places, which is
-// wrong for anyone else and was never a fact the code should have been asserting. Blank
+// Whoever this install is for. The UI used to hardcode the organization's name in a dozen
+// places, which is wrong for anyone else and was never a fact the code should have been
+// asserting. Blank
 // reads as "your organization" rather than as a guess — the same rule the findings list
 // applies to award amounts, applied to the one fact the app knows least about.
 export const orgLabel = (name) => (name || "").trim() || "your organization";

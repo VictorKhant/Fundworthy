@@ -1,4 +1,4 @@
-"""The Sink protocol. (CLAUDE.md §6)
+"""The Sink protocol. (CLAUDE.md)
 
 The agent emits Opportunity records; sinks render them. Adding a non-Sheets
 destination later means writing one file in here, not touching the agent.
@@ -33,8 +33,8 @@ class Sink(Protocol):
 
 # --- coverage ----------------------------------------------------------------
 #
-# §9: no technical vocabulary on anything Mauri reads. "unreachable" and "http_503"
-# are for the log; these sentences are for her.
+# §9: no technical vocabulary on anything the user reads. "unreachable" and "http_503"
+# are for the log; these sentences are for them.
 
 _STATUS_PLAIN = {
     "unreachable": "could not be reached",
@@ -46,7 +46,7 @@ def coverage_banner(run: RunLog | None) -> list[str]:
     """Plain sentences describing what was and wasn't checked.
 
     This is the answer to "why is the list short this week?" — a question that
-    otherwise costs Mauri a phone call, or worse, costs her trust in the list.
+    otherwise costs the user a phone call, or worse, costs them trust in the list.
 
     Two separate things get said, because they mean different things. A source that
     broke is news and leads. A source with no address on file is a standing to-do

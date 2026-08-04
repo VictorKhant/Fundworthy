@@ -3,14 +3,14 @@
 The pipeline is launched as a **subprocess** (`python -m agent.run`), not imported and
 called in a thread. Three reasons, in order of how much they matter:
 
-  1. **Stop actually stops.** CLAUDE.md §8 promises Mauri a kill switch. A thread in
+  1. **Stop actually stops.** CLAUDE.md promises the user a kill switch. A thread in
      the middle of an httpx call cannot be interrupted reliably; a process can be
      terminated. The button on the dashboard has to be as real as the config flag.
-  2. **It is the same code path as the cron run.** Whatever RISE sees on Wednesday
+  2. **It is the same code path as the cron run.** Whatever the org sees on Wednesday
      night is what the button does on Sunday afternoon. A second in-process entrypoint
      would be a second thing to keep correct.
   3. **A crash in the crawl cannot take down the settings page.** The API stays up and
-     reports the failure, which is the state RISE is most likely to need it in.
+     reports the failure, which is the state the org is most likely to need it in.
 
 The API key is passed to the child through its environment, read from the encrypted
 settings row. It is never written to a file, never an argv value (which would put it in
@@ -87,7 +87,7 @@ class RunManager:
 
             env = dict(os.environ)
             env["PYTHONUNBUFFERED"] = "1"
-            env["RISE_DB_PATH"] = str(db_path())
+            env["FUNDWORTHY_DB_PATH"] = str(db_path())
             # Env, not argv: an argv secret is visible in `ps` to every user on the box.
             if key:
                 env["ANTHROPIC_API_KEY"] = key
@@ -118,7 +118,7 @@ class RunManager:
         return run_id
 
     def stop(self) -> bool:
-        """Mauri's stop button. Terminate, then kill if it will not go."""
+        """the user's stop button. Terminate, then kill if it will not go."""
         with self._lock:
             if not self.is_running or self._proc is None:
                 return False
@@ -174,7 +174,7 @@ class RunManager:
         A NEGATIVE exit code means the process was killed by a signal, which for this
         app means the Stop button — `stop()` sends SIGTERM. That is not a failure, and
         it raced: the pump thread got here before stop() could mark the row, so a run
-        Mauri deliberately ended reported "failed (exit -15)". Deciding it here, from
+        the user deliberately ended reported "failed (exit -15)". Deciding it here, from
         the exit code itself, removes the race rather than papering over it.
         """
         stopped = code < 0

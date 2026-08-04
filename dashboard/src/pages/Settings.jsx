@@ -3,17 +3,17 @@ import { api } from "../api";
 
 // The API key page.
 //
-// CLAUDE.md §2 said "Mauri never sees a terminal, a repo, a config file, or an API key."
+// CLAUDE.md said "the user never sees a terminal, a repo, a config file, or an API key."
 // The last of those has changed, deliberately: §11 Q6 asks who owns the key and the bill,
 // and there is no honest answer that does not involve someone at the organisation holding
-// it. What survives is the part that mattered — she handles it in one box, once, and
+// it. What survives is the part that mattered — they handle it in one box, once, and
 // never again. The three-step walkthrough is the rest of that promise: "go to
 // console.anthropic.com" is not instructions to someone who has never been there.
 //
 // The box is write-only. Once saved, the key is encrypted on disk and no endpoint will
 // return it; the page can only ever show the last four characters. That is why there is a
-// "Check it still works" control — she can confirm the saved key is good without anyone
-// having to read it back to her.
+// "Check it still works" control — they can confirm the saved key is good without anyone
+// having to read it back to them.
 
 const STEPS = [
   <>
@@ -226,7 +226,7 @@ function OrgPanel({ settings, onChange }) {
 
       <p className="muted small">
         Inviting teammates and switching between organizations needs accounts, which this
-        version does not have — see HANDOFF.md.
+        version does not have — see FUTURE.md.
       </p>
     </section>
   );

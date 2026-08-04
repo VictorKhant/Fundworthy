@@ -1,13 +1,13 @@
-"""SQLite store — schema, connections, migrations. (docs/PLAN.md §2b)
+"""SQLite store — schema, connections, migrations. (CLAUDE.md)
 
 One file on disk, no server, no ORM. The whole store is small enough to read in one
-sitting, which matters more than elegance for something RISE has to maintain after we
-leave.
+sitting, which matters more than elegance for something the organization has to maintain
+after we leave.
 
 Four things live here that used to live in a Google Sheet or in Python source:
 
   settings       the award floor, the runway, the caps, the kill switch, the API key
-  programs       RISE's programs as editable cards, ticked on or off per week
+  programs       the organization's programs as editable cards, ticked on or off per week
   funders        the partner list, editable — no longer hardcoded in agent/sources.py
   opportunities  this month's findings, which is also the dedup index and the archive
   runs           the run log
@@ -15,7 +15,7 @@ Four things live here that used to live in a Google Sheet or in Python source:
 On dedup and the monthly purge
 ------------------------------
 `opportunities.id` is a TEXT PRIMARY KEY holding `stable_id(source_url, title)`. SQLite
-backs a TEXT PRIMARY KEY with a unique index, so "have we already shown Mauri this?" is
+backs a TEXT PRIMARY KEY with a unique index, so "have we already shown the user this?" is
 an index probe, not a scan — constant time in practice regardless of how many rows the
 month accumulated. That check runs in the free deterministic tier, so a repeat finding
 costs $0.00 rather than a Haiku call.
@@ -23,7 +23,7 @@ costs $0.00 rather than a Haiku call.
 The purge is deliberately blunt: at the start of every run, every row from a month
 earlier than the current one is deleted. That keeps the file from growing without bound
 and means a grant seen in July is allowed to resurface in August. That resurfacing is
-intended, not a bug — it is the documented exception (docs/PLAN.md §2b).
+intended, not a bug — it is the documented exception (CLAUDE.md).
 """
 
 from __future__ import annotations
@@ -81,8 +81,8 @@ CREATE TABLE IF NOT EXISTS funders (
     url         TEXT,
     sector      TEXT NOT NULL DEFAULT 'other',
     funder_type TEXT NOT NULL DEFAULT 'other',
-    -- An existing RISE relationship. Kept as a LABEL only. It used to boost the score
-    -- and sort first; the stakeholder has since said the opposite — they already get
+    -- An existing organization relationship. Kept as a LABEL only. It used to boost the
+    -- score and sort first; the stakeholder has since said the opposite — they already get
     -- money from those funders consistently and do not want to reapply — so warmth is
     -- now a reason to consider EXCLUDING, never a reason to rank higher.
     warm        INTEGER NOT NULL DEFAULT 0,
@@ -90,7 +90,7 @@ CREATE TABLE IF NOT EXISTS funders (
     -- the whole point: excluding at the crawl stage costs nothing, where excluding
     -- after scoring would have already spent the tokens.
     active      INTEGER NOT NULL DEFAULT 1,
-    exclude_reason TEXT NOT NULL DEFAULT '',  -- why she took it off the list
+    exclude_reason TEXT NOT NULL DEFAULT '',  -- why they took it off the list
     -- 990 lookup, cached here rather than repeated per run: a funder's filings change
     -- once a year, so this is ~40 requests once and effectively never again.
     ein                    TEXT,
@@ -115,7 +115,7 @@ CREATE TABLE IF NOT EXISTS opportunities (
     id                     TEXT PRIMARY KEY,   -- stable_id(source_url, title)
     run_id                 TEXT,
     month_key              TEXT NOT NULL,      -- 'YYYY-MM' — the purge + dedup partition
-    found_on               TEXT NOT NULL,      -- date first surfaced to Mauri
+    found_on               TEXT NOT NULL,      -- date first surfaced to the user
     title                  TEXT NOT NULL,
     funder                 TEXT NOT NULL,
     source_url             TEXT NOT NULL,
@@ -138,9 +138,9 @@ CREATE TABLE IF NOT EXISTS opportunities (
     needs_human_check      INTEGER NOT NULL DEFAULT 1,
     section                TEXT NOT NULL DEFAULT 'not_stated',
     -- Funder page vs public grants database. Same accuracy rules either way, but very
-    -- different starting positions for a conversation, so Mauri gets to see which.
+    -- different starting positions for a conversation, so the user gets to see which.
     source_kind            TEXT NOT NULL DEFAULT 'funder_page',
-    -- The COO's own criteria (§11 Q5). Two different kinds of time, which she
+    -- The COO's own criteria (§11 Q5). Two different kinds of time, which they
     -- separated and we had conflated: days to BE READY to submit, vs days from
     -- submitting to money in the bank.
     application_lead_time_days INTEGER,
@@ -184,7 +184,7 @@ CREATE INDEX IF NOT EXISTS idx_runs_started ON runs(started_at DESC);
 # --- defaults -----------------------------------------------------------------
 
 # §11 Q1 is ANSWERED: $10,000 is the smallest award worth 10 hours of team time.
-# The placeholder machinery that used to guard this is gone (docs/PLAN.md §0).
+# The placeholder machinery that used to guard this is gone (CLAUDE.md).
 MIN_AWARD_DEFAULT = 10_000
 
 DEFAULT_SETTINGS: dict[str, str] = {
@@ -193,22 +193,23 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "max_opportunities": "12",
     "run_budget_usd": "1.00",
     "enabled": "1",
-    # The taxonomy is a placeholder until Mauri answers STAKEHOLDER.md Q10 ("what are
-    # the four sectors?"). Her answer renames labels; it does not change code.
+    # The taxonomy is a placeholder until the user answers FUTURE.md ("what are
+    # the four sectors?"). Their answer renames labels; it does not change code.
     "sectors_active": json.dumps(
         ["warm_partner", "foundation", "government", "arts_agency"]
     ),
     "search_beyond_partners": "0",  # lights up once the discovery provider lands
     # Who this install is for. Empty by default and shown as "Your organization" until
-    # someone fills it in — the UI used to say "RISE" in a dozen places, which is wrong
-    # for anyone else and was never a fact the code should have been asserting.
+    # someone fills it in — the UI used to hardcode the organization's name in a dozen
+    # places, which is wrong for anyone else and was never a fact the code should have
+    # been asserting.
     "org_name": "",
     "org_location": "",
 }
 
-# Seeded onto the REMOVE LIST, with the reason recorded. RISE already receives money
-# from these and does not want to reapply, so searching them spends tokens producing
-# rows Mauri skips. Each is one click from being searched again if she disagrees.
+# Seeded onto the REMOVE LIST, with the reason recorded. The organization already receives
+# money from these and does not want to reapply, so searching them spends tokens producing
+# rows the user skips. Each is one click from being searched again if they disagree.
 #
 # The last entry is not a funder but a PROGRAMME — §7's "done, no more funding". It was
 # previously a hardcoded reject in filters.py that matched on funder name and therefore
@@ -224,7 +225,7 @@ REMOVE_LIST_SEED: dict[str, str] = {
     "California Arts Council": "Already funded by them — no need to reapply",
     "The Morales Fund": "Already funded by them — no need to reapply",
     "The Villegas Fund": "Already funded by them — no need to reapply",
-    "County of San Diego Equity Impact Grant": "Done — no more funding (CLAUDE.md §7)",
+    "County of San Diego Equity Impact Grant": "Done — no more funding (CLAUDE.md)",
 }
 
 SECTORS = ("warm_partner", "foundation", "government", "arts_agency",
@@ -237,7 +238,7 @@ FUNDER_TYPES = ("private_foundation", "corporate", "community", "government",
 # --- connection ---------------------------------------------------------------
 
 def db_path() -> Path:
-    return Path(os.environ.get("RISE_DB_PATH") or DEFAULT_DB_PATH)
+    return Path(os.environ.get("FUNDWORTHY_DB_PATH") or DEFAULT_DB_PATH)
 
 
 def connect(path: Path | str | None = None) -> sqlite3.Connection:
@@ -289,7 +290,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     """Forward-only migrations keyed off meta.schema_version.
 
     There is exactly one version today. The hook exists so that adding a column after
-    RISE is already running does not mean asking someone to delete their database.
+    the organization is already running does not mean asking someone to delete their database.
     """
     row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
     current = int(row["value"]) if row else 0
@@ -356,9 +357,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
     if current < 6:
         # v6 puts the eight former partners and the County Equity Impact Grant on the
-        # remove list. Only touches rows Mauri has not already made a decision about —
+        # remove list. Only touches rows the user has not already made a decision about —
         # an empty exclude_reason means nobody has ticked or unticked it — so a database
-        # where she has already chosen is left exactly as she left it.
+        # where they have already chosen is left exactly as they left it.
         for name, reason in REMOVE_LIST_SEED.items():
             conn.execute(
                 "UPDATE funders SET active=0, exclude_reason=? "
@@ -421,10 +422,10 @@ def seed_settings(conn: sqlite3.Connection) -> None:
         )
 
 
-# RISE's programs, with the URLs confirmed by fetching risesandiego.org/programs.
+# The pilot org's programs, with URLs confirmed by fetching its own program pages.
 #
-# Only the three Mauri named as priorities ship with content, and that content comes
-# from CLAUDE.md §7 — i.e. from the intake conversation, not from us. The other four
+# Only the three the user named as priorities ship with content, and that content comes
+# from CLAUDE.md — i.e. from the intake conversation, not from us. The other four
 # ship as name + real URL + empty card ON PURPOSE: filling them in is exactly what the
 # "build this card from a link" assistant is for, and inventing a description of a real
 # organisation's programme would be the same failure mode §6 forbids for award amounts.
@@ -484,7 +485,7 @@ SEED_PROGRAMS: list[dict] = [
             "creative placemaking grant",
         ],
     },
-    # --- named by RISE, not yet described. The assistant fills these in. ---
+    # --- named by the organization, not yet described. The assistant fills these in. ---
     {
         "slug": "ILIA",
         "name": "Inclusive Leadership in Action (ILIA) Awards",
@@ -513,7 +514,7 @@ SEED_PROGRAMS: list[dict] = [
 
 
 def seed_programs(conn: sqlite3.Connection) -> None:
-    """First boot only. Never overwrites a card Mauri has edited."""
+    """First boot only. Never overwrites a card the user has edited."""
     stamp = now_iso()
     for p in SEED_PROGRAMS:
         conn.execute(
@@ -539,9 +540,9 @@ def seed_funders(conn: sqlite3.Connection) -> None:
 
     The registry stays in agent/sources.py as the shipped starting point — deleting it
     would collide with the teammate's discovery branch and would lose the URL-confidence
-    research already done there. From here on the DB is authoritative: Mauri adds,
+    research already done there. From here on the DB is authoritative: the user adds,
     edits, and deactivates partners in the dashboard, and a funder who stops funding
-    RISE gets deactivated rather than deleted, so the relationship history survives.
+    the organization gets deactivated rather than deleted, so the relationship history survives.
     """
     from agent.sources import ALL_SOURCES, sector_for
 
@@ -556,7 +557,7 @@ def seed_funders(conn: sqlite3.Connection) -> None:
                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(id) DO UPDATE SET
                    -- Only ever backfill the adapter. Everything else on an existing
-                   -- row is Mauri's, and a re-seed must not overwrite her edits.
+                   -- row is the user's, and a re-seed must not overwrite their edits.
                    adapter=COALESCE(funders.adapter, excluded.adapter)""",
             (
                 _funder_id(s.funder, s.url), s.funder, s.url, sector_for(s),
@@ -575,7 +576,7 @@ def seed_remove_list_only(conn: sqlite3.Connection) -> None:
     so it gets a row here whose only job is to be on the remove list and be matched
     against page titles.
 
-    This is also what makes the remove list Mauri's single lever: she can exclude a
+    This is also what makes the remove list the user's single lever: they can exclude a
     whole funder or one named programme from the same place, and see both.
     """
     stamp = now_iso()
@@ -603,8 +604,8 @@ def _funder_id(name: str, url: str | None = None) -> str:
     SAM.gov vanished from the registry with no error anywhere — the seed just wrote
     over itself. Including the URL keeps distinct entries distinct.
 
-    (`create_funder` still keys on name alone, deliberately: when Mauri types a funder
-    that is already on her list, updating that row is what she means, not adding a
+    (`create_funder` still keys on name alone, deliberately: when the user types a funder
+    that is already on their list, updating that row is what they mean, not adding a
     second one with the same name.)
     """
     import hashlib

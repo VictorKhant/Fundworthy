@@ -1,12 +1,12 @@
 import { useState } from "react";
 import { api, money } from "../api";
 
-// Program cards: the thing Mauri ticks to say "search for this one this week".
+// Program cards: the thing the user ticks to say "search for this one this week".
 //
-// The "Build it from a link" flow is the answer to CLAUDE.md §2 ("Mauri never writes a
-// prompt"). She pastes the program's page from risesandiego.org; Sonnet reads it and
-// fills the card in; she edits and saves. Nothing is stored until she clicks save, and
-// a card the AI drafted stays marked as a draft until she does — so the difference
+// The "Build it from a link" flow is the answer to CLAUDE.md ("the user never writes a
+// prompt"). They paste the program's page from the org's website; Sonnet reads it and
+// fills the card in; they edit and save. Nothing is stored until they click save, and
+// a card the AI drafted stays marked as a draft until they do — so the difference
 // between "the AI wrote this" and "I checked this" is visible on the card itself.
 
 const BLANK = {

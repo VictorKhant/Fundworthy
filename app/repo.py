@@ -1,4 +1,4 @@
-"""CRUD over the SQLite store. (docs/PLAN.md §2b)
+"""CRUD over the SQLite store. (CLAUDE.md)
 
 Plain functions taking an open connection, so the API layer, the pipeline runner and
 the tests all use exactly the same code path. No ORM, no session magic, nothing that
@@ -257,7 +257,7 @@ def excluded_funder_names(conn) -> set[str]:
     Skipping them at the crawl is the cheap half and catches most of it. But the two
     indexed databases return grants from every funder in the state, so an excluded
     funder can still arrive through Grants.gov or the CA portal — which would put
-    exactly the opportunity she said she does not want back on her list, by a different
+    exactly the opportunity they said they do not want back on their list, by a different
     door. Both doors have to be closed.
     """
     return {
@@ -418,7 +418,7 @@ def save_opportunity(conn, opp, run_id: str | None = None) -> None:
 
 def list_opportunities(conn, *, month: str | None = None,
                        run_id: str | None = None) -> list[dict]:
-    """Mauri's reading order, enforced in SQL so every surface agrees.
+    """the user's reading order, enforced in SQL so every surface agrees.
 
     Two rules now, and the second one used to be three:
 

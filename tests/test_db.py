@@ -3,11 +3,11 @@
 Runs offline with no API key and no network. The three things worth actually testing
 here are the ones that would fail silently in production:
 
-  - the dedup probe, because a false negative means Mauri re-reads the same grant every
-    Thursday and a false positive means a real opportunity never reaches her at all;
+  - the dedup probe, because a false negative means the user re-reads the same grant every
+    Thursday and a false positive means a real opportunity never reaches them at all;
   - the purge boundary, because off-by-one means either the file grows forever or this
     month's findings get deleted the moment the month ticks over;
-  - the reading order, because "human-check rows last" is something she asked for
+  - the reading order, because "human-check rows last" is something they asked for
     directly and it is easy to break from any of three different surfaces.
 
     .venv/bin/python -m pytest tests/test_db.py -q
@@ -34,8 +34,8 @@ def db(tmp_path, monkeypatch):
     """A real database file per test — SQLite behaviour differs enough in :memory:
     (WAL, separate connections) that testing against a file is the honest choice."""
     path = tmp_path / "rise.db"
-    monkeypatch.setenv("RISE_DB_PATH", str(path))
-    monkeypatch.setenv("RISE_KEYFILE", str(tmp_path / ".fernet-key"))
+    monkeypatch.setenv("FUNDWORTHY_DB_PATH", str(path))
+    monkeypatch.setenv("FUNDWORTHY_KEYFILE", str(tmp_path / ".fernet-key"))
     init_db(path)
     return path
 
@@ -75,7 +75,7 @@ def test_seeds_the_seven_programs_with_three_active(db):
         programs = repo.list_programs(conn)
         active = [p["slug"] for p in programs if p["active"]]
     assert len(programs) == 7
-    # The three Mauri named as priorities, and only those.
+    # The three the user named as priorities, and only those.
     assert sorted(active) == ["ARTS", "RESILIENCE", "RULFP"]
 
 
@@ -98,7 +98,7 @@ def test_seeds_funders_from_the_source_registry(db):
     with session(db) as conn:
         funders = repo.list_funders(conn)
     warm = [f for f in funders if f["warm"]]
-    assert len(warm) == 8, "the eight partners from CLAUDE.md §7"
+    assert len(warm) == 8, "the eight partners from CLAUDE.md"
     assert all(f["sector"] for f in funders), "every funder carries a sector tag"
 
 
@@ -156,8 +156,8 @@ def test_program_crud(db):
         assert created["min_award"] == 5_000
 
         updated = repo.update_program(conn, created["id"],
-                                      {"summary": "Edited by Mauri", "active": False})
-        assert updated["summary"] == "Edited by Mauri"
+                                      {"summary": "Edited by the user", "active": False})
+        assert updated["summary"] == "Edited by the user"
         assert updated["active"] is False
 
         assert repo.delete_program(conn, created["id"]) is True
@@ -181,7 +181,7 @@ def test_program_needs_a_name(db):
 # --- funders ------------------------------------------------------------------
 
 def test_funder_deactivation_keeps_the_record(db):
-    """The case that motivated the whole feature: a partner stops funding RISE. It
+    """The case that motivated the whole feature: a partner stops funding the organization. It
     leaves the search, but the relationship history stays."""
     with session(db) as conn:
         funders = repo.list_funders(conn)
@@ -204,7 +204,7 @@ def test_funder_create_is_idempotent_on_name(db):
 # --- opportunities, dedup, purge ----------------------------------------------
 
 def test_save_and_read_back_every_new_attribute(db):
-    """All eleven columns Mauri asked for survive a round trip."""
+    """All eleven columns the user asked for survive a round trip."""
     opp = _opp(
         award_typical=35_000,
         deadline_type=DeadlineType.ROLLING,
@@ -298,7 +298,7 @@ def test_purge_is_a_no_op_when_everything_is_current(db):
 # --- reading order ------------------------------------------------------------
 
 def test_human_check_rows_sort_last(db):
-    """Mauri asked for this explicitly: she wants to read everything the agent is sure
+    """the user asked for this explicitly: they want to read everything the agent is sure
     about before anything it wants a second opinion on."""
     with session(db) as conn:
         repo.save_opportunity(conn, _opp(
@@ -397,8 +397,8 @@ def test_indexed_adapters_survive_the_round_trip(db):
 
 
 def test_unticking_a_sector_also_stops_its_indexed_sources(db):
-    """The CA Grants Portal and Grants.gov are government money. If Mauri unticks
-    government funding, not searching the government's own databases is what she
+    """The CA Grants Portal and Grants.gov are government money. If the user unticks
+    government funding, not searching the government's own databases is what they
     asked for — the tick has to mean the same thing everywhere."""
     from agent.sources import Tier, sources_from_db
 
@@ -428,7 +428,7 @@ def test_credit_never_lands_on_an_unchecked_source():
 def test_source_kind_survives_the_sink(db):
     """Provenance was being dropped on the way into the database, so every record read
     back as a funder page regardless of where it came from — and the dashboard could
-    not tell Mauri which results came from a public database rather than a partner."""
+    not tell the user which results came from a public database rather than a partner."""
     from agent.models import SourceKind
 
     with session(db) as conn:
@@ -448,8 +448,8 @@ def test_sqlite_sink_creates_its_own_schema(tmp_path, monkeypatch):
     """The sink is the last thing a multi-minute run does, so the database it opens at
     the end need not be the one it read config from at the start. Losing a whole
     scored run to `no such table` at the final step is the most expensive way to fail."""
-    monkeypatch.setenv("RISE_DB_PATH", str(tmp_path / "gone.db"))
-    monkeypatch.setenv("RISE_KEYFILE", str(tmp_path / ".fernet-key"))
+    monkeypatch.setenv("FUNDWORTHY_DB_PATH", str(tmp_path / "gone.db"))
+    monkeypatch.setenv("FUNDWORTHY_KEYFILE", str(tmp_path / ".fernet-key"))
 
     from sinks.sqlite import SqliteSink
 
@@ -464,7 +464,7 @@ def test_sqlite_sink_creates_its_own_schema(tmp_path, monkeypatch):
 # --- one exclusion mechanism, not two -----------------------------------------
 #
 # filters.py used to carry a hardcoded EXCLUDED_FUNDERS beside the remove list. Two
-# problems: "excluded" meant two different things, only one of which Mauri could see —
+# problems: "excluded" meant two different things, only one of which the user could see —
 # and the hardcoded one NEVER FIRED. It matched on funder name, and no source is called
 # "County of San Diego Equity Impact Grant"; the registry has "County of San Diego".
 # Zero occurrences across every recorded run, while presenting as a working §7 filter.
@@ -473,7 +473,7 @@ def test_the_hardcoded_exclusion_list_is_gone(db):
     import agent.filters as filters
 
     assert not hasattr(filters, "EXCLUDED_FUNDERS"), \
-        "exclusion lives on the remove list, which Mauri controls — nowhere else"
+        "exclusion lives on the remove list, which the user controls — nowhere else"
 
 
 def test_the_eight_former_partners_ship_on_the_remove_list(db):
