@@ -32,10 +32,10 @@ Before any multi-tenant work, get the current app hosted so the pilot org can us
 This is the existing single-tenant build, unchanged.
 
 - Follow [docs/DEPLOY-ORACLE.md](docs/DEPLOY-ORACLE.md): Oracle Always-Free ARM VM →
-  app as a `systemd` service → nginx in front → HTTPS.
-- **Auth is the one real blocker.** The moment the app is reachable from the internet
-  without a login, anyone with the URL can spend the org's API key. Auth (below) must
-  land before, or at the same time as, exposing it.
+  app as a `systemd` service → nginx in front → HTTPS → sign-in (§8).
+- ~~**Auth is the one real blocker.**~~ **Shipped** — see §2. Set `FIREBASE_PROJECT_ID`
+  and `ALLOWED_EMAILS` in the VM's `.env` as part of the deploy; the app refuses to start
+  half-configured, so there is no window where it is reachable and open.
 - **Idle reclamation:** Oracle can reclaim Always-Free compute that looks idle over a
   7-day window. A once-a-week app is a candidate. Mitigate with a light periodic
   health ping, or upgrade the account to Pay-As-You-Go (keeps the free resources, exempts
@@ -45,15 +45,25 @@ This is the existing single-tenant build, unchanged.
 
 ---
 
-## 2. Auth (Firebase)
+## 2. Auth (Firebase) — ✅ shipped
 
-The prerequisite for exposing the app. `dashboard/src/auth.js` is already a stub gated on
-`VITE_SHOW_AUTH`; the org switcher already shows the org name un-gated.
+Was the prerequisite for exposing the app; it is built. Moved to
+[CLAUDE.md](CLAUDE.md) §2. In short: Google sign-in through Firebase, the ID token
+verified in `app/auth.py` against Google's public keys, one dependency on the whole
+`/api` router, and an `ALLOWED_EMAILS` allow-list that the app refuses to start without.
 
-- Firebase Authentication for sign-in.
-- A server-side session dependency on every `/api/*` route → 401 without a session.
-- An **allow-list**: Firebase authenticates *who* someone is; it does not decide whether
-  they're allowed in. Without an allow-list, any account can sign in.
+What it is **not** yet, and what multi-tenancy will need:
+
+- **One allow-list, not per-org membership.** `ALLOWED_EMAILS` is a flat env var. Real
+  tenancy needs users and orgs in the database, with a join table — probably keyed on the
+  Firebase `uid`, which `verify()` already returns and nothing currently stores.
+- **No roles.** Everyone on the list can do everything, including replace the API key and
+  start a run. Fine for one org of two or three people; not fine at scale.
+- **`org_id` should ride on the token.** Firebase custom claims are the natural carrier
+  once §4.1 exists, so a request arrives already scoped rather than looking its tenant up.
+- **Sign-up is closed by design.** Somebody edits `.env` and restarts. Self-serve onboarding
+  (§3) is what changes that, and it is the point at which the allow-list must move into
+  the database.
 
 ---
 

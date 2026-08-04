@@ -36,6 +36,12 @@ The key is **encrypted on disk and no endpoint returns it**; the page can only s
 last four characters. Whoever's key it is pays the bill, which at this volume is a couple
 of dollars a month. Nothing is exposed to the internet — the app binds to localhost.
 
+Putting it on a server instead? Then it needs a login, because the URL would otherwise be
+a way for anyone to spend that key. Sign-in is built — Google, through Firebase, limited
+to an allow-list of addresses — and it is step 8 of
+[docs/DEPLOY-ORACLE.md](docs/DEPLOY-ORACLE.md). Configure it half-way and the app refuses
+to start rather than come up open.
+
 ## Stopping it
 
 Untick **"The agent is switched on"** in Settings. Nothing runs — no searching, no

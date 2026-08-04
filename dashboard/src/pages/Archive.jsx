@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import DownloadCsv from "../components/DownloadCsv";
 import Findings from "../components/Findings";
 
 // Archived findings.
@@ -78,11 +79,7 @@ export default function Archive() {
         )}
         {/* Downloads the month currently selected, not today's — otherwise picking
             August and getting July's file is a silent wrong answer. */}
-        {rows.length > 0 && (
-          <a className="button" href={api.exportUrl(month)} download>
-            Download spreadsheet
-          </a>
-        )}
+        {rows.length > 0 && <DownloadCsv month={month} />}
       </div>
 
       <div className="archive-note">

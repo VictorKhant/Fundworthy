@@ -52,18 +52,29 @@ design constraint:
 - Settings page storing the Anthropic API key **encrypted at rest, write-only** (no
   endpoint ever returns it).
 - CSV export of the week's findings.
+- **Sign-in** (`app/auth.py`): Google via Firebase Authentication, the ID token verified
+  server-side, gated by an explicit allow-list. Off unless configured — see below.
 
-**Deliberately single-tenant and local.** The server binds to `127.0.0.1`. It stores an
-API key, so the honest way to have no accounts and no auth is to not be reachable from
-the network. That is a real decision, written down — see [FUTURE.md](FUTURE.md) for what
-has to change before it is exposed or made multi-tenant.
+**Single-tenant, and local unless you deploy it.** There are exactly two safe shapes, and
+the app enforces both:
+
+| | |
+|---|---|
+| **Local** (default) | Binds `127.0.0.1`, no sign-in. Nothing can reach it, so there is nobody to authenticate. `./start.sh` opens straight onto the dashboard. |
+| **Deployed** | `FIREBASE_PROJECT_ID` + `ALLOWED_EMAILS` set → every `/api/*` route requires a signed-in, allow-listed person. See [docs/DEPLOY-ORACLE.md](docs/DEPLOY-ORACLE.md) §8. |
+
+There is no third state. A `FIREBASE_PROJECT_ID` with an empty `ALLOWED_EMAILS` is a
+**refusal to start**, not a permissive default — Firebase authenticates *who* someone is
+and says nothing about whether they are allowed in, so without a list any Google account
+on earth could sign in and spend the org's API key.
+
+Still single-tenant: one org, one database, one API key. Multi-tenancy is
+[FUTURE.md](FUTURE.md) §4.
 
 **Stubbed (present but not wired to a backend):**
 
-- **Auth.** `dashboard/src/auth.js` is a stub gated on the `VITE_SHOW_AUTH` build flag.
-  There is no server-side session, login, or allow-list yet. This is prerequisite #1
-  before the app is exposed to the internet.
-- The **org switcher** shows this install's org name but cannot switch or add orgs.
+- The **org switcher** shows this install's org name but cannot switch or add orgs —
+  there is no second database to switch to until tenant isolation exists.
 - The **GitHub Actions weekly cron** (`.github/workflows/weekly.yml`) and the **Google
   Sheets sink** exist but are legacy: never run in production, and superseded by the
   dashboard + on-demand runs. Scheduling for a hosted deployment should be a systemd
@@ -123,7 +134,10 @@ pilot inherits.
 
 Python 3.11+ · FastAPI + uvicorn · SQLite (WAL) · httpx · selectolax/BeautifulSoup ·
 dateparser · **Anthropic API** (Haiku triage, Sonnet scoring) · cryptography (Fernet) ·
-Vite + React (static build). A headless run needs API credits, not a chat seat.
+PyJWT (Firebase ID tokens — not `firebase-admin`, which would want a service-account file
+on the box) · Vite + React (static build) · Firebase Auth in the browser, dynamically
+imported so a local install never loads it. A headless run needs API credits, not a chat
+seat.
 
 ### Environment variables
 
@@ -135,6 +149,10 @@ Vite + React (static build). A headless run needs API credits, not a chat seat.
 | `FUNDWORTHY_PORT` | Port for `start.sh` (default 8000) |
 | `FUNDWORTHY_STRICT_CONFIG` | Scheduled-job mode: a config that can't be read is a refusal to run, never a fallback to defaults (protects the kill switch) |
 | `FUNDWORTHY_SHEET_ID` | Google Sheet id for the legacy Sheets export sink |
+| `FIREBASE_PROJECT_ID` | **Turns sign-in on.** Unset = local mode, no login |
+| `FIREBASE_WEB_API_KEY` | Firebase's public web key, served to the browser. Required when sign-in is on |
+| `FIREBASE_AUTH_DOMAIN` | Defaults to `<project>.firebaseapp.com`; override only for a custom auth domain |
+| `ALLOWED_EMAILS` | Comma-separated. Who may sign in. Required — an empty list with sign-in on refuses to boot |
 
 ---
 
@@ -222,6 +240,7 @@ Everything else (funders, programs, this month's findings) is already seeded.
 ├── start.sh                     one command to run everything
 ├── app/                         FastAPI backend
 │   ├── main.py                  REST API + static host for the SPA
+│   ├── auth.py                  Firebase sign-in: token verification + allow-list
 │   ├── db.py / repo.py          SQLite schema, migrations, CRUD
 │   ├── secrets.py               encrypted, write-only API-key storage
 │   ├── runner.py                the Re-run button (subprocess + live log)

@@ -7,10 +7,9 @@ fail for reasons outside your control (capacity errors, card verification), and 
 them are things you want to discover under pressure.
 
 > **Read this first — the order is forced.**
-> Google sign-in needs a redirect URI that exactly matches your deployed address. So you
-> cannot configure OAuth until the VM exists and has a hostname. The sequence is
-> **VM → app running → HTTPS → *then* Google sign-in.** Doing OAuth against `localhost`
-> first is work you throw away.
+> Google sign-in has to be told the address it will be used from, so you cannot configure
+> it until the VM exists and has a hostname. The sequence is **VM → app running → HTTPS →
+> *then* sign-in.** Setting sign-in up against `localhost` first is work you throw away.
 
 ---
 
@@ -115,6 +114,7 @@ Create the environment file:
 cat > .env <<'EOF'
 ANTHROPIC_API_KEY=sk-ant-PUT-THE-REAL-KEY-HERE
 FUNDWORTHY_STRICT_CONFIG=0
+# Sign-in goes here in step 8, once this box has a hostname.
 EOF
 chmod 600 .env
 ```
@@ -122,7 +122,7 @@ chmod 600 .env
 Smoke-test it before wiring anything else up:
 
 ```bash
-.venv/bin/python -m pytest tests/ -q          # expect 136 passed
+.venv/bin/python -m pytest tests/ -q          # expect 167 passed
 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 &
 sleep 3 && curl -s localhost:8000/api/health  # expect {"ok":true}
 kill %1
@@ -215,64 +215,86 @@ loads.
 
 ---
 
-## Step 8 · Google sign-in
+## Step 8 · Google sign-in, via Firebase
 
 > ⚠️ **Do not skip this.** The app now stores an Anthropic API key and is reachable from
-> the internet. Without a login, anyone who finds the URL can spend the org's money. This is
-> prerequisite #1 in `FUTURE.md`.
+> the internet. Without a login, anyone who finds the URL can spend the org's money.
 
-### 8a. Configure the Google side
+**This is built.** Sign-in is Firebase Authentication in the browser, with the ID token
+verified server-side against Google's public keys (`app/auth.py`). There is no OAuth
+client to create, no client secret, no redirect URI to match character for character, and
+no session cookie to get lost behind the proxy. Two console pages and four lines in
+`.env`, about **20 minutes**.
 
-1. **console.cloud.google.com** → new project, e.g. `fundworthy`.
-2. **APIs & Services → OAuth consent screen**:
-   - User type **External**
-   - App name `Fundworthy`, support email = the shared Gmail
-   - Scopes: just `openid`, `email`, `profile` — you need nothing else
-   - **Test users:** add the shared Gmail **and the user's email**
-   - Leave it in **Testing**. Publishing triggers Google verification, which takes days
-     to weeks. Testing mode allows up to 100 named users, which is the right size here.
-3. **Credentials → Create credentials → OAuth client ID**:
-   - Type **Web application**
-   - **Authorized redirect URI:** `https://your-host/auth/callback` — exactly, including
-     `https` and no trailing slash
-4. Copy the **Client ID** and **Client secret**.
+Two separate questions, and Firebase only answers the first:
 
-### 8b. The server side
+| | |
+|---|---|
+| **Who is this?** | Firebase. A Google account, an ID token, a verified email. |
+| **Are they allowed?** | `ALLOWED_EMAILS`, yours alone. Firebase will authenticate any Google account on earth. |
 
-This is **not built yet** — `dashboard/src/auth.js` is deliberately a stub, and
-`AUTH_ENABLED` is a build flag with no backend behind it. What has to be added:
+### 8a. Configure Firebase
 
-```bash
-.venv/bin/pip install authlib itsdangerous
-```
+1. **console.firebase.google.com** → **Create a project**, e.g. `fundworthy`. Sign in as
+   the shared Gmail. Google Analytics: **off**, you don't need it. (A Firebase project
+   *is* a Google Cloud project, so this adds nothing to the handoff.)
+2. **Build → Authentication → Get started → Google → Enable.** Set the project support
+   email to the shared Gmail. **Save.**
+3. **Authentication → Settings → Authorized domains → Add domain** → your hostname from
+   step 7 (e.g. `fundworthy.duckdns.org`). Hostname only — no `https://`, no path.
+4. **⚙ Project settings → General → Your apps → Web (`</>`)**. Nickname it `Fundworthy`,
+   skip Firebase Hosting, **Register app**. From the config block it shows you, copy two
+   values: `apiKey` and `projectId`.
 
-- a session middleware with a random `SESSION_SECRET`
-- `GET /auth/login` → redirect to Google
-- `GET /auth/callback` → exchange the code, check the email is on an allow-list, set the
-  session cookie
-- a dependency on every `/api/*` route that returns **401** without a session
-- an `ALLOWED_EMAILS` env var — Google authenticates *who* someone is; it does not decide
-  whether they are allowed in. Without an allow-list, any Google account can sign in.
+That `apiKey` is a public project identifier — it ships in the page source of every
+Firebase web app by design and grants nothing on its own. It is not the same kind of
+thing as the Anthropic key, which still has no endpoint that returns it.
+
+### 8b. Configure the server
 
 Add to `.env`:
 
 ```bash
-GOOGLE_CLIENT_ID=...
-GOOGLE_CLIENT_SECRET=...
-SESSION_SECRET=$(openssl rand -hex 32)
+FIREBASE_PROJECT_ID=fundworthy-1a2b3
+FIREBASE_WEB_API_KEY=AIzaSy...
 ALLOWED_EMAILS=admin@your-org.org,the-shared-gmail@gmail.com
 ```
 
-Then rebuild the front end with auth on:
+Then:
 
 ```bash
-cd dashboard && VITE_SHOW_AUTH=1 npm run build && cd ..
+cd ~/Rise-Fund-Finder
+git pull
+.venv/bin/pip install -r requirements.txt     # adds pyjwt
 sudo systemctl restart fundworthy
 ```
 
-**Budget 2–3 hours for 8b**, not 30 minutes. It is the piece with the most ways to fail
-quietly — a redirect URI that differs by a trailing slash, a cookie that will not set
-without `secure`, a session that vanishes behind the proxy.
+No rebuild of the dashboard. The browser reads whether sign-in exists from
+`GET /api/auth/config` at page load, so one build works with it on or off — changing any
+of this is `.env` plus a restart.
+
+**`ALLOWED_EMAILS` is not optional.** With `FIREBASE_PROJECT_ID` set and the allow-list
+empty, the app refuses to start and says why in `journalctl`. That is deliberate: the
+alternative was an app that boots and lets in every Google account in existence.
+
+### 8c. Check it
+
+```bash
+curl -s https://your-host/api/auth/config     # {"enabled":true,...}
+curl -s -o /dev/null -w '%{http_code}\n' https://your-host/api/state    # 401
+```
+
+A `401` there is the whole point — the API is closed to anyone without a token. Then open
+the site in a browser: you should land on the sign-in page, and **Continue with Google**
+should get you in. Try it once with a Google account that is *not* in `ALLOWED_EMAILS` and
+confirm it is refused with a message naming the allow-list.
+
+| If it says | Then |
+|---|---|
+| `auth/unauthorized-domain` | The hostname is missing from step 8a.3. It must match exactly. |
+| It signs in, then bounces back to the sign-in page saying "not on this install's allow-list" | Working as designed. Add the address to `ALLOWED_EMAILS` and restart. |
+| `Failed to load resource: /api/auth/config` | The app is not running — `systemctl status fundworthy`. |
+| The service will not start | `journalctl -u fundworthy -n 30` — most likely `ALLOWED_EMAILS` is empty. |
 
 ---
 
@@ -285,8 +307,10 @@ sudo certbot renew --dry-run                  # renewal works
 
 - Back up **`data/rise.db`** and **`data/.fernet-key`** somewhere private. That is the
   org's settings, funders, findings, and the encrypted key. Losing it loses everything.
-- Give the user the URL.
+- Give the user the URL, and check their address is in `ALLOWED_EMAILS` before you do.
 - Put a name against the API key.
+- Write down where `.env` lives. Adding a colleague later is one line in it and a
+  restart; nobody should have to rediscover that.
 
 ### Updating it later
 
@@ -314,7 +338,9 @@ sudo systemctl restart fundworthy
 | 502 Bad Gateway | The app is not running — `systemctl status fundworthy` |
 | The search cuts off after ~1 minute | nginx `proxy_read_timeout` — step 6 |
 | The run log arrives all at once at the end | `proxy_buffering off` missing — step 6 |
-| Google sign-in says `redirect_uri_mismatch` | The URI in the console differs from what the app sends. They must match character for character. |
+| Sign-in says `auth/unauthorized-domain` | The hostname is not on Firebase's authorized-domains list — step 8a.3 |
+| Signed in, but every page says "not on this install's allow-list" | `ALLOWED_EMAILS` — step 8b. Restart after editing. |
+| The service will not start after step 8 | `journalctl -u fundworthy -n 30`. A half-configured sign-in is a refusal to boot, on purpose. |
 | "Out of host capacity" | Oracle, not you. Retry or change shape. |
 
 ---

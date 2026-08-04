@@ -1,11 +1,13 @@
 """The REST API and the static host for the dashboard. (CLAUDE.md)
 
-Runs on the user's machine, not on the internet. That is a deliberate scoping decision,
-not an oversight: CLAUDE.md rules out accounts and auth for v1, and the honest way to
-keep that promise while also storing an API key is to not be reachable from the network
-in the first place. The server binds to localhost, and `FUTURE.md` says what has to
-change before it is ever exposed — that is a real decision the org gets to make, with the
-tradeoff written down, rather than a default we slid into.
+Runs on the user's machine by default, not on the internet. That is a deliberate scoping
+decision, not an oversight: the honest way to store an API key with no accounts is to not
+be reachable from the network in the first place, so the server binds to localhost.
+
+A deployment that *is* reachable sets `FIREBASE_PROJECT_ID` and `ALLOWED_EMAILS`, and
+then every route below requires a signed-in, allow-listed person — see `app/auth.py` and
+docs/DEPLOY-ORACLE.md §8. There is no third state. Either nothing can reach the app, or
+the app checks who is asking.
 
 Everything the browser can do:
 
@@ -26,7 +28,11 @@ Everything the browser can do:
     POST   /api/runs/stop              ← the stop button
     GET    /api/runs/current           live progress while one is going
 
-There is no endpoint that returns the API key. That is not an omission.
+    GET    /api/health                 public — an uptime ping, holds nothing
+    GET    /api/auth/config            public — is sign-in on, and the Firebase project
+    GET    /api/auth/me                who the server thinks you are
+
+There is no endpoint that returns the Anthropic API key. That is not an omission.
 """
 
 from __future__ import annotations
@@ -36,13 +42,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import archive, export, repo, secrets
+from . import archive, auth, export, repo, secrets
 from .db import SECTORS, init_db, month_key, session
 from .runner import MANAGER
 
@@ -51,7 +57,11 @@ log = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DIST = REPO_ROOT / "dashboard" / "dist"
 
+# Two routers, and the split is the security boundary. Everything on `api` is behind
+# `auth.require_user`; `public` holds only the two things that must answer before anyone
+# can possibly be signed in, and neither of them reveals anything.
 api = APIRouter(prefix="/api")
+public = APIRouter(prefix="/api")
 
 
 # --- request bodies -----------------------------------------------------------
@@ -406,9 +416,37 @@ def state() -> dict:
         }
 
 
-@api.get("/health")
+# --- the two public routes ----------------------------------------------------
+
+@public.get("/health")
 def health() -> dict:
+    """Deliberately outside the sign-in gate, and deliberately empty.
+
+    It has to be reachable without credentials to be useful — it is what nginx, a
+    monitor, or the periodic ping that stops Oracle reclaiming an idle free VM
+    (FUTURE.md §1) would call. So it must never grow a field. The moment it reports a
+    run count or an org name it is an unauthenticated data endpoint.
+    """
     return {"ok": True}
+
+
+@public.get("/auth/config")
+def auth_config() -> dict:
+    """Is sign-in on, and which Firebase project. Public because the sign-in page needs
+    it before anyone can be signed in. See `auth.browser_config` for why none of it is
+    secret."""
+    return auth.browser_config()
+
+
+@api.get("/auth/me")
+def whoami(user=Depends(auth.require_user)) -> dict:
+    """Who the *server* thinks you are. The browser already has a Firebase user object,
+    so this exists to check the two agree — a token the allow-list rejects should fail
+    here rather than after the dashboard has half-rendered."""
+    if user is None:
+        return {"signed_in": False, "auth_required": False}
+    return {"signed_in": True, "auth_required": True,
+            "email": user.email, "name": user.name}
 
 
 # --- app ----------------------------------------------------------------------
@@ -421,11 +459,19 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
+    # Before anything is mounted, because a bad sign-in configuration is a refusal to
+    # start, never a fallback to open. Same doctrine as FUNDWORTHY_STRICT_CONFIG.
+    auth.configure()
+
     app = FastAPI(
         title="Fundworthy",
         description="Control surface for a nonprofit's funding-opportunity agent.",
         version="2.0.0",
-        docs_url="/api/docs",
+        # The interactive docs enumerate every route and body shape. Harmless on a
+        # localhost install, an unnecessary map of the building on a public one.
+        docs_url=None if auth.enabled() else "/api/docs",
+        redoc_url=None,
+        openapi_url=None if auth.enabled() else "/openapi.json",
         lifespan=lifespan,
     )
 
@@ -436,9 +482,17 @@ def create_app() -> FastAPI:
         allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
         allow_methods=["*"],
         allow_headers=["*"],
+        # The CSV download reads its filename off this header. Same-origin in
+        # production, cross-origin against the dev server, where it is invisible to JS
+        # unless it is named here.
+        expose_headers=["Content-Disposition"],
     )
 
-    app.include_router(api)
+    app.include_router(public)
+    # One dependency, one router, every route. Not per-endpoint: a gate you have to
+    # remember to add to each new route is a gate that gets forgotten on the one that
+    # starts a run.
+    app.include_router(api, dependencies=[Depends(auth.require_user)])
 
     if DIST.exists():
         app.mount("/assets", StaticFiles(directory=DIST / "assets"), name="assets")

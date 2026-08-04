@@ -1,12 +1,12 @@
-import { AUTH_ENABLED, initials, STUB_SESSION } from "../auth";
+import { initials } from "../auth";
 import OrgSwitcher from "./OrgSwitcher";
 
 // The shell's navigation. Three views, no router library — three views never justified a
 // dependency someone would have to keep updated, and they still don't.
 //
-// The account chrome (org switcher, user chip, Sign out) only appears behind
-// VITE_SHOW_AUTH. Without it this is a local single-user app and a "Sign out" that signs
-// you out of nothing is a lie told in the furniture.
+// The user chip and Sign out appear only when there is a real session to end. On a
+// localhost install there is nobody signed in, and a "Sign out" that signs you out of
+// nothing is a lie told in the furniture.
 
 const PAGES = [
   { id: "dashboard", label: "This week" },
@@ -14,7 +14,7 @@ const PAGES = [
   { id: "settings", label: "Settings" },
 ];
 
-export default function Sidebar({ page, setPage, open, setOpen, orgName, onBrand, onSignOut }) {
+export default function Sidebar({ page, setPage, open, setOpen, orgName, user, onBrand, onSignOut }) {
   return (
     <>
       <button
@@ -56,11 +56,14 @@ export default function Sidebar({ page, setPage, open, setOpen, orgName, onBrand
         ))}
 
         <div className="sidebar-foot">
-          {AUTH_ENABLED ? (
+          {user ? (
             <div className="userchip">
-              <span className="avatar" aria-hidden="true">{initials(STUB_SESSION.name)}</span>
+              <span className="avatar" aria-hidden="true">{initials(user.name)}</span>
               <span className="userchip-text">
-                <span className="userchip-name">{STUB_SESSION.name}</span>
+                {/* The email, not the display name. On a shared office machine "which
+                    account am I in?" is the question this chip has to answer, and two
+                    people called Maria have one display name and two addresses. */}
+                <span className="userchip-name" title={user.name}>{user.email}</span>
                 <button className="text userchip-out" onClick={onSignOut}>
                   Sign out
                 </button>

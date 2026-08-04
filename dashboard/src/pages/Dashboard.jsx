@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, money } from "../api";
+import DownloadCsv from "../components/DownloadCsv";
 import Findings from "../components/Findings";
 import Funders from "../components/Funders";
 import Programs from "../components/Programs";
@@ -76,14 +77,7 @@ export default function Dashboard({ state, onChange }) {
         </div>
 
         <div className="row">
-          {/* A plain <a download>, not a button with an onClick: the browser saves the
-              file natively, so it still works if JavaScript fails elsewhere on the page,
-              and there is no spinner state to get stuck in. */}
-          {total > 0 && (
-            <a className="button" href={api.exportUrl()} download>
-              Download spreadsheet
-            </a>
-          )}
+          {total > 0 && <DownloadCsv />}
           {isRunning ? (
             <button className="danger" onClick={stop}>
               Stop the search

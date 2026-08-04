@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { initials, stubOrgs } from "../auth";
+import { initials, orgsFor } from "../auth";
 
-// The org switcher. Renders from a stub list; switching and "+ Add an organization" do
-// nothing yet, because there is no second database to switch to (see auth.js).
+// The org switcher. Names the organisation this install belongs to, which is true;
+// switching and "+ Add an organization" do nothing yet, because there is no second
+// database to switch to (see auth.js, and FUTURE.md §4 for what would have to exist).
 //
 // It is here rather than waiting for the backend because it settles a layout question —
 // where the current organisation's name lives — that everything else in the sidebar has
@@ -11,7 +12,7 @@ import { initials, stubOrgs } from "../auth";
 export default function OrgSwitcher({ orgName }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
-  const orgs = stubOrgs(orgName);
+  const orgs = orgsFor(orgName);
   const active = orgs.find((o) => o.active) || orgs[0];
 
   // Outside click closes. A dropdown you can only dismiss by re-clicking the control

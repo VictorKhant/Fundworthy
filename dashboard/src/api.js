@@ -4,12 +4,34 @@
 // start.sh serves both from :8000, so the base is empty and requests are same-origin.
 const BASE = import.meta.env.DEV ? "http://localhost:8000" : "";
 
-async function request(path, options = {}) {
-  let res;
+// Sign-in, injected rather than imported. auth.js already imports orgLabel from here, so
+// importing it back would be a cycle; and this way the whole file still works untouched
+// on a localhost install where there is nothing to authenticate. Both stay null until
+// auth.js decides the server has sign-in switched on.
+let tokenProvider = null;
+let authFailureHandler = null;
+
+export function setTokenProvider(fn) {
+  tokenProvider = fn;
+}
+
+export function setAuthFailureHandler(fn) {
+  authFailureHandler = fn;
+}
+
+// Every call, not once per session: Firebase ID tokens expire hourly and the provider
+// refreshes them on demand. See the note in auth.js.
+async function authHeaders() {
+  if (!tokenProvider) return {};
+  const token = await tokenProvider();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+async function send(path, options = {}) {
   try {
-    res = await fetch(BASE + path, {
-      headers: { "Content-Type": "application/json" },
+    return await fetch(BASE + path, {
       ...options,
+      headers: { ...(await authHeaders()), ...(options.headers || {}) },
     });
   } catch {
     // The single most likely failure for a non-technical user: they opened the page
@@ -18,10 +40,31 @@ async function request(path, options = {}) {
       "Could not reach the app. Is it still running? Start it again with ./start.sh"
     );
   }
+}
+
+// 401 — no token, or an expired one. 403 — a real Google account the allow-list refuses.
+// Both mean the dashboard cannot continue, and both are handed to auth.js so the app can
+// return to the sign-in screen carrying the reason. A 403 especially must not be shown as
+// a generic error: "not on the allow-list" is a thing the user can act on by asking
+// someone, and "Something went wrong" is not.
+async function guard(res, body) {
+  const message =
+    body.detail ||
+    (res.status === 401 ? "Sign in to use Fundworthy." : "You are not allowed in here.");
+  if (authFailureHandler) await authFailureHandler(message);
+  return new Error(message);
+}
+
+async function request(path, options = {}) {
+  const res = await send(path, {
+    headers: { "Content-Type": "application/json" },
+    ...options,
+  });
 
   if (res.status === 204) return null;
 
   const body = await res.json().catch(() => ({}));
+  if (res.status === 401 || res.status === 403) throw await guard(res, body);
   if (!res.ok) {
     throw new Error(body.detail || body.error || `Something went wrong (${res.status}).`);
   }
@@ -62,11 +105,30 @@ export const api = {
   opportunities: (month) => get(`/api/opportunities${month ? `?month=${month}` : ""}`),
   archive: (month) => get(`/api/archive${month ? `?month=${month}` : ""}`),
 
-  // A URL, not a fetch. The browser's own download handling reads the filename off
-  // the Content-Disposition header, which a fetch + blob would throw away — and this
-  // way the file never passes through JS memory.
-  exportUrl: (month) =>
-    `${BASE}/api/opportunities/export.csv${month ? `?month=${month}` : ""}`,
+  // This used to be a plain URL on an <a download>, which was the better shape: the
+  // browser's own download handling, no bytes through JS. It cannot stay that way once
+  // the API needs a bearer token, because a link navigation carries cookies and nothing
+  // else — there is no way to attach a header to it. So: fetch it, read the filename off
+  // Content-Disposition exactly as the browser would have, and hand the blob to a
+  // synthetic link. The user sees no difference; the file keeps its real name.
+  downloadCsv: async (month) => {
+    const res = await send(
+      `/api/opportunities/export.csv${month ? `?month=${month}` : ""}`);
+    if (res.status === 401 || res.status === 403) {
+      throw await guard(res, await res.json().catch(() => ({})));
+    }
+    if (!res.ok) throw new Error(`Could not build the spreadsheet (${res.status}).`);
+
+    const named = /filename="?([^";]+)"?/.exec(res.headers.get("Content-Disposition") || "");
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = named ? named[1] : `fundworthy-${month || "current"}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
 
   runs: {
     list: () => get("/api/runs"),
