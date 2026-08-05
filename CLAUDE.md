@@ -284,7 +284,7 @@ Everything else (funders, programs, this month's findings) is already seeded.
 │   ├── run.py                   entrypoint, orchestration, budget ceiling
 │   ├── fetch.py / parse.py      polite fetch · page → candidate
 │   ├── urlguard.py              public-addresses-only check (SSRF), per redirect hop
-│   ├── filters.py               free deterministic rejects
+│   ├── filters.py               free deterministic rejects (geography reads org_location)
 │   ├── score.py / verify.py     Haiku→Sonnet scoring · the accuracy gate
 │   ├── sources.py / apis.py     funder registry · CA Grants Portal + Grants.gov
 │   ├── sd_funders.py            44 researched pilot funders (seed data)
@@ -296,6 +296,8 @@ Everything else (funders, programs, this month's findings) is already seeded.
 │                                 test_tenancy.py is the org-isolation test
 ├── docs/DEPLOY-ORACLE.md        putting it on an Oracle free-tier VM
 ├── docs/ACCESS.md               getting into the running system (SSH · Firebase · Oracle)
+├── scripts/deploy.sh            push-to-deploy: drain · wait · back up · test · restart
+├── .github/workflows/deploy.yml push to main → the VM updates itself
 ├── CLAUDE.md                    this file — current state
 └── FUTURE.md                    the roadmap (multi-tenant, accounts, scale)
 ```

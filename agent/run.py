@@ -16,6 +16,7 @@ sources_exhausted, disabled, or error.
 from __future__ import annotations
 
 import argparse
+import signal
 import asyncio
 import logging
 import os
@@ -588,6 +589,31 @@ def _report(cfg: Config, run: RunLog, opportunities: list[Opportunity]) -> None:
     print()
 
 
+class RunInterrupted(Exception):
+    """SIGTERM arrived: a deploy restart, systemd, or the Stop button.
+
+    Raised from a signal handler so it lands in the ordinary `except Exception` around
+    the crawl — which already exists to salvage a partial run — rather than killing the
+    process where it stands.
+
+    That distinction is worth real money. Without it, Python's default SIGTERM handling
+    terminated the process outright: the salvage block never ran, and every opportunity
+    scored so far was lost along with the API credit spent on it. A deploy at minute
+    seven of a ten-minute run cost the org the whole run for nothing.
+    """
+
+
+def _install_stop_handler() -> None:
+    def handle(signum, _frame):
+        raise RunInterrupted(f"stopped by signal {signum}")
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(sig, handle)
+        except ValueError:  # not the main thread — the caller owns signals
+            log.debug("could not install a handler for %s", sig)
+
+
 async def main_async(args: argparse.Namespace) -> int:
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -602,6 +628,7 @@ async def main_async(args: argparse.Namespace) -> int:
         for noisy in ("httpx", "httpcore", "urllib3"):
             logging.getLogger(noisy).setLevel(logging.WARNING)
 
+    _install_stop_handler()
     run = RunLog(started_at=datetime.now(timezone.utc))
 
     # Create and seed the settings database before reading config, so a first run picks
@@ -696,8 +723,19 @@ async def main_async(args: argparse.Namespace) -> int:
         # worse than a short one with an explanation on it.
         failed = True
         run.stop_reason = StopReason.PARTIAL if opportunities else StopReason.ERROR
-        run.notes.append(f"ERROR: {exc!r}")
-        log.exception("Run failed — writing whatever was collected before the failure")
+        if isinstance(exc, RunInterrupted):
+            # Not a failure of ours, and the distinction matters to whoever reads the
+            # run log: the search was cut short from outside, and what it had already
+            # paid for is written out below rather than thrown away.
+            run.notes.append(
+                f"Stopped early ({exc}). Keeping the {len(opportunities)} "
+                "opportunit" + ("y" if len(opportunities) == 1 else "ies") +
+                " already scored — the money spent on them is not wasted.")
+            log.warning("Run interrupted — salvaging %d scored result(s)",
+                        len(opportunities))
+        else:
+            run.notes.append(f"ERROR: {exc!r}")
+            log.exception("Run failed — writing whatever was collected before the failure")
 
     from sinks.base import split_sections
 

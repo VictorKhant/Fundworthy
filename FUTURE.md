@@ -39,9 +39,17 @@ was, quite legitimately, built on. This file is now mostly about closing that ga
 **Shipped since going live:**
 
 - Sign-in (§2).
-- **Tenant isolation** (§3) — orgs, per-org data, per-org API keys.
+- **Tenant isolation** (§3) — orgs, per-org data, per-org API keys, colleague invites.
 - The `run.json` exposure path, the interrupted-run zombie rows, the cross-org Stop
   button, and seed resurrection (all §3).
+- **SSRF in the fetcher** (§5) — public addresses only, checked per redirect hop.
+- **Push-to-deploy** (§6) — drain, wait for in-flight runs, back up, test, restart.
+- **The geography filter reads `org_location`.** It was hardcoded to San Diego, which
+  made the setting a lie: a Chicago nonprofit could type "Chicago, Illinois", watch it
+  save, and still have every Illinois-only grant rejected for free in the tier that never
+  explains itself. The vocabulary of *places* is universal and lives in code; which of
+  them is **yours** is configuration. An org that has not said where it works now rejects
+  nothing on geography rather than inheriting somebody else's region.
 
 **The one thing to do before anything else** is not code: see §8, *Access and bus factor*.
 
@@ -149,11 +157,9 @@ Also fixed alongside it:
 - **The org switcher is still a stub** (`dashboard/src/components/OrgSwitcher.jsx`). It
   renders a chevron and an "+ Add an organization" button that do nothing, which now
   actively misleads: it implies switching is possible.
-- **Per-org config is still partly pilot seed.** `SERVICE_AREA_GEOGRAPHY` in
-  `agent/filters.py` and the geography language in the scoring prompts are hardcoded to
-  San Diego / Imperial County. The `org_location` setting is fully plumbed through the UI
-  and API and **changes nothing** — a Chicago nonprofit types "Chicago, Illinois", it
-  saves, and their own state's grants are still rejected for free. Either wire it up or
+- **Per-org config is still partly pilot seed.** The geography filter now reads
+  `org_location` (see below), but the *scoring prompts* still carry San Diego language.
+  Either wire that up or
   remove the field; a setting that lies is worse than a missing one.
 
 ---
@@ -234,7 +240,50 @@ Found during the post-deployment audit. Roughly in priority order.
 
 ---
 
-## 6. Push-to-deploy, without robbing a nonprofit mid-run
+## 6. Push-to-deploy — ✅ shipped
+
+`.github/workflows/deploy.yml` runs the suite on GitHub, then SSHes in and runs
+`scripts/deploy.sh` on the VM. Tests first, on a machine where failing is free: a
+pipeline that deploys and then tests tells you about the migration bug after it has run
+against a nonprofit's only copy of their data.
+
+The careful part is on the VM, because deciding whether it is safe to deploy needs the
+database. `scripts/deploy.sh`:
+
+1. **Touches a drain file**, so new searches are refused while the deploy runs.
+2. **Waits** for in-flight runs to finish, polling `runs WHERE status='running'` — up to
+   15 minutes, then aborts and changes nothing. It reads the DB rather than asking the
+   API, because a public "is anything running" endpoint would be an unauthenticated fact
+   about usage, and the API is about to restart anyway.
+3. **Backs up** `rise.db` (via `.backup`, not `cp` — WAL keeps writes in a side file, so
+   copying the main file can capture a torn database) **and** `.fernet-key`, without
+   which every stored API key is permanently unrecoverable.
+4. Pulls, installs, **runs the suite again on the VM**, and rolls the code back if it
+   fails rather than restarting the service.
+5. Restarts and health-checks; the drain file is removed by an `EXIT` trap whatever
+   happens, so an aborted deploy cannot leave the app permanently "being updated".
+
+And the pipeline now **survives being interrupted**: `agent/run.py` catches SIGTERM and
+raises `RunInterrupted`, an ordinary `Exception`, so it lands in the salvage block that
+already existed. Previously Python's default handling killed the process where it stood —
+the salvage never ran, and every scored opportunity plus the credit spent on it was lost.
+
+`.github/workflows/weekly.yml` is deleted. It read config from a Google Sheet the
+dashboard cannot write to and had never been switched on.
+
+### Still open
+
+- **No incremental persistence.** Results reach the sinks once `evaluate()` finishes, so
+  the salvage path is what saves an interrupted run rather than a running write. Good
+  enough now that SIGTERM is handled; worth doing when runs get longer.
+- **The weekly schedule still does not exist on the VM.** A systemd timer per org is the
+  shape, and under BYO-key it has to resolve *each org's* key from the database and run
+  per-org — a single global cron run would use whatever `ANTHROPIC_API_KEY` is in `.env`.
+- **Protect `main`** on GitHub: require a PR, no force-push.
+
+---
+
+## 6b. The original design notes (kept for reference)
 
 **The goal:** merge to `main` → the VM pulls, rebuilds, restarts → production is current,
 with no one SSHing anywhere.

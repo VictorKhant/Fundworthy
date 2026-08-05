@@ -43,6 +43,17 @@ MAX_LOG_LINES = 400
 # of orgs (FUTURE.md).
 MAX_CONCURRENT_RUNS = int(os.environ.get("FUNDWORTHY_MAX_CONCURRENT_RUNS", "3"))
 
+# A deploy touches this file, waits for in-flight runs to finish, restarts, and removes
+# it. While it exists, new runs are refused — otherwise a run started thirty seconds
+# before `systemctl restart` gets killed at minute seven, and the org pays for a search
+# it never sees. A file rather than a setting so the deploy script can create it over SSH
+# without going through the API (which is about to be restarted anyway).
+DRAIN_FILE = "draining"
+
+
+def draining() -> bool:
+    return (db_path().parent / DRAIN_FILE).exists()
+
 # Lines from the child that mean something to a non-technical reader. Everything else
 # (httpx chatter, robots.txt fetches) is kept in the buffer but not surfaced as status.
 _INTERESTING = ("✓", "✗", "⚠", "scored", "Crawling", "candidates survived",
@@ -127,6 +138,12 @@ class RunManager:
     def start(self, *, no_llm: bool = False, budget: float | None = None,
               max_opportunities: int | None = None, org_id: str,
               started_by: str | None = None) -> str:
+        if draining():
+            raise RuntimeError(
+                "Fundworthy is being updated right now, so new searches are paused for "
+                "a few minutes. Nothing is lost — try again shortly."
+            )
+
         with self._lock:
             self._reap()
             if org_id in self._slots:

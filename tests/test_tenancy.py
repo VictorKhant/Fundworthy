@@ -450,3 +450,48 @@ def test_a_new_org_does_not_inherit_the_pilots_funders_or_programs(db):
         assert repo.get_settings(conn, org_id=newcomer)["min_award"] == 10_000
         # ...and the pilot org keeps everything.
         assert len(repo.list_funders(conn, org_id=A)) > 40
+
+
+# --- deploy safety ------------------------------------------------------------
+
+def test_a_deploy_pauses_new_searches_rather_than_killing_them(db, monkeypatch):
+    """The drain gate. A run started thirty seconds before `systemctl restart` gets cut
+    off at minute seven, and the org pays for a search it never sees."""
+    from app.runner import RunManager, draining
+
+    drain = db.parent / "draining"
+    assert draining() is False
+
+    drain.touch()
+    try:
+        assert draining() is True
+        with pytest.raises(RuntimeError, match="being updated"):
+            RunManager().start(org_id=A)
+    finally:
+        drain.unlink()
+
+    assert draining() is False
+
+
+def test_the_pipeline_salvages_what_it_scored_when_told_to_stop():
+    """SIGTERM used to kill the process where it stood: the salvage block never ran and
+    every scored result — plus the credit spent on it — was lost. It is now an ordinary
+    exception, so the existing partial-results path catches it."""
+    import signal
+
+    from agent.run import RunInterrupted, _install_stop_handler
+
+    _install_stop_handler()
+    try:
+        with pytest.raises(RunInterrupted):
+            signal.raise_signal(signal.SIGTERM)
+    finally:
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+
+
+def test_an_interrupted_run_is_catchable_as_an_ordinary_exception():
+    """The salvage block catches `Exception`. If RunInterrupted ever became a
+    BaseException subclass it would slip past it and the money would be lost again."""
+    from agent.run import RunInterrupted
+
+    assert issubclass(RunInterrupted, Exception)
