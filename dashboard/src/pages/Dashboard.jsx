@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { api, money } from "../api";
 import DownloadCsv from "../components/DownloadCsv";
 import Findings from "../components/Findings";
-import Funders from "../components/Funders";
 import Programs from "../components/Programs";
 import RunLog from "../components/RunLog";
 import SearchSettings from "../components/SearchSettings";
@@ -167,11 +166,6 @@ export default function Dashboard({ state, onChange }) {
         <Programs
           programs={state.programs}
           globalFloor={state.settings.min_award}
-          onChange={onChange}
-        />
-        <Funders
-          funders={state.funders}
-          sectors={state.sectors_available}
           onChange={onChange}
         />
       </div>

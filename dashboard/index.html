@@ -3,8 +3,74 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="robots" content="noindex, nofollow" />
-    <title>Fundworthy — this week's funding</title>
+
+    <!-- This used to say `noindex, nofollow`, which was correct for exactly as long as
+         Fundworthy was one nonprofit's private tool: there was nothing to find and one
+         organisation who already knew the URL. It is the reason searching "Fundworthy"
+         returned nothing — not ranking, not competition, an instruction not to look.
+
+         Now that anyone can sign up, being findable is the product's front door. The app
+         behind sign-in is unaffected either way: every /api route is authenticated, and
+         a crawler that follows a link into the dashboard gets the sign-in page like any
+         other signed-out visitor. -->
+    <title>Fundworthy — weekly funding research for nonprofits</title>
+    <meta
+      name="description"
+      content="Fundworthy reads the funders your nonprofit cares about once a week and leaves a short, sourced list of grants actually worth applying for. Bring your own Claude API key; a weekly search costs about a dollar."
+    />
+
+    <!-- `SITE_URL` is a plain token, substituted after the build by scripts/seo-urls.mjs
+         from VITE_SITE_URL. Deliberately not Vite's own `%VAR%` syntax: Vite runs those
+         through decodeURI, so an unset variable does not degrade to a warning — it fails
+         the build with "URI malformed", which would break a deploy over a missing
+         optional setting. The post-build script strips these tags instead when it has no
+         URL to put in them, because a canonical pointing at `SITE_URL/welcome` is worse
+         than no canonical at all. -->
+    <link rel="canonical" href="SITE_URL/welcome" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Fundworthy" />
+    <meta property="og:title" content="Fundworthy — weekly funding research for nonprofits" />
+    <meta
+      property="og:description"
+      content="A short, sourced, ranked list of grants worth applying for — every week, on your own Claude key."
+    />
+    <meta property="og:url" content="SITE_URL/welcome" />
+    <meta name="twitter:card" content="summary" />
+
+    <!-- Structured data. The thing search engines actually read on a single-page app,
+         because it does not depend on their renderer having executed React first. -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Fundworthy",
+        "applicationCategory": "BusinessApplication",
+        "operatingSystem": "Web",
+        "description": "Weekly funding-opportunity research for nonprofits. Reads the funders you choose and returns a short, sourced, ranked list of grants worth applying for.",
+        "audience": {
+          "@type": "Audience",
+          "audienceType": "Nonprofit organizations"
+        },
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD",
+          "description": "Free to use. You supply your own Claude API key; a weekly search costs about $1 of your own credit."
+        }
+      }
+    </script>
+
+    <!-- The wordmark's F and dot, as a tab icon. Source of truth is logo/favicon.svg;
+         this is the copy Vite serves, because everything in public/ is emitted to the
+         root of dist/ untouched. Keep the two in step if the mark ever changes.
+
+         SVG rather than .ico: it stays sharp on any display, and it is 459 bytes. The
+         cost is that browsers older than Safari 16 ignore it and show their default —
+         acceptable for a tool whose users are on current browsers, and the reason the
+         mark is a filled badge rather than a transparent glyph, so it reads on a light
+         or a dark tab strip either way. -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 
     <!-- The wordmark's F and dot, as a tab icon. Source of truth is logo/favicon.svg;
          this is the copy Vite serves, because everything in public/ is emitted to the
@@ -31,7 +97,20 @@
     />
   </head>
   <body>
-    <div id="root"></div>
+    <!-- What a crawler sees before React runs, and what a person sees if it never does.
+         Replaced the moment the app mounts. Search engines do execute JavaScript, but
+         they do it on a second pass and not always — so the one sentence that says what
+         this is should not depend on that pass happening. -->
+    <div id="root">
+      <noscript>
+        <h1>Fundworthy</h1>
+        <p>
+          Weekly funding research for nonprofits. Fundworthy reads the funders you choose
+          and leaves a short, sourced list of the grants actually worth applying for.
+        </p>
+        <p>Fundworthy needs JavaScript enabled.</p>
+      </noscript>
+    </div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

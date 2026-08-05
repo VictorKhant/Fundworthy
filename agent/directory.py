@@ -76,6 +76,17 @@ STARTER_LISTS: tuple[StarterList, ...] = (
 )
 
 
+# What a brand-new organization is given before it has chosen anything.
+#
+# All three, which means a nonprofit outside San Diego starts with 58 funders that are
+# not theirs. That is a deliberate trade and it is the lesser problem: an empty funder
+# list means the Re-run button does nothing at all, and "the app did nothing" is a worse
+# first impression than "some of these are not near me, let me remove them". The Discover
+# funders page is where that gets fixed properly — pick your city, drop the ones you did
+# not ask for.
+DEFAULT_ON_SIGNUP: tuple[str, ...] = ("national", "california", "san-diego")
+
+
 def get(key: str) -> StarterList | None:
     return next((lst for lst in STARTER_LISTS if lst.key == key), None)
 

@@ -293,6 +293,17 @@ DEFAULT_SETTINGS: dict[str, str] = {
     # been asserting.
     "org_name": "",
     "org_location": "",
+    # When the weekly search runs, per org. It used to be "Wednesday 11pm PT" written
+    # into a config dataclass that nothing read and a sentence in the UI that nothing
+    # enforced — there was no scheduler at all, so the only way a search happened was
+    # somebody pressing Re-run.
+    #
+    # A day and an hour in the org's own timezone, because "Thursday morning, before her
+    # Thursday meeting" is the actual requirement and that is a local-time statement. The
+    # `enabled` setting above stays the kill switch: off means nothing is scheduled.
+    "schedule_day": "wednesday",
+    "schedule_hour": "23",
+    "schedule_timezone": "America/Los_Angeles",
 }
 
 # Seeded onto the REMOVE LIST, with the reason recorded. The organization already receives
@@ -374,29 +385,51 @@ def init_db(path: Path | str | None = None, *, seed: bool = True) -> None:
 
 
 def seed_org(conn: sqlite3.Connection, org_id: str) -> None:
-    """Give an org its starting content — **once**, on the first boot that sees it.
+    """Give an org its starting content: **settings, and nothing else.**
 
-    This used to run on every `init_db`, which is every process start and every pipeline
-    run. The effect was that deleting a seeded funder or program card did not stick: the
-    next restart or Re-run brought all 44 funders and all seven cards back, re-activated,
-    silently undoing a deliberate choice. A `seeded_at` marker in `meta` makes it the
-    first-boot operation it was always meant to be.
+    Both of the things that used to be seeded here have moved out, for different reasons.
 
-    Settings are exempt and still reconciled every boot: `seed_settings` is INSERT ... ON
-    CONFLICT DO NOTHING per key, so it fills in a genuinely new setting for an existing
-    org without touching a value anyone has chosen.
+    **Funders** are a directory an org imports from (`agent/directory.py`). Seeding them
+    meant whichever org signed in first inherited 52 and the account created five minutes
+    later got none — an artefact of `DEFAULT_ORG_ID` existing, not a rule anyone chose.
+
+    **Program cards** are not seeded at all, and there is deliberately no directory to
+    import them from either. A funder list is shared knowledge — who gives money, in this
+    city — so one org researching it can be useful to the next. A program card is the
+    opposite: it describes what *this* nonprofit does, in their words, and another org's
+    cards are not merely unhelpful but actively wrong. Handing a new account seven cards
+    about somebody else's arts and resilience programs made the app look configured when
+    it was not, and the first thing they had to do was work out what to delete.
+
+    A new org therefore starts with an empty dashboard and the onboarding checklist,
+    whose second step is "describe what you do" — paste a link to your own website and
+    the assistant drafts a card you correct. That is the intended first five minutes, and
+    it only works if the page is actually empty.
+
+    **Funders are the exception, and they come back.** They were seeded, then removed
+    entirely when it turned out whoever signed in first inherited 52 and the next account
+    got none. Removing them fixed the unfairness and introduced a worse problem: a new
+    account opened onto an empty list, and a Re-run with no funders does nothing at all.
+    Every org now gets the same starter lists, so it is even *and* the app works on the
+    first click. Which lists is `agent/directory.DEFAULT_ON_SIGNUP`, and choosing your own
+    city is the Discover funders page.
+
+    Settings still reconcile on every boot rather than once: `seed_settings` is INSERT ...
+    ON CONFLICT DO NOTHING per key, so a genuinely new setting appears for an existing org
+    without touching a value anyone has chosen.
     """
     seed_settings(conn, org_id)
 
+    # Once. The marker is what stops a restart or a pipeline run resurrecting a funder
+    # the org deliberately removed — the bug this whole seeding path had before.
     marker = f"seeded_at:{org_id}"
     if conn.execute("SELECT 1 FROM meta WHERE key=?", (marker,)).fetchone():
         return
 
-    # Deliberately NOT seed_funders. The 60 researched sources are a directory an org
-    # imports from (agent/directory.py), not something one org gets for signing in first
-    # — which is what used to happen, and produced the complaint that one account had 52
-    # funders and the account made five minutes later had none.
-    seed_programs(conn, org_id)
+    from agent.directory import DEFAULT_ON_SIGNUP
+
+    for key in DEFAULT_ON_SIGNUP:
+        import_starter_list(conn, key, org_id)
     conn.execute("INSERT INTO meta(key, value) VALUES(?,?) "
                  "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                  (marker, now_iso()))
@@ -673,17 +706,11 @@ def org_for_user(conn: sqlite3.Connection, uid: str, email: str) -> str:
         (uid, email, org_id, now_iso(), now_iso()),
     )
     if org_id != DEFAULT_ORG_ID:
-        # Settings only — deliberately NOT the funders or the program cards.
-        #
-        # A new nonprofit signing up must not land on a dashboard pre-loaded with 44 San
-        # Diego funders and seven program cards belonging to the pilot org. That data is
-        # not theirs, it is wrong for anywhere outside California, and it makes the app
-        # look broken before they have done anything. They get working defaults and an
-        # empty funder list, and onboarding fills it in.
-        seed_settings(conn, org_id)
-        conn.execute("INSERT INTO meta(key, value) VALUES(?,?) "
-                     "ON CONFLICT(key) DO NOTHING",
-                     (f"seeded_at:{org_id}", now_iso()))
+        # The same provisioning the default org gets, so "what do I start with" has one
+        # answer rather than depending on which door you came through. Settings, and the
+        # starter funder lists — **not** program cards, which describe what one nonprofit
+        # does and are wrong for anybody else.
+        seed_org(conn, org_id)
     log.info("first sign-in for %s — assigned to org %s", email, org_id)
     return org_id
 

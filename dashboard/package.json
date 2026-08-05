@@ -3,10 +3,10 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Fundworthy — local control surface for the weekly grant researcher.",
+  "description": "Fundworthy \u2014 local control surface for the weekly grant researcher.",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node scripts/seo-urls.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

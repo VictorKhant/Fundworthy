@@ -115,17 +115,25 @@ must not inherit the pilot's 44 San Diego funders.
 ### Pilot / seed data
 
 The 60 researched sources in `agent/sources.py` — 58 San Diego grantmakers plus the
-California and federal grant databases — are a **directory an org imports from**
-(`agent/directory.py`), not something any org is given.
+California and federal grant databases — are grouped into starter lists
+(`agent/directory.py`) and **every new org is given all three**. They can then be added to
+or removed on **Discover funders**.
 
-They used to be seeded into `DEFAULT_ORG_ID`, which meant whichever account signed in
-first got 52 funders and the account created five minutes later got none. That was not a
-decision; it was an artefact of that org existing. Now every org starts with no funders
-and the same three lists on offer, which is also correct outside San Diego: a Chicago
-nonprofit wants Grants.gov and does not want 58 San Diego foundations.
+That took two attempts. They were originally seeded into `DEFAULT_ORG_ID` alone, so
+whichever account signed in first got 52 funders and the account created five minutes
+later got none — an artefact of that org existing rather than a decision. Giving nobody
+them fixed the unfairness and broke the product: a new account opened onto an empty list,
+and a Re-run with no funders does nothing at all. Everyone getting the same lists is even
+*and* works on the first click.
 
-Program cards (`app/db.py: SEED_PROGRAMS`) are still seeded per org, and should probably
-stop being — they describe the pilot's programs, not anyone else's.
+The cost is that a nonprofit outside San Diego starts with 58 funders that are not near
+them. That is the lesser problem — "some of these are not mine, let me remove them" beats
+"the app did nothing" — and Discover funders is where it gets fixed.
+
+**Program cards are not seeded, and there is deliberately no directory for them.** A
+funder list is shared knowledge: who gives money, in this city. A program card describes
+what *this* nonprofit does, in their words, so another org's cards are not merely
+unhelpful but wrong. A new org writes its own, with the assistant drafting from a link.
 
 ---
 
@@ -194,6 +202,8 @@ seat.
 | `ALLOWED_EMAILS` | Comma-separated. Restricts who may sign in. **Leave it out and anyone can sign up**, which is the default |
 | `FUNDWORTHY_PILOT_EMAILS` | Who inherits the pre-tenancy org (its funders, findings **and saved key**). Claimed by name, never by signing in first — see `app/db.py: _claims_default_org` |
 | `FUNDWORTHY_MAX_RUNS_PER_DAY` | **Off by default.** A lever for one misbehaving account, not a ration — an org spends its own key, so how often it searches is its own business |
+| `FUNDWORTHY_ADMIN_EMAILS` | Who may read `/api/admin/stats`, the one route that crosses every tenant boundary. Its own list, never `ALLOWED_EMAILS`; **unset means nobody** |
+| `VITE_SITE_URL` | Build-time (dashboard). The public address, for the canonical link and sitemap. Unset just omits them |
 
 ---
 
@@ -300,6 +310,8 @@ Everything else (funders, programs, this month's findings) is already seeded.
 │   ├── secrets.py               encrypted, write-only API-key storage, per org
 │   ├── runner.py                the Re-run button (subprocess + live log)
 │   ├── archive.py / export.py   monthly dedup/purge · CSV export
+│   ├── scheduler.py             the weekly run, per org, on their own day and hour
+│   ├── stats.py                 `python -m app.stats` — how the install is doing
 │   └── assistant.py             "paste a link → program card" (Sonnet)
 ├── agent/                       the pipeline
 │   ├── run.py                   entrypoint, orchestration, budget ceiling
@@ -313,7 +325,8 @@ Everything else (funders, programs, this month's findings) is already seeded.
 │   ├── irs990.py                one-time IRS 990 lookup, cached
 │   └── models.py                the Opportunity dataclass
 ├── sinks/                       sqlite (primary) · webjson · sheets · jsonl
-├── dashboard/src/               React UI (sidebar, dashboard, archive, settings)
+├── dashboard/src/               React UI (sidebar, dashboard, archive,
+│                                 discover funders, settings, first-run tutorial)
 ├── tests/                       pytest — calibration.py is the ranking test,
 │                                 test_tenancy.py is the org-isolation test
 ├── docs/DEPLOY-ORACLE.md        putting it on an Oracle free-tier VM

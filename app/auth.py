@@ -284,8 +284,8 @@ def verify(token: str) -> User:
             "the email from Fundworthy, then sign in again.",
         )
 
-    # An empty allow-list is open sign-up, not a misconfiguration — `configure()` refuses
-    # to start unless one of the two was chosen on purpose.
+    # An empty allow-list is open sign-up, not a misconfiguration: leaving `ALLOWED_EMAILS`
+    # out is how a deployment says "any nonprofit may sign up", which is the default.
     if cfg.allowed_emails and email.casefold() not in cfg.allowed_emails:
         log.warning("Refused sign-in for %s — not on the allow-list.", email)
         raise HTTPException(

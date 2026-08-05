@@ -38,6 +38,7 @@ There is no endpoint that returns the Anthropic API key. That is not an omission
 from __future__ import annotations
 
 import logging
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -48,7 +49,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import archive, auth, export, repo, secrets
+from . import archive, auth, export, repo, scheduler, secrets
 from .db import (DEFAULT_ORG_ID, SECTORS, InviteError, create_invite, import_starter_list,
                  init_db, list_invites, month_key, org_for_user, org_members,
                  redeem_invite, revoke_invite, session)
@@ -99,6 +100,13 @@ class SettingsIn(BaseModel):
     search_beyond_partners: bool | None = None
     org_name: str | None = Field(None, max_length=200)
     org_location: str | None = Field(None, max_length=200)
+    # The weekly schedule. Validated here rather than trusted: `schedule_hour` reaches a
+    # `.replace(hour=...)` in the scheduler, and the timezone reaches ZoneInfo — which
+    # handles a bad name gracefully, but there is no reason to make it.
+    schedule_day: str | None = Field(None, pattern="^(monday|tuesday|wednesday|thursday|"
+                                                   "friday|saturday|sunday)$")
+    schedule_hour: int | None = Field(None, ge=0, le=23)
+    schedule_timezone: str | None = Field(None, max_length=64)
 
 
 class ApiKeyIn(BaseModel):
@@ -345,6 +353,40 @@ def delete_funder(funder_id: str, org: str = Depends(current_org)) -> dict:
     return {"deleted": funder_id}
 
 
+# --- how the whole install is doing -------------------------------------------
+
+def require_admin(user=Depends(auth.require_user)) -> None:
+    """The one route that reads across every organization, gated separately.
+
+    `FUNDWORTHY_ADMIN_EMAILS` is its own list, not a role on the user, and not
+    `ALLOWED_EMAILS`: with open sign-up that one is empty, so hanging admin off "are you
+    signed in" would publish the platform's numbers to anybody who made an account. Unset
+    means **nobody** — a missing variable must not be a permissive default on the only
+    endpoint that ignores the tenant boundary.
+
+    A local install (no sign-in) is one person on 127.0.0.1 looking at their own box, so
+    it is allowed.
+    """
+    import os
+
+    if not auth.enabled():
+        return
+    admins = {e.strip().casefold()
+              for e in os.environ.get("FUNDWORTHY_ADMIN_EMAILS", "").split(",")
+              if e.strip()}
+    if not admins or user is None or user.email.casefold() not in admins:
+        # 404, not 403: an endpoint that says "you are not an admin" has confirmed it
+        # exists and that being an admin is a thing to become.
+        raise HTTPException(404, "Not found.")
+
+
+@api.get("/admin/stats", dependencies=[Depends(require_admin)])
+def admin_stats() -> dict:
+    """Counts and money, across the install. No names, no findings, no funder lists."""
+    with session() as conn:
+        return repo.platform_stats(conn)
+
+
 # --- the starter directory ----------------------------------------------------
 
 @api.get("/directory")
@@ -519,6 +561,25 @@ def health() -> dict:
     return {"ok": True}
 
 
+@public.get("/maintenance")
+def maintenance() -> dict:
+    """Is an update happening right now.
+
+    Public, and deliberately so: the whole point is that somebody who is *not* signed in
+    still learns why the page is about to blink. It says one boolean and a sentence the
+    deploy wrote — never a count, never a name, never anything about who is using the app.
+    """
+    from .runner import drain_notice, draining
+
+    active = draining()
+    return {
+        "maintenance": active,
+        "message": (drain_notice() if active else "") or (
+            "Fundworthy is being updated. Searches already running will finish; new "
+            "ones can start again in a few minutes." if active else ""),
+    }
+
+
 @public.get("/auth/config")
 def auth_config() -> dict:
     """Is sign-in on, and which Firebase project. Public because the sign-in page needs
@@ -610,8 +671,16 @@ async def lifespan(app: FastAPI):
     # died days ago. Reconcile before serving.
     with session() as conn:
         repo.reconcile_interrupted_runs(conn)
+
+    # The weekly run, per org, on the day and hour they chose. In-process on purpose —
+    # see app/scheduler.py for why a systemd timer would bypass the drain gate, the
+    # concurrency cap, and per-org API keys.
+    stop_scheduler = threading.Event()
+    scheduler.start(stop_scheduler)
+
     log.info("Fundworthy ready.")
     yield
+    stop_scheduler.set()
 
 
 def create_app() -> FastAPI:
@@ -700,7 +769,21 @@ def create_app() -> FastAPI:
 
         @app.get("/{path:path}", include_in_schema=False)
         def spa(path: str):
-            """Serve the built dashboard, falling back to index.html for client routes."""
+            """Serve the built dashboard, falling back to index.html for client routes.
+
+            **Except under `/api`.** This catch-all is registered last, so a request to an
+            API route that does not exist — a typo, a removed endpoint, a client running
+            against a newer server — used to fall through here and get `200` with a page
+            of HTML. Every failure mode of that is quiet: a caller cannot tell "gone" from
+            "fine", `curl` reports success, and anyone debugging reads the dashboard's
+            markup wondering why their endpoint returns a favicon link.
+
+            It is also how a stale deployment hides. `GET /api/maintenance` answering 200
+            on a box that has never heard of that endpoint says the feature is live when
+            the code is not on the machine at all.
+            """
+            if path.startswith("api/"):
+                raise HTTPException(404, "No such endpoint.")
             candidate = (DIST / path).resolve()
             if path and candidate.is_file() and DIST.resolve() in candidate.parents:
                 return FileResponse(candidate)

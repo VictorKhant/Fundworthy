@@ -172,8 +172,12 @@ nonprofit signs up, gets an empty list, and has to know the names of their own l
 foundations before the product does anything for them. Hand-researching a second city
 does not fix it either — it just moves the cliff.
 
-**The page.** A third section, between *This week* and *Past findings*: a directory of
-grantmakers **by city**. Not this week's opportunities — the standing list of who gives
+**The page exists** — *Discover funders*, above Settings in the sidebar. It holds the
+starter lists and the funder list itself, and a disabled card describing the part below.
+What follows is what that card is a placeholder for.
+
+**By city.** Today there is one city, so the lists are flat. A directory of grantmakers
+**by city** Not this week's opportunities — the standing list of who gives
 money where. An org browses it, picks the cities they can apply in, and those funders
 feed the weekly search. Selecting cities on the dashboard replaces every notion of a
 geographic filter (see the note at the top of `agent/filters.py` for why the old one is
@@ -337,9 +341,14 @@ dashboard cannot write to and had never been switched on.
 - **No incremental persistence.** Results reach the sinks once `evaluate()` finishes, so
   the salvage path is what saves an interrupted run rather than a running write. Good
   enough now that SIGTERM is handled; worth doing when runs get longer.
-- **The weekly schedule still does not exist on the VM.** A systemd timer per org is the
-  shape, and under BYO-key it has to resolve *each org's* key from the database and run
-  per-org — a single global cron run would use whatever `ANTHROPIC_API_KEY` is in `.env`.
+- ~~**The weekly schedule still does not exist.**~~ **Shipped** — `app/scheduler.py`, a
+  background thread in the API process rather than a systemd timer, so it shares
+  `RunManager`'s concurrency cap, the drain gate, and per-org keys. A timer calling
+  `python -m agent.run` would have bypassed all three, and the first thing it would do
+  wrong is start a run during a deploy. Each org picks its own day, hour and timezone.
+
+  What it inherits from `RunManager`: scheduling stops if the process is down, and a
+  second uvicorn worker would double-fire. Both are fixed by the same job queue.
 - **Protect `main`** on GitHub: require a PR, no force-push.
 
 ---

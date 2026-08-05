@@ -32,7 +32,8 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tests.helpers import seed_starter_funders  # noqa: E402
+from tests.helpers import (seed_starter_funders,  # noqa: E402
+                           seed_starter_programs)
 
 from app import auth
 from app.db import init_db
@@ -77,6 +78,19 @@ def token_for(keypair):
     return make
 
 
+def token_for_(keypair, **overrides):
+    """`token_for` is a fixture bound to the default client; this is the same token for
+    tests that build their own."""
+    now = int(time.time())
+    claims = {
+        "iss": f"https://securetoken.google.com/{PROJECT}", "aud": PROJECT,
+        "sub": "uid-123", "iat": now, "exp": now + 3600,
+        "email": ALLOWED, "email_verified": True, "name": "Test Admin",
+    }
+    claims.update(overrides)
+    return jwt.encode(claims, keypair[0], algorithm="RS256")
+
+
 def _client(tmp_path, monkeypatch, keypair, **env):
     monkeypatch.setenv("FUNDWORTHY_DB_PATH", str(tmp_path / "rise.db"))
     monkeypatch.setenv("FUNDWORTHY_KEYFILE", str(tmp_path / ".fernet-key"))
@@ -85,6 +99,7 @@ def _client(tmp_path, monkeypatch, keypair, **env):
         monkeypatch.setenv(k, v)
     init_db()
     seed_starter_funders()
+    seed_starter_programs()
 
     from app.main import create_app
 
@@ -682,3 +697,41 @@ def test_a_private_install_is_unchanged(signed_in, token_for):
     refused = signed_in.get("/api/auth/me", headers={
         "Authorization": "Bearer " + token_for(email="nobody@example.org")})
     assert refused.status_code == 403
+
+
+# --- the one endpoint that ignores the tenant boundary --------------------------
+
+def test_platform_stats_are_invisible_without_being_named_an_admin(signed_in, token_for):
+    """`FUNDWORTHY_ADMIN_EMAILS` is its own list, not ALLOWED_EMAILS and not a role. With
+    open sign-up the allow-list is empty, so hanging admin off "are you signed in" would
+    publish the platform's numbers to anybody who made an account."""
+    ok = {"Authorization": f"Bearer {token_for()}"}
+    res = signed_in.get("/api/admin/stats", headers=ok)
+    # 404, not 403: saying "you are not an admin" confirms the endpoint exists and that
+    # being one is a thing to become.
+    assert res.status_code == 404
+
+
+def test_an_admin_sees_counts_and_no_names(tmp_path, monkeypatch, keypair):
+    with _client(tmp_path, monkeypatch, keypair,
+                 FIREBASE_PROJECT_ID=PROJECT,
+                 FIREBASE_WEB_API_KEY="AIza-not-a-secret",
+                 ALLOWED_EMAILS=ALLOWED,
+                 FUNDWORTHY_ADMIN_EMAILS=ALLOWED) as c:
+        body = c.get("/api/admin/stats",
+                     headers={"Authorization": f"Bearer {token_for_(keypair)}"}).json()
+
+    assert {"orgs", "users", "runs_30d", "spend_30d_usd"} <= set(body)
+    # It answers "is the product working", so it must not carry anything that identifies
+    # an organization or leaks one org's research to whoever is reading.
+    blob = str(body).lower()
+    for leak in ("@", "foundation", "grant", "email"):
+        assert leak not in blob
+
+
+def test_an_empty_admin_list_means_nobody(signed_in, token_for):
+    """A missing variable must not be a permissive default on the only endpoint that
+    reads across every organization."""
+    res = signed_in.get("/api/admin/stats",
+                        headers={"Authorization": f"Bearer {token_for()}"})
+    assert res.status_code == 404

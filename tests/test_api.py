@@ -20,7 +20,8 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tests.helpers import seed_starter_funders  # noqa: E402
+from tests.helpers import (seed_starter_funders,  # noqa: E402
+                           seed_starter_programs)
 
 from app import secrets
 from app.db import DEFAULT_ORG_ID, init_db, session
@@ -35,6 +36,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     init_db()
     seed_starter_funders()
+    seed_starter_programs()
 
     from app.main import create_app
 
@@ -394,6 +396,7 @@ def test_stopping_a_run_is_not_recorded_as_a_failure():
 
     init_db()
     seed_starter_funders()
+    seed_starter_programs()
     with session() as conn:
         run_id = repo.create_run(conn, org_id=DEFAULT_ORG_ID)
 
@@ -481,3 +484,60 @@ def test_sign_in_is_off_for_the_api_suite_whatever_the_box_thinks():
     from app import auth
 
     assert auth.enabled() is False
+
+
+# --- the SPA catch-all must not answer for the API ------------------------------
+
+def test_an_unknown_api_route_is_a_404_not_a_page_of_html(client):
+    """The catch-all is registered last, so an API path that matches no route used to
+    fall through to it and return 200 with index.html. Every failure mode of that is
+    quiet: a caller cannot tell "gone" from "fine", curl reports success, and a stale
+    deployment looks healthy — `GET /api/maintenance` answered 200 on a box that had
+    never heard of that endpoint."""
+    res = client.get("/api/definitely-not-a-real-route")
+    assert res.status_code == 404
+    assert "text/html" not in res.headers.get("content-type", "")
+
+
+def test_a_real_page_route_still_serves_the_dashboard(client):
+    """The fix must not break client-side routing, which is the reason the catch-all
+    exists — /welcome and /signin are real URLs the SPA handles."""
+    res = client.get("/welcome")
+    assert res.status_code == 200
+    assert "text/html" in res.headers.get("content-type", "")
+
+
+def test_a_static_file_is_still_served_as_itself(client, tmp_path):
+    """robots.txt and sitemap.xml live in dist/ and must come back as files rather than
+    as the SPA fallback — a robots.txt that is secretly index.html is why the live site
+    looked like it had been deployed when it had not."""
+    from app.main import DIST
+
+    if not DIST.exists():
+        pytest.skip("the dashboard has not been built in this checkout")
+    probe = DIST / "robots.txt"
+    if not probe.exists():
+        pytest.skip("no robots.txt in this build")
+    res = client.get("/robots.txt")
+    assert res.status_code == 200
+    assert not res.text.lstrip().startswith("<!doctype")
+
+
+def test_the_search_console_verification_file_is_served_verbatim(client):
+    """Google fetches this exact path and expects one line back. If the SPA catch-all
+    answered instead, verification fails with "the file has the wrong content" — and the
+    content it saw would be the dashboard's HTML, which is a confusing thing to be told.
+
+    It lives in dashboard/public/ rather than being uploaded to the VM by hand, because
+    anything not in the repo is deleted by the next `npm run build` — and a site that
+    silently loses its verification weeks later is worse than one that never had it.
+    """
+    from app.main import DIST
+
+    probe = DIST / "google5083e4c8404182ff.html"
+    if not probe.exists():
+        pytest.skip("the dashboard has not been built in this checkout")
+
+    res = client.get("/google5083e4c8404182ff.html")
+    assert res.status_code == 200
+    assert res.text.strip() == "google-site-verification: google5083e4c8404182ff.html"

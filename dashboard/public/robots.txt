@@ -1,0 +1,12 @@
+# Fundworthy. The marketing pages are for finding; the app behind them is not.
+#
+# Disallowing /api is belt and braces — every route there is authenticated and a crawler
+# gets a 401 — but a crawler spending its budget on endpoints it cannot read is wasted
+# either way, and a 401 in a search console log is a support question nobody needs.
+
+User-agent: *
+Allow: /
+Allow: /welcome
+Disallow: /api/
+
+Sitemap: SITE_URL/sitemap.xml

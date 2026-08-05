@@ -24,7 +24,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tests.helpers import seed_starter_funders  # noqa: E402
+from tests.helpers import (seed_starter_funders,  # noqa: E402
+                           seed_starter_programs)
 
 from agent.models import DeadlineType, FunderType, Opportunity, Program, stable_id
 from app import archive, repo
@@ -40,6 +41,7 @@ def db(tmp_path, monkeypatch):
     monkeypatch.setenv("FUNDWORTHY_KEYFILE", str(tmp_path / ".fernet-key"))
     init_db(path)
     seed_starter_funders(path)
+    seed_starter_programs(path)
     return path
 
 

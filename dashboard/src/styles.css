@@ -866,3 +866,60 @@ button.text.danger { color: #B4503F; margin-left: auto; }
 }
 .directory-row > div { flex: 1; }
 .directory-row p { margin: 2px 0 0; }
+
+/* A card describing something that does not exist yet. Visibly quieter than a working
+   one, so it reads as a signpost rather than a broken feature. */
+.card.soon { border-style: dashed; background: transparent; }
+.card.soon h2 { color: var(--muted); }
+
+/* --- the first-run walkthrough --------------------------------------------- */
+.tutorial { max-width: 620px; margin: 0 auto; }
+
+.tut-rail { display: flex; gap: 6px; margin-bottom: 22px; }
+.tut-pip { flex: 1; height: 4px; border-radius: 99px; background: var(--line); }
+.tut-pip.done { background: var(--accent); }
+.tut-pip.at { background: var(--accent-deep); }
+
+.tut-count {
+  font-size: 12px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--muted); margin: 0 0 6px;
+}
+.tut-step h2 { margin: 0 0 12px; font-size: 26px; letter-spacing: -0.015em; }
+.tut-step p { margin: 0 0 12px; }
+
+.tut-sub { margin: 0 0 16px; padding-left: 20px; }
+.tut-sub li { margin-bottom: 7px; }
+
+.tut-form { display: flex; gap: 9px; flex-wrap: wrap; margin: 14px 0 8px; }
+.tut-form input { flex: 1 1 260px; }
+
+.tut-draft { border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin: 14px 0; }
+.tut-draft .field { margin-bottom: 10px; }
+
+.tut-ok {
+  background: var(--accent-soft); border-radius: 10px;
+  padding: 10px 12px; color: var(--accent-deep);
+}
+
+/* Disabled until the step is genuinely done — the whole point of the walkthrough is that
+   you cannot click past a step you have not finished. */
+.tut-actions { margin-top: 20px; }
+.tut-actions button:disabled { opacity: .55; }
+.tut-back { margin-top: 10px; }
+
+/* --- "we are updating right now" ------------------------------------------- */
+.maintenance {
+  display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline;
+  padding: 11px 14px; margin-bottom: 18px; border-radius: 12px;
+  background: #FBF3E4; border: 1px solid #E8D9B8; color: #6B5326;
+}
+.maintenance strong { white-space: nowrap; }
+
+/* --- when the weekly search runs ------------------------------------------- */
+.schedule {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 10px 0 4px 26px; padding: 10px 12px;
+  background: var(--line-soft); border-radius: 12px;
+}
+.schedule select { padding: 5px 8px; }
+.schedule p { flex-basis: 100%; margin: 4px 0 0; }

@@ -11,6 +11,10 @@ import OrgSwitcher from "./OrgSwitcher";
 const PAGES = [
   { id: "dashboard", label: "This week" },
   { id: "archive", label: "Past findings" },
+  // Above Settings deliberately. Choosing who to watch is part of using Fundworthy —
+  // something an org comes back to as it learns which funders are worth its time — not
+  // one-time configuration you set up and forget.
+  { id: "discover", label: "Discover funders" },
   { id: "settings", label: "Settings" },
 ];
 
