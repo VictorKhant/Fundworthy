@@ -68,6 +68,7 @@ export async function initAuth() {
   }
 
   _openSignup = Boolean(config.open_signup);
+  _passwordAuth = Boolean(config.password_auth);
 
   if (!config.enabled) return config;
 
@@ -191,6 +192,130 @@ export async function signOutNow() {
   announce();
 }
 
+// --- email and password ------------------------------------------------------
+//
+// Google needs no sign-up step: the account already exists and Google has already proved
+// the address belongs to whoever is holding it. Passwords have neither property, which is
+// why this half of the file is longer than the Google half.
+//
+// The server refuses any token whose address is unverified (`app/auth.py`), and it has to
+// — Firebase will create an account for any address a stranger types, so an unverified
+// one proves nothing. That single rule sets the shape of everything below:
+//
+//     create an account  →  a verification email  →  sign out  →  verify  →  sign in
+//
+// Signing a new account straight in would look like it worked and then fail on the first
+// API call with a 403 they could do nothing about from inside the app. Better to end the
+// sign-up on a screen that says "check your inbox", which is the actual next step.
+
+function passwordProblem(e) {
+  switch (e?.code) {
+    case "auth/email-already-in-use":
+      return "There is already an account with that address. Sign in instead, or reset " +
+        "the password if you have forgotten it.";
+    case "auth/invalid-email":
+      return "That does not look like an email address.";
+    case "auth/weak-password":
+      return "Firebase wants at least 6 characters. Longer is better — this password " +
+        "protects a dashboard that can spend money.";
+    case "auth/operation-not-allowed":
+      return "Email and password sign-in is switched off for this Firebase project. " +
+        "Enable it in Firebase console → Authentication → Sign-in method.";
+    case "auth/too-many-requests":
+      return "Too many attempts. Firebase has paused sign-in for this address for a few " +
+        "minutes.";
+    case "auth/network-request-failed":
+      return "Could not reach Google. Check the connection and try again.";
+    // Modern Firebase returns this for a wrong password *and* an unknown address, on
+    // purpose: distinguishing them tells a stranger which addresses have accounts.
+    // Repeating that distinction back in our own words would undo it.
+    case "auth/invalid-credential":
+    case "auth/wrong-password":
+    case "auth/user-not-found":
+      return "That email and password do not match an account.";
+    default:
+      return e?.message || "Could not complete that. Try again.";
+  }
+}
+
+function requireFirebase() {
+  if (!firebaseAuth) {
+    throw new Error(initError || "Sign-in is not configured on this install.");
+  }
+}
+
+// Create the account, send the verification email, and deliberately leave them signed
+// out. Resolves with the address so the caller can say whose inbox to go and look in.
+export async function createAccountWithPassword(email, password) {
+  requireFirebase();
+  const { createUserWithEmailAndPassword, sendEmailVerification, signOut } =
+    await import("firebase/auth");
+
+  try {
+    const cred = await createUserWithEmailAndPassword(firebaseAuth, email.trim(), password);
+    await sendEmailVerification(cred.user);
+    await signOut(firebaseAuth);
+    user = null;
+    announce();
+    return cred.user.email;
+  } catch (e) {
+    // Never leave a half-made session behind: if the account was created but the email
+    // failed to send, being silently signed in as an unverified user is the confusing
+    // state this whole flow exists to avoid.
+    try {
+      if (firebaseAuth.currentUser) await signOutNow();
+    } catch { /* the original error is the one worth reporting */ }
+    throw new Error(passwordProblem(e));
+  }
+}
+
+export async function signInWithPassword(email, password) {
+  requireFirebase();
+  const { sendEmailVerification, signInWithEmailAndPassword } =
+    await import("firebase/auth");
+
+  let cred;
+  try {
+    cred = await signInWithEmailAndPassword(firebaseAuth, email.trim(), password);
+  } catch (e) {
+    throw new Error(passwordProblem(e));
+  }
+
+  if (!cred.user.emailVerified) {
+    // The credentials were right, so this is the one moment we are allowed to send
+    // another verification email — Firebase requires a signed-in user to send one, and
+    // this is the only point in the flow where an unverified person legitimately is.
+    // Then straight back out, because the server will refuse this token anyway.
+    let resent = true;
+    try {
+      await sendEmailVerification(cred.user);
+    } catch {
+      resent = false;   // rate-limited, almost certainly; not worth failing over
+    }
+    await signOutNow();
+    throw new Error(
+      `${cred.user.email} has not been verified yet. ` +
+      (resent
+        ? "We have sent the link again — open it, then sign in."
+        : "Open the link in the email from Fundworthy, then sign in.")
+    );
+  }
+}
+
+export async function sendPasswordReset(email) {
+  requireFirebase();
+  const { sendPasswordResetEmail } = await import("firebase/auth");
+  try {
+    await sendPasswordResetEmail(firebaseAuth, email.trim());
+  } catch (e) {
+    // Not `auth/user-not-found`: saying "no account with that address" turns this box
+    // into a way to test which addresses are registered. The caller reports the same
+    // thing either way.
+    if (e?.code === "auth/user-not-found") return;
+    throw new Error(passwordProblem(e));
+  }
+}
+
 // --- chrome ------------------------------------------------------------------
 
 const titleCase = (s) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -200,6 +325,13 @@ const titleCase = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 // client never guesses, because the server is what enforces it.
 let _openSignup = false;
 export const openSignup = () => _openSignup;
+
+// Whether Firebase's email/password provider is enabled for this project. Also from the
+// server, for the same reason: a password form rendered against a project that has the
+// provider switched off fails with `auth/operation-not-allowed`, which looks like a bug
+// in the app rather than a setting nobody turned on.
+let _passwordAuth = false;
+export const passwordAuth = () => _passwordAuth;
 
 export function initials(name) {
   return (name || "")

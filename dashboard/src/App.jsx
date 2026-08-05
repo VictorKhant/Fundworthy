@@ -24,8 +24,12 @@ import Settings from "./pages/Settings";
 // flash past on every reload. It also means the client never guesses — whether sign-in
 // exists is whatever the server just said, and the server is the thing that enforces it.
 
-const PATHS = { "/welcome": "landing", "/signin": "login" };
-const PATH_FOR = { landing: "/welcome", login: "/signin", app: "/" };
+// `/signup` and `/signin` are one screen in two modes, not two screens — the form is the
+// same, and half the people who land on one meant the other. They stay separate paths so
+// the landing page's two calls to action can genuinely differ, which they could not while
+// Google was the only way in and creating an account was not a thing that existed.
+const PATHS = { "/welcome": "landing", "/signin": "login", "/signup": "signup" };
+const PATH_FOR = { landing: "/welcome", login: "/signin", signup: "/signup", app: "/" };
 
 // Read from auth.js rather than from React state, because initialScreen also runs from
 // the popstate handler, outside a render.
@@ -132,7 +136,7 @@ export default function App() {
   // effect rather than in the render path — pushing history while rendering is how you
   // get a component that re-renders itself forever.
   useEffect(() => {
-    if (booted && user && screen === "login") {
+    if (booted && user && (screen === "login" || screen === "signup")) {
       window.history.replaceState({}, "", PATH_FOR.app);
       setScreen("app");
     }
@@ -152,12 +156,23 @@ export default function App() {
     // Where the landing page's buttons lead depends on whether there is anything to sign
     // into. On a localhost install there is not, and routing through a sign-in page that
     // cannot work would make the wordmark a one-way door out of the dashboard.
-    const enter = () => go(signedIn ? "app" : "login");
-    return <Landing onSignIn={enter} onCreate={enter} />;
+    //
+    // The two buttons finally differ. They were one function under Google-only, because
+    // Google owns account creation and a first sign-in was identical to a hundredth; with
+    // passwords there is a real account to make, so "Create an account" opens the form
+    // that makes one.
+    const enter = (where) => () => go(signedIn ? "app" : where);
+    return <Landing onSignIn={enter("login")} onCreate={enter("signup")} />;
   }
 
-  if (screen === "login") {
-    return <Login onHome={() => go("landing")} notice={notice} />;
+  if (screen === "login" || screen === "signup") {
+    return (
+      <Login
+        onHome={() => go("landing")}
+        notice={notice}
+        mode={screen === "signup" ? "signup" : "signin"}
+      />
+    );
   }
 
   // The app shell itself is not a place a signed-out person can be. Reaching it is not

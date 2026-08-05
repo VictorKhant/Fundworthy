@@ -168,7 +168,8 @@ It binds to `127.0.0.1`, not `0.0.0.0` — nginx is the only thing that talks to
 sudo tee /etc/nginx/sites-available/fundworthy > /dev/null <<'EOF'
 server {
     listen 80;
-    server_name _;
+    server_name _;          # step 7 replaces this with your real hostname —
+                            # certbot cannot install a certificate into `_`
 
     # The pipeline runs 5-10 minutes and streams its log. Default nginx timeouts are
     # 60s, which would cut the run off mid-crawl and look like a crash.
@@ -203,15 +204,60 @@ You need a real hostname for Google sign-in — OAuth will not accept a bare IP.
 Cheapest options: a **DuckDNS** subdomain (free, 2 minutes) or a real domain from
 Namecheap/Cloudflare (~$10/yr, better for a handoff). Point an **A record** at `$VM_IP`.
 
-Then:
+**First, name the server block.** Step 6 left `server_name _;`, because at that point you
+had no hostname. Certbot finds the block to install into by matching `server_name`, and
+`_` matches nothing — skip this and certbot will happily issue a certificate and then
+fail with *"Could not automatically find a matching server block."* You end up with a
+valid cert that nothing is serving, which looks like a certbot failure and is not.
+
+```bash
+sudo sed -i 's/server_name _;/server_name fundworthy.example.org;/' \
+  /etc/nginx/sites-available/fundworthy      # your hostname
+sudo grep -n server_name /etc/nginx/sites-available/fundworthy
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Then get the certificate:
 
 ```bash
 sudo apt install -y certbot python3-certbot-nginx
 sudo certbot --nginx -d fundworthy.example.org     # your hostname
 ```
 
-Certbot edits the nginx config and sets up auto-renewal. Confirm `https://your-host`
-loads.
+Choose **redirect** when it asks, so port 80 sends people to HTTPS instead of serving the
+app unencrypted. Certbot edits the nginx config and sets up auto-renewal.
+
+> Already have a cert but nothing on 443? Fix `server_name` as above, then
+> `sudo certbot install --cert-name your-host` — that runs the installer alone against
+> the certificate you already hold, with no re-issue and no rate-limit risk.
+
+**Now confirm — from your own machine, not from the VM:**
+
+```bash
+curl -s  https://fundworthy.example.org/api/health             # {"ok":true}
+curl -sI http://fundworthy.example.org/ | head -1              # HTTP/1.1 301
+```
+
+> Use `-s`, not `-sI`, on the API. `-I` sends a HEAD request and FastAPI's GET routes
+> refuse it — you get a **405**, which looks like a failure and is actually proof the
+> whole chain works, since only the app itself could have produced it.
+
+Read the failure carefully if it fails, because the two modes mean different things:
+
+| | |
+|---|---|
+| **Connection refused**, fast | Nothing is listening on 443 — nginx has no HTTPS block. Certbot did not install. |
+| **Connection timed out** | Packets are being dropped — the port-443 firewall rules in step 2, in one or both places. |
+
+Both at once is normal at this stage and is two separate fixes. Also confirm the proxy
+directives reached the **new** 443 block, not just the port-80 one certbot copied from:
+
+```bash
+sudo grep -c "proxy_read_timeout 900s" /etc/nginx/sites-available/fundworthy
+```
+
+Two server blocks and a count of `1` means the HTTPS block is missing them, and a search
+over HTTPS will cut off after about a minute (step 6 says why).
 
 ---
 
@@ -240,6 +286,19 @@ Two separate questions, and Firebase only answers the first:
    *is* a Google Cloud project, so this adds nothing to the handoff.)
 2. **Authentication → Get started → Sign-in method → Google → Enable.** Set the project
    support email to the shared Gmail. **Save.**
+
+   Optionally also enable **Email/Password** on the same screen, for people who do not
+   have or do not want to use a Google account. Leave *Email link (passwordless sign-in)*
+   off — the app does not implement it. If you enable this, set `FIREBASE_PASSWORD_AUTH=1`
+   in step 8b, or the sign-in page will keep offering Google alone.
+
+   > **Password accounts must confirm their address before they can sign in.** Not
+   > optional and not configurable: Firebase will create an account for any address
+   > somebody can type, so an unconfirmed one proves nothing. Without that step,
+   > registering a colleague's address with a password of your choosing would walk
+   > straight through `ALLOWED_EMAILS`. Creating an account therefore sends a
+   > verification email and leaves you signed *out*; the link is what lets you in.
+   > Google accounts skip all of this, because Google has already done it.
    > Finding Authentication: the left nav has no "Build" section any more — it is under
    > **Product categories → Security**, and once visited it pins itself to **Project
    > shortcuts** at the top. **Get started** sits at the very top of that page, above the
@@ -264,6 +323,13 @@ come from the Firebase console; the third is yours to decide.
 | `FIREBASE_PROJECT_ID` | `projectId` in the config block from 8a.4 |
 | `FIREBASE_WEB_API_KEY` | `apiKey` in the same block |
 | `ALLOWED_EMAILS` | You. Every address that may sign in, comma-separated. |
+| `FIREBASE_PASSWORD_AUTH` | `1` only if you enabled Email/Password in 8a.2. Optional. |
+
+`FIREBASE_PASSWORD_AUTH` exists because the server has no way to ask Firebase which
+providers are switched on. Set it and the sign-in page grows an email/password form and a
+real *Create an account* flow; leave it out and the page offers Google alone. Setting it
+when the provider is actually disabled gives everyone `auth/operation-not-allowed`, which
+reads as a broken app rather than a setting nobody turned on.
 
 Nothing else from that config block is used. `authDomain` is derived
 (`<project>.firebaseapp.com`); `storageBucket`, `messagingSenderId` and `appId` belong to

@@ -190,6 +190,7 @@ seat.
 | `FIREBASE_PROJECT_ID` | **Turns sign-in on.** Unset = local mode, no login |
 | `FIREBASE_WEB_API_KEY` | Firebase's public web key, served to the browser. Required when sign-in is on |
 | `FIREBASE_AUTH_DOMAIN` | Defaults to `<project>.firebaseapp.com`; override only for a custom auth domain |
+| `FIREBASE_PASSWORD_AUTH` | `1` if the project has Email/Password enabled. Adds the password form and a real create-account flow; Google-only without it. Password accounts must confirm their address before they can sign in — `app/auth.py` refuses an unverified token |
 | `ALLOWED_EMAILS` | Comma-separated. Restricts who may sign in. **Leave it out and anyone can sign up**, which is the default |
 | `FUNDWORTHY_PILOT_EMAILS` | Who inherits the pre-tenancy org (its funders, findings **and saved key**). Claimed by name, never by signing in first — see `app/db.py: _claims_default_org` |
 | `FUNDWORTHY_MAX_RUNS_PER_DAY` | **Off by default.** A lever for one misbehaving account, not a ration — an org spends its own key, so how often it searches is its own business |
