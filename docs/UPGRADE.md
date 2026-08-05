@@ -79,7 +79,7 @@ cd dashboard && npm install && npm run build && cd ..
 
 # The suite is offline — no key, no network, nothing spent. Run it BEFORE restarting, so
 # a problem is something you read about rather than something your users discover.
-.venv/bin/python -m pytest tests/ -q      # expect 256 passed, 1 skipped
+.venv/bin/python -m pytest tests/ -q      # expect 264 passed, 1 skipped
 
 sudo systemctl restart fundworthy
 ```
@@ -107,9 +107,10 @@ curl -s -o /dev/null -w '%{http_code}\n' https://$HOST/api/state    # 401
 curl -sI https://$HOST/ | grep -i "content-security-policy"          # present
 ```
 
-And in a browser: sign in, and confirm your funders and this month's findings are still
-there. **The first person to sign in inherits the pilot org's data** — so whoever has
-been using Fundworthy should sign in first, before anyone else does.
+Do **not** sign in yet — do step 5 first. Which account inherits the existing funders,
+findings and saved API key is decided by `FUNDWORTHY_PILOT_EMAILS`, and until that is set
+nobody inherits them. (Signing in early is not destructive: it gives you a new empty org,
+and setting the variable afterwards still works. It just looks alarming.)
 
 ### If something is wrong
 
