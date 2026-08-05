@@ -501,7 +501,17 @@ def test_an_unknown_api_route_is_a_404_not_a_page_of_html(client):
 
 def test_a_real_page_route_still_serves_the_dashboard(client):
     """The fix must not break client-side routing, which is the reason the catch-all
-    exists — /welcome and /signin are real URLs the SPA handles."""
+    exists — /welcome and /signin are real URLs the SPA handles.
+
+    Needs a built dashboard: `dist/` is gitignored and app/main.py only registers the
+    catch-all when it exists, so in a fresh checkout /welcome is an honest 404 rather
+    than a regression. CI builds the dashboard before running this, so a skip here means
+    that build step is missing, not that the check is optional.
+    """
+    from app.main import DIST
+
+    if not DIST.exists():
+        pytest.skip("the dashboard has not been built in this checkout")
     res = client.get("/welcome")
     assert res.status_code == 200
     assert "text/html" in res.headers.get("content-type", "")
@@ -541,3 +551,19 @@ def test_the_search_console_verification_file_is_served_verbatim(client):
     res = client.get("/google5083e4c8404182ff.html")
     assert res.status_code == 200
     assert res.text.strip() == "google-site-verification: google5083e4c8404182ff.html"
+
+
+def test_the_search_console_verification_file_is_in_the_repo():
+    """The test above needs a built dashboard and skips without one. This one does not,
+    so deleting the file is a red test in every checkout rather than a silent skip.
+
+    Vite copies dashboard/public/ to the root of dist/ untouched, which is where Google
+    looks. Anything not in the repo is erased by the next `npm run build`.
+    """
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1]
+              / "dashboard" / "public" / "google5083e4c8404182ff.html")
+    assert source.is_file(), "Search Console verification file is missing from the repo."
+    assert source.read_text().strip() == (
+        "google-site-verification: google5083e4c8404182ff.html")
