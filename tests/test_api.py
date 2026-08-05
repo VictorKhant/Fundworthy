@@ -533,6 +533,51 @@ def test_a_static_file_is_still_served_as_itself(client, tmp_path):
     assert not res.text.lstrip().startswith("<!doctype")
 
 
+def test_robots_lets_a_crawler_render_the_page_it_is_allowed_to_index():
+    """`Disallow: /api/` blocked the app's own startup fetches, so the home page rendered
+    as an error to Googlebot.
+
+    A blocked XHR is not skipped, it fails: Google's renderer answers it with status 499,
+    the app turns that into "Something went wrong (499)", and Search Console's live test
+    showed that error screen as the home page while /welcome — which needs nothing from
+    /api — rendered correctly. Allowing a page to be indexed while blocking what it needs
+    to draw itself is the trap here.
+
+    Resolved by Google's rule — the longest matching rule wins, ties go to Allow —
+    and NOT with urllib.robotparser, which answers a different question. The stdlib
+    parser takes the first matching rule, so `Allow: /` on the first line matches every
+    path and it reports nothing as blocked: it called the old file's /api/auth/config
+    crawlable, when Google was visibly blocking it. A test built on it would have passed
+    both before and after the fix.
+    """
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[1] / "dashboard" / "public" / "robots.txt"
+
+    def google_allows(path: str) -> bool:
+        longest_allow = longest_disallow = -1
+        for line in source.read_text().splitlines():
+            line = line.split("#")[0].strip()
+            if ":" not in line:
+                continue
+            directive, _, value = line.partition(":")
+            directive, value = directive.strip().lower(), value.strip()
+            if not value or not path.startswith(value):
+                continue
+            if directive == "allow":
+                longest_allow = max(longest_allow, len(value))
+            elif directive == "disallow":
+                longest_disallow = max(longest_disallow, len(value))
+        return longest_allow >= longest_disallow
+
+    for path in ("/", "/welcome", "/api/auth/config", "/api/maintenance"):
+        assert google_allows(path), f"{path} must be crawlable — the page cannot render"
+
+    # Still closed: these need a signed-in user, so a crawler gets 401 either way.
+    for path in ("/api/state", "/api/settings", "/api/opportunities"):
+        assert not google_allows(path), f"{path} must stay blocked"
+
+
 def test_head_is_served_wherever_get_is(client):
     """HEAD is GET without the body, so a 405 where GET returns 200 is a protocol
     violation — and not a theoretical one. FastAPI does not add HEAD alongside GET the
