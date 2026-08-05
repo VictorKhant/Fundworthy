@@ -906,3 +906,20 @@ button.text.danger { color: #B4503F; margin-left: auto; }
 .tut-actions { margin-top: 20px; }
 .tut-actions button:disabled { opacity: .55; }
 .tut-back { margin-top: 10px; }
+
+/* --- "we are updating right now" ------------------------------------------- */
+.maintenance {
+  display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline;
+  padding: 11px 14px; margin-bottom: 18px; border-radius: 12px;
+  background: #FBF3E4; border: 1px solid #E8D9B8; color: #6B5326;
+}
+.maintenance strong { white-space: nowrap; }
+
+/* --- when the weekly search runs ------------------------------------------- */
+.schedule {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 10px 0 4px 26px; padding: 10px 12px;
+  background: var(--line-soft); border-radius: 12px;
+}
+.schedule select { padding: 5px 8px; }
+.schedule p { flex-basis: 100%; margin: 4px 0 0; }

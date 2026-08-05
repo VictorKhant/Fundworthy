@@ -69,6 +69,19 @@ DRAIN_FILE = "draining"
 def draining() -> bool:
     return (db_path().parent / DRAIN_FILE).exists()
 
+
+def drain_notice() -> str:
+    """What the deploy left in the drain file, for the banner. Empty when not draining.
+
+    Read by a **public** endpoint, so it must never say anything but "we are updating".
+    The deploy writes it; nothing in the app does.
+    """
+    path = db_path().parent / DRAIN_FILE
+    try:
+        return path.read_text(encoding="utf-8").strip()[:200]
+    except OSError:
+        return ""
+
 # Lines from the child that mean something to a non-technical reader. Everything else
 # (httpx chatter, robots.txt fetches) is kept in the buffer but not surfaced as status.
 _INTERESTING = ("✓", "✗", "⚠", "scored", "Crawling", "candidates survived",

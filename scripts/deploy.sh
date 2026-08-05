@@ -35,7 +35,11 @@ cd "$APP_DIR"
 
 say "Pausing new searches"
 mkdir -p "$(dirname "$DRAIN")"
-touch "$DRAIN"
+# The contents become the banner every visitor sees, signed in or not. A deploy that
+# blinks the page without explaining itself reads as the app breaking.
+cat > "$DRAIN" <<'NOTICE'
+Fundworthy is being updated right now. Searches already running will finish, and new ones can start again in a few minutes. Nothing is lost.
+NOTICE
 
 # Python, not the sqlite3 CLI. The CLI is a separate apt package that is not on a stock
 # Ubuntu image — the first real deploy died here with `sqlite3: command not found` — and

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
 import { authEnabled, authError, currentUser, initAuth, onUserChange, signOutNow } from "./auth";
 import JoinOrg from "./components/JoinOrg";
+import MaintenanceBanner from "./components/MaintenanceBanner";
 import Tutorial from "./components/Tutorial";
 import Sidebar from "./components/Sidebar";
 import Archive from "./pages/Archive";
@@ -231,6 +232,7 @@ export default function App() {
       />
 
       <main className="page">
+        <MaintenanceBanner />
         {error && (
           <div className="notice error">
             {error}

@@ -137,6 +137,18 @@ export const api = {
     stop: () => post("/api/runs/stop"),
   },
 
+  // Public and unauthenticated on purpose: somebody who is not signed in should still
+  // learn why the page is about to blink. Uses `send` rather than `request` so a 401
+  // during a restart cannot bounce a signed-in person to the sign-in screen.
+  maintenance: async () => {
+    try {
+      const res = await send("/api/maintenance");
+      return res.ok ? await res.json() : { maintenance: false };
+    } catch {
+      return { maintenance: false };
+    }
+  },
+
   directory: {
     read: () => get("/api/directory"),
     import: (key) => post(`/api/directory/${key}/import`),

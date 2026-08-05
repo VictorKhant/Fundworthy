@@ -107,8 +107,58 @@ export default function SearchSettings({
             checked={draft.enabled}
             onChange={(e) => set("enabled", e.target.checked)}
           />
-          The researcher is switched on — it searches every Wednesday night
+          The researcher is switched on
         </label>
+
+        {/* This used to read "it searches every Wednesday night", which was a sentence
+            rather than a setting: nothing scheduled anything, and the only way a search
+            happened was somebody pressing Re-run. Now it is three controls and there is
+            a scheduler behind them. Local time, because "before the Thursday meeting" is
+            what people actually mean. */}
+        {draft.enabled && (
+          <div className="schedule">
+            <span className="muted small">Search automatically every</span>
+            <select value={draft.schedule_day}
+                    onChange={(e) => set("schedule_day", e.target.value)}>
+              {["monday", "tuesday", "wednesday", "thursday", "friday",
+                "saturday", "sunday"].map((d) => (
+                <option key={d} value={d}>
+                  {d[0].toUpperCase() + d.slice(1)}
+                </option>
+              ))}
+            </select>
+            <span className="muted small">at</span>
+            <select value={String(draft.schedule_hour)}
+                    onChange={(e) => set("schedule_hour", Number(e.target.value))}>
+              {Array.from({ length: 24 }, (_, h) => (
+                <option key={h} value={h}>
+                  {h === 0 ? "12 midnight"
+                    : h < 12 ? `${h} am`
+                    : h === 12 ? "12 noon"
+                    : `${h - 12} pm`}
+                </option>
+              ))}
+            </select>
+            <select value={draft.schedule_timezone}
+                    onChange={(e) => set("schedule_timezone", e.target.value)}>
+              {[
+                ["America/Los_Angeles", "Pacific"],
+                ["America/Denver", "Mountain"],
+                ["America/Chicago", "Central"],
+                ["America/New_York", "Eastern"],
+                ["America/Anchorage", "Alaska"],
+                ["Pacific/Honolulu", "Hawaii"],
+              ].map(([tz, label]) => (
+                <option key={tz} value={tz}>{label}</option>
+              ))}
+            </select>
+            <p className="muted small">
+              Findings will be waiting the next morning. If the server is down at that
+              hour the search runs as soon as it is back — you get the week's search
+              either way, and never two of them.
+            </p>
+          </div>
+        )}
 
         <div className="row">
           {dirty && (

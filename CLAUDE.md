@@ -202,6 +202,8 @@ seat.
 | `ALLOWED_EMAILS` | Comma-separated. Restricts who may sign in. **Leave it out and anyone can sign up**, which is the default |
 | `FUNDWORTHY_PILOT_EMAILS` | Who inherits the pre-tenancy org (its funders, findings **and saved key**). Claimed by name, never by signing in first — see `app/db.py: _claims_default_org` |
 | `FUNDWORTHY_MAX_RUNS_PER_DAY` | **Off by default.** A lever for one misbehaving account, not a ration — an org spends its own key, so how often it searches is its own business |
+| `FUNDWORTHY_ADMIN_EMAILS` | Who may read `/api/admin/stats`, the one route that crosses every tenant boundary. Its own list, never `ALLOWED_EMAILS`; **unset means nobody** |
+| `VITE_SITE_URL` | Build-time (dashboard). The public address, for the canonical link and sitemap. Unset just omits them |
 
 ---
 
@@ -308,6 +310,7 @@ Everything else (funders, programs, this month's findings) is already seeded.
 │   ├── secrets.py               encrypted, write-only API-key storage, per org
 │   ├── runner.py                the Re-run button (subprocess + live log)
 │   ├── archive.py / export.py   monthly dedup/purge · CSV export
+│   ├── scheduler.py             the weekly run, per org, on their own day and hour
 │   └── assistant.py             "paste a link → program card" (Sonnet)
 ├── agent/                       the pipeline
 │   ├── run.py                   entrypoint, orchestration, budget ceiling

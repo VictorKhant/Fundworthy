@@ -23,7 +23,8 @@ log = logging.getLogger(__name__)
 # this set — it has its own write-only path in app/secrets.py.
 PUBLIC_SETTINGS = tuple(DEFAULT_SETTINGS.keys())
 
-_INT_SETTINGS = {"min_award", "min_deadline_runway_days", "max_opportunities"}
+_INT_SETTINGS = {"min_award", "min_deadline_runway_days", "max_opportunities",
+                 "schedule_hour"}
 _FLOAT_SETTINGS = {"run_budget_usd", "monthly_budget_usd"}
 _BOOL_SETTINGS = {"enabled", "search_beyond_partners"}
 _JSON_SETTINGS = {"sectors_active"}
@@ -568,6 +569,63 @@ def runs_today(conn, *, org_id: str) -> int:
         "SELECT COUNT(*) AS n FROM runs WHERE org_id=? AND started_at >= ?",
         (org_id, since),
     ).fetchone()["n"]
+
+
+def platform_stats(conn) -> dict:
+    """How the whole install is doing. **Crosses every tenant boundary in this file.**
+
+    Everything else here takes an `org_id` and refuses to work without one. This does the
+    opposite on purpose, which is why it is the only function with a warning on it and
+    why `app/main.py` puts it behind a separate admin gate rather than the ordinary
+    sign-in.
+
+    It counts and it aggregates. No org names, no email addresses, no funder lists, no
+    findings — the question is "is the product working", and none of those answer it.
+    Add a field here only if you can say which decision it changes.
+    """
+    def one(sql, params=()):
+        return conn.execute(sql, params).fetchone()
+
+    since_7d = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    since_30d = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+
+    orgs = one("SELECT COUNT(*) AS n FROM orgs")["n"]
+    users = one("SELECT COUNT(*) AS n FROM users")["n"]
+    active_7d = one("SELECT COUNT(DISTINCT org_id) AS n FROM users WHERE last_seen_at >= ?",
+                    (since_7d,))["n"]
+
+    # The number that says whether this is a product or a demo: orgs that supplied their
+    # own key. Everything before that is somebody looking; this is somebody committing.
+    with_key = one(
+        "SELECT COUNT(*) AS n FROM settings WHERE key=? AND value IS NOT NULL",
+        (API_KEY_SETTING,))["n"]
+
+    runs = one("SELECT COUNT(*) AS n, COALESCE(SUM(usd_spent), 0) AS spent FROM runs "
+               "WHERE started_at >= ?", (since_30d,))
+    by_status = {r["status"]: r["n"] for r in conn.execute(
+        "SELECT status, COUNT(*) AS n FROM runs WHERE started_at >= ? GROUP BY status",
+        (since_30d,))}
+
+    findings = one("SELECT COUNT(*) AS n FROM opportunities WHERE month_key = ?",
+                   (month_key(),))["n"]
+    # Findings the accuracy gate could not verify. A rising share here is the product
+    # getting less trustworthy, and it is invisible from any single org's dashboard.
+    unverified = one("SELECT COUNT(*) AS n FROM opportunities "
+                     "WHERE month_key = ? AND needs_human_check = 1",
+                     (month_key(),))["n"]
+
+    return {
+        "orgs": orgs,
+        "users": users,
+        "orgs_active_7d": active_7d,
+        "orgs_with_own_key": with_key,
+        "runs_30d": runs["n"],
+        "runs_by_status_30d": by_status,
+        "spend_30d_usd": round(float(runs["spent"]), 4),
+        "findings_this_month": findings,
+        "findings_needing_check": unverified,
+        "month": month_key(),
+    }
 
 
 def reconcile_interrupted_runs(conn) -> int:

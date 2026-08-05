@@ -293,6 +293,17 @@ DEFAULT_SETTINGS: dict[str, str] = {
     # been asserting.
     "org_name": "",
     "org_location": "",
+    # When the weekly search runs, per org. It used to be "Wednesday 11pm PT" written
+    # into a config dataclass that nothing read and a sentence in the UI that nothing
+    # enforced — there was no scheduler at all, so the only way a search happened was
+    # somebody pressing Re-run.
+    #
+    # A day and an hour in the org's own timezone, because "Thursday morning, before her
+    # Thursday meeting" is the actual requirement and that is a local-time statement. The
+    # `enabled` setting above stays the kill switch: off means nothing is scheduled.
+    "schedule_day": "wednesday",
+    "schedule_hour": "23",
+    "schedule_timezone": "America/Los_Angeles",
 }
 
 # Seeded onto the REMOVE LIST, with the reason recorded. The organization already receives

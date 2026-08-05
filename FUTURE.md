@@ -341,9 +341,14 @@ dashboard cannot write to and had never been switched on.
 - **No incremental persistence.** Results reach the sinks once `evaluate()` finishes, so
   the salvage path is what saves an interrupted run rather than a running write. Good
   enough now that SIGTERM is handled; worth doing when runs get longer.
-- **The weekly schedule still does not exist on the VM.** A systemd timer per org is the
-  shape, and under BYO-key it has to resolve *each org's* key from the database and run
-  per-org — a single global cron run would use whatever `ANTHROPIC_API_KEY` is in `.env`.
+- ~~**The weekly schedule still does not exist.**~~ **Shipped** — `app/scheduler.py`, a
+  background thread in the API process rather than a systemd timer, so it shares
+  `RunManager`'s concurrency cap, the drain gate, and per-org keys. A timer calling
+  `python -m agent.run` would have bypassed all three, and the first thing it would do
+  wrong is start a run during a deploy. Each org picks its own day, hour and timezone.
+
+  What it inherits from `RunManager`: scheduling stops if the process is down, and a
+  second uvicorn worker would double-fire. Both are fixed by the same job queue.
 - **Protect `main`** on GitHub: require a PR, no force-push.
 
 ---
