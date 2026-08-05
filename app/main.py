@@ -49,9 +49,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import archive, auth, export, repo, secrets
-from .db import (DEFAULT_ORG_ID, SECTORS, InviteError, create_invite, init_db,
-                 list_invites, month_key, org_for_user, org_members, redeem_invite,
-                 revoke_invite, session)
+from .db import (DEFAULT_ORG_ID, SECTORS, InviteError, create_invite, import_starter_list,
+                 init_db, list_invites, month_key, org_for_user, org_members,
+                 redeem_invite, revoke_invite, session)
 from .runner import MANAGER
 
 log = logging.getLogger(__name__)
@@ -343,6 +343,40 @@ def delete_funder(funder_id: str, org: str = Depends(current_org)) -> dict:
         if not repo.delete_funder(conn, funder_id, org_id=org):
             raise HTTPException(404, "No such funder.")
     return {"deleted": funder_id}
+
+
+# --- the starter directory ----------------------------------------------------
+
+@api.get("/directory")
+def read_directory(org: str = Depends(current_org)) -> dict:
+    """Funder lists an org can import, and how many of each it already has.
+
+    These used to be seeded into whichever org signed in first, which meant one account
+    had 52 funders and the one created after it had none. They are a directory now:
+    everybody sees the same thing and chooses. See FUTURE.md §4a for where this goes.
+    """
+    from agent.directory import STARTER_LISTS, catalogue
+    from app.db import _funder_id
+
+    with session() as conn:
+        mine = {r["id"] for r in
+                conn.execute("SELECT id FROM funders WHERE org_id=?", (org,))}
+
+    have = {lst.key: sum(1 for s in lst.sources
+                         if _funder_id(s.funder, s.url) in mine)
+            for lst in STARTER_LISTS}
+    return {"lists": [{**entry, "imported": have.get(entry["key"], 0)}
+                      for entry in catalogue()]}
+
+
+@api.post("/directory/{key}/import")
+def import_directory_list(key: str, org: str = Depends(current_org)) -> dict:
+    with session() as conn:
+        try:
+            added = import_starter_list(conn, key, org)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        return {"added": added, "funders": repo.list_funders(conn, org_id=org)}
 
 
 # --- findings -----------------------------------------------------------------

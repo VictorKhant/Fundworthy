@@ -392,9 +392,11 @@ def seed_org(conn: sqlite3.Connection, org_id: str) -> None:
     if conn.execute("SELECT 1 FROM meta WHERE key=?", (marker,)).fetchone():
         return
 
+    # Deliberately NOT seed_funders. The 60 researched sources are a directory an org
+    # imports from (agent/directory.py), not something one org gets for signing in first
+    # — which is what used to happen, and produced the complaint that one account had 52
+    # funders and the account made five minutes later had none.
     seed_programs(conn, org_id)
-    seed_funders(conn, org_id)
-    seed_remove_list_only(conn, org_id)
     conn.execute("INSERT INTO meta(key, value) VALUES(?,?) "
                  "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                  (marker, now_iso()))
@@ -926,6 +928,39 @@ def seed_programs(conn: sqlite3.Connection, org_id: str = DEFAULT_ORG_ID) -> Non
                 stamp, stamp,
             ),
         )
+
+
+def import_starter_list(conn: sqlite3.Connection, key: str, org_id: str) -> int:
+    """Copy one of the shipped funder lists into this org. Returns how many are new.
+
+    Idempotent by (org_id, id): importing twice adds nothing and, crucially, does not
+    resurrect a funder the org deliberately removed — `ON CONFLICT DO NOTHING` leaves an
+    existing row exactly as the user left it, un-ticked reasons and all.
+    """
+    from agent.directory import get as get_list
+    from agent.sources import sector_for
+
+    lst = get_list(key)
+    if lst is None:
+        raise ValueError(f"no starter list called {key!r}")
+
+    stamp = now_iso()
+    added = 0
+    for s in lst.sources:
+        cur = conn.execute(
+            """INSERT INTO funders(
+                   org_id, id, name, url, sector, funder_type, warm, active,
+                   exclude_reason, tier, confidence, programs, adapter, notes,
+                   created_at, updated_at)
+               VALUES(?,?,?,?,?,?,?,1,'',?,?,?,?,?,?,?)
+               ON CONFLICT(org_id, id) DO NOTHING""",
+            (org_id, _funder_id(s.funder, s.url), s.funder, s.url, sector_for(s),
+             _funder_type_for(s), int(s.warm), int(s.tier), int(s.confidence),
+             dumps([p.value for p in s.programs]), s.adapter, s.notes, stamp, stamp),
+        )
+        added += cur.rowcount or 0
+    log.info("org %s imported %d funder(s) from the %r list", org_id, added, key)
+    return added
 
 
 def seed_funders(conn: sqlite3.Connection, org_id: str = DEFAULT_ORG_ID) -> None:

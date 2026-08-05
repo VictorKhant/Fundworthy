@@ -20,6 +20,8 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from tests.helpers import seed_starter_funders  # noqa: E402
+
 from app import secrets
 from app.db import DEFAULT_ORG_ID, init_db, session
 
@@ -32,6 +34,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("FUNDWORTHY_KEYFILE", str(tmp_path / ".fernet-key"))
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     init_db()
+    seed_starter_funders()
 
     from app.main import create_app
 
@@ -390,6 +393,7 @@ def test_stopping_a_run_is_not_recorded_as_a_failure():
     from app import repo
 
     init_db()
+    seed_starter_funders()
     with session() as conn:
         run_id = repo.create_run(conn, org_id=DEFAULT_ORG_ID)
 
@@ -433,7 +437,7 @@ def test_the_environment_is_hermetic():
     import agent  # noqa: F401 — the import is the thing being tested
 
     for name in ("FIREBASE_PROJECT_ID", "FIREBASE_WEB_API_KEY", "ALLOWED_EMAILS",
-                 "FUNDWORTHY_OPEN_SIGNUP", "ANTHROPIC_API_KEY"):
+                 "ANTHROPIC_API_KEY"):
         assert os.environ.get(name) is None, (
             f"{name} leaked in from the environment — see tests/conftest.py")
 

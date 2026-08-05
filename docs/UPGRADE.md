@@ -148,19 +148,14 @@ sudo systemctl restart fundworthy
 
 ## 5 · Choosing private or open sign-up
 
-The app now refuses to start unless you pick one. They are opposite products.
+One variable decides it, and open is what you get by leaving it out.
 
 ```bash
 nano ~/Rise-Fund-Finder/.env
 ```
 
-**Open sign-up — anyone can create an account:**
-
-```bash
-FUNDWORTHY_OPEN_SIGNUP=1
-# and remove or comment out ALLOWED_EMAILS
-FUNDWORTHY_PILOT_EMAILS=whoever@has-been-using-it.org
-```
+**Open sign-up — anyone can create an account.** This is the default: just make sure
+`ALLOWED_EMAILS` is absent or commented out.
 
 **Private — only listed people:**
 

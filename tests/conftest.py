@@ -32,7 +32,7 @@ import pytest
 # live database.
 _LEAKY_ENV = (
     "FIREBASE_PROJECT_ID", "FIREBASE_WEB_API_KEY", "FIREBASE_AUTH_DOMAIN",
-    "ALLOWED_EMAILS", "FUNDWORTHY_OPEN_SIGNUP", "FUNDWORTHY_PILOT_EMAILS",
+    "ALLOWED_EMAILS", "FUNDWORTHY_PILOT_EMAILS",
     "ANTHROPIC_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS",
     "FUNDWORTHY_DB_PATH", "FUNDWORTHY_KEYFILE",
     "FUNDWORTHY_STRICT_CONFIG", "FUNDWORTHY_SHEET_ID",
@@ -71,3 +71,4 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "network" in item.keywords:
             item.add_marker(skip)
+
