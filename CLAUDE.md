@@ -296,6 +296,7 @@ Everything else (funders, programs, this month's findings) is already seeded.
 │                                 test_tenancy.py is the org-isolation test
 ├── docs/DEPLOY-ORACLE.md        putting it on an Oracle free-tier VM
 ├── docs/ACCESS.md               getting into the running system (SSH · Firebase · Oracle)
+├── docs/UPGRADE.md              deploying the tenancy update onto a live box
 ├── scripts/deploy.sh            push-to-deploy: drain · wait · back up · test · restart
 ├── .github/workflows/deploy.yml push to main → the VM updates itself
 ├── CLAUDE.md                    this file — current state
