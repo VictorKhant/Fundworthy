@@ -47,6 +47,25 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      # The dashboard has to be built before the suite, not after, and not at all is not
+      # an option: `dist/` is gitignored, so without this step `DIST.exists()` is false,
+      # app/main.py never registers the SPA catch-all, and every test of what the site
+      # actually serves either fails (/welcome is a real 404) or quietly skips — which is
+      # how the Search Console verification file could be deleted with a green tick.
+      # scripts/deploy.sh builds before it tests for the same reason; this makes the two
+      # run the same suite against the same thing.
+      - run: cd dashboard && npm ci && npm run build
+        env:
+          # A placeholder, not the production hostname — this build is only ever tested,
+          # never shipped (the VM builds its own from its .env). It has to be set to
+          # something, because scripts/seo-urls.mjs deletes robots.txt and sitemap.xml
+          # when it is empty, and the tests for those would then skip in CI.
+          VITE_SITE_URL: https://fundworthy.example.org
       # Offline by construction — no API key, no network, nothing to spend.
       - run: python -m pytest tests/ -q
 
