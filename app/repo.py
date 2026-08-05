@@ -1,4 +1,4 @@
-"""CRUD over the SQLite store. (docs/PLAN.md §2b)
+"""CRUD over the SQLite store. (CLAUDE.md)
 
 Plain functions taking an open connection, so the API layer, the pipeline runner and
 the tests all use exactly the same code path. No ORM, no session magic, nothing that
@@ -11,7 +11,7 @@ import hashlib
 import logging
 import re
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from .db import (DEFAULT_SETTINGS, dumps, loads, month_key, now_iso)
@@ -24,16 +24,17 @@ log = logging.getLogger(__name__)
 PUBLIC_SETTINGS = tuple(DEFAULT_SETTINGS.keys())
 
 _INT_SETTINGS = {"min_award", "min_deadline_runway_days", "max_opportunities"}
-_FLOAT_SETTINGS = {"run_budget_usd"}
+_FLOAT_SETTINGS = {"run_budget_usd", "monthly_budget_usd"}
 _BOOL_SETTINGS = {"enabled", "search_beyond_partners"}
 _JSON_SETTINGS = {"sectors_active"}
 
 
 # --- settings -----------------------------------------------------------------
 
-def get_settings(conn) -> dict[str, Any]:
+def get_settings(conn, *, org_id: str) -> dict[str, Any]:
     """Typed settings, with defaults filled in for anything missing."""
-    rows = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM settings")}
+    rows = {r["key"]: r["value"] for r in
+            conn.execute("SELECT key, value FROM settings WHERE org_id=?", (org_id,))}
     out: dict[str, Any] = {}
     for key in PUBLIC_SETTINGS:
         raw = rows.get(key, DEFAULT_SETTINGS.get(key))
@@ -59,7 +60,7 @@ def _coerce(key: str, raw: Any) -> Any:
     return raw
 
 
-def update_settings(conn, changes: dict[str, Any]) -> dict[str, Any]:
+def update_settings(conn, changes: dict[str, Any], *, org_id: str) -> dict[str, Any]:
     """Write only known keys. An unknown key is ignored, not stored — otherwise the
     settings table becomes a junk drawer that nothing validates."""
     stamp = now_iso()
@@ -74,12 +75,12 @@ def update_settings(conn, changes: dict[str, Any]) -> dict[str, Any]:
         else:
             stored = str(value)
         conn.execute(
-            "INSERT INTO settings(key, value, updated_at) VALUES(?,?,?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
+            "INSERT INTO settings(org_id, key, value, updated_at) VALUES(?,?,?,?) "
+            "ON CONFLICT(org_id, key) DO UPDATE SET value=excluded.value, "
             "updated_at=excluded.updated_at",
-            (key, stored, stamp),
+            (org_id, key, stored, stamp),
         )
-    return get_settings(conn)
+    return get_settings(conn, org_id=org_id)
 
 
 # --- programs -----------------------------------------------------------------
@@ -100,16 +101,17 @@ def _program_out(row) -> dict:
     return d
 
 
-def list_programs(conn, *, active_only: bool = False) -> list[dict]:
-    sql = "SELECT * FROM programs"
+def list_programs(conn, *, org_id: str, active_only: bool = False) -> list[dict]:
+    sql = "SELECT * FROM programs WHERE org_id=?"
     if active_only:
-        sql += " WHERE active=1"
+        sql += " AND active=1"
     sql += " ORDER BY active DESC, name"
-    return [_program_out(r) for r in conn.execute(sql)]
+    return [_program_out(r) for r in conn.execute(sql, (org_id,))]
 
 
-def get_program(conn, program_id: str) -> dict | None:
-    row = conn.execute("SELECT * FROM programs WHERE id=?", (program_id,)).fetchone()
+def get_program(conn, program_id: str, *, org_id: str) -> dict | None:
+    row = conn.execute("SELECT * FROM programs WHERE id=? AND org_id=?",
+                       (program_id, org_id)).fetchone()
     return _program_out(row) if row else None
 
 
@@ -118,7 +120,7 @@ def slugify(name: str) -> str:
     return slug[:40] or "PROGRAM"
 
 
-def create_program(conn, data: dict) -> dict:
+def create_program(conn, data: dict, *, org_id: str) -> dict:
     name = str(data.get("name", "")).strip()
     if not name:
         raise ValueError("a program needs a name")
@@ -126,7 +128,13 @@ def create_program(conn, data: dict) -> dict:
     slug = str(data.get("slug") or slugify(name))
     # Two cards called "RISE Arts" is a data bug that only shows up weeks later as a
     # program silently not being searched. Disambiguate at write time instead.
-    existing = {r["slug"] for r in conn.execute("SELECT slug FROM programs")}
+    #
+    # Scoped to the org: slugs only have to be unique within one nonprofit's own card
+    # list. Comparing against every org's slugs would leak the shape of other orgs'
+    # programs — the second org to create "Arts Education" would get "ARTS_EDUCATION_2"
+    # and no explanation for the number.
+    existing = {r["slug"] for r in
+                conn.execute("SELECT slug FROM programs WHERE org_id=?", (org_id,))}
     base, n = slug, 2
     while slug in existing:
         slug, n = f"{base}_{n}", n + 1
@@ -135,12 +143,12 @@ def create_program(conn, data: dict) -> dict:
     stamp = now_iso()
     conn.execute(
         """INSERT INTO programs(
-               id, name, slug, summary, what_it_funds, keywords, funder_types,
+               org_id, id, name, slug, summary, what_it_funds, keywords, funder_types,
                search_queries, min_award, active, source_url, drafted_by_ai,
                reviewed_by_human, created_at, updated_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
-            program_id, name, slug,
+            org_id, program_id, name, slug,
             str(data.get("summary", "")), str(data.get("what_it_funds", "")),
             dumps(data.get("keywords") or []), dumps(data.get("funder_types") or []),
             dumps(data.get("search_queries") or []),
@@ -152,11 +160,11 @@ def create_program(conn, data: dict) -> dict:
             stamp, stamp,
         ),
     )
-    return get_program(conn, program_id)  # type: ignore[return-value]
+    return get_program(conn, program_id, org_id=org_id)  # type: ignore[return-value]
 
 
-def update_program(conn, program_id: str, changes: dict) -> dict | None:
-    if get_program(conn, program_id) is None:
+def update_program(conn, program_id: str, changes: dict, *, org_id: str) -> dict | None:
+    if get_program(conn, program_id, org_id=org_id) is None:
         return None
     sets, values = [], []
     for field in _PROGRAM_FIELDS:
@@ -175,13 +183,15 @@ def update_program(conn, program_id: str, changes: dict) -> dict | None:
         values.append(value)
     if sets:
         sets.append("updated_at=?")
-        values.extend([now_iso(), program_id])
-        conn.execute(f"UPDATE programs SET {', '.join(sets)} WHERE id=?", values)
-    return get_program(conn, program_id)
+        values.extend([now_iso(), program_id, org_id])
+        conn.execute(
+            f"UPDATE programs SET {', '.join(sets)} WHERE id=? AND org_id=?", values)
+    return get_program(conn, program_id, org_id=org_id)
 
 
-def delete_program(conn, program_id: str) -> bool:
-    cur = conn.execute("DELETE FROM programs WHERE id=?", (program_id,))
+def delete_program(conn, program_id: str, *, org_id: str) -> bool:
+    cur = conn.execute("DELETE FROM programs WHERE id=? AND org_id=?",
+                       (program_id, org_id))
     return cur.rowcount > 0
 
 
@@ -199,23 +209,23 @@ def _funder_out(row) -> dict:
     return d
 
 
-def list_funders(conn, *, active_only: bool = False) -> list[dict]:
-    sql = "SELECT * FROM funders"
+def list_funders(conn, *, org_id: str, active_only: bool = False) -> list[dict]:
+    sql = "SELECT * FROM funders WHERE org_id=?"
     if active_only:
-        sql += " WHERE active=1"
+        sql += " AND active=1"
     # Alphabetical, case-insensitively. It used to be `warm DESC, name` — partners
     # first — which is exactly the priority the stakeholder asked us to drop. NOCASE
     # because SQLite's default is byte order, which puts every capitalised name above
     # every lowercase one and reads as unsorted to a person.
     sql += " ORDER BY name COLLATE NOCASE"
-    return [_funder_out(r) for r in conn.execute(sql)]
+    return [_funder_out(r) for r in conn.execute(sql, (org_id,))]
 
 
 _F990 = ("ein", "form_990_url", "form_990_year",
          "form_990_total_revenue", "form_990_total_expenses")
 
 
-def funder_990_map(conn) -> dict[str, dict]:
+def funder_990_map(conn, *, org_id: str) -> dict[str, dict]:
     """{casefolded funder name: 990 facts} for everything already looked up.
 
     Read once per run and matched in memory. Funder financials change annually, so
@@ -225,13 +235,14 @@ def funder_990_map(conn) -> dict[str, dict]:
     out: dict[str, dict] = {}
     for r in conn.execute(
         "SELECT name, ein, form_990_url, form_990_year, form_990_total_revenue, "
-        "form_990_total_expenses FROM funders WHERE ein IS NOT NULL"
+        "form_990_total_expenses FROM funders WHERE ein IS NOT NULL AND org_id=?",
+        (org_id,),
     ):
         out[str(r["name"]).strip().casefold()] = {k: r[k] for k in _F990}
     return out
 
 
-def save_funder_990(conn, funder_id: str, data: dict | None) -> None:
+def save_funder_990(conn, funder_id: str, data: dict | None, *, org_id: str) -> None:
     """Cache a lookup result. A miss is cached too — as a checked_at with no EIN — so
     we do not re-ask an API every week about a funder that has no filing (every
     government body and tribal nation in the registry)."""
@@ -239,39 +250,42 @@ def save_funder_990(conn, funder_id: str, data: dict | None) -> None:
     conn.execute(
         "UPDATE funders SET ein=?, form_990_url=?, form_990_year=?, "
         "form_990_total_revenue=?, form_990_total_expenses=?, form_990_checked_at=? "
-        "WHERE id=?",
+        "WHERE id=? AND org_id=?",
         (data.get("ein"), data.get("form_990_url"), data.get("form_990_year"),
          data.get("form_990_total_revenue"), data.get("form_990_total_expenses"),
-         now_iso(), funder_id),
+         now_iso(), funder_id, org_id),
     )
 
 
-def funders_needing_990(conn) -> list[dict]:
+def funders_needing_990(conn, *, org_id: str) -> list[dict]:
     return [_funder_out(r) for r in conn.execute(
-        "SELECT * FROM funders WHERE form_990_checked_at IS NULL AND active=1")]
+        "SELECT * FROM funders WHERE form_990_checked_at IS NULL AND active=1 "
+        "AND org_id=?", (org_id,))]
 
 
-def excluded_funder_names(conn) -> set[str]:
+def excluded_funder_names(conn, *, org_id: str) -> set[str]:
     """Funders on the remove list, casefolded, for result-level filtering.
 
     Skipping them at the crawl is the cheap half and catches most of it. But the two
     indexed databases return grants from every funder in the state, so an excluded
     funder can still arrive through Grants.gov or the CA portal — which would put
-    exactly the opportunity she said she does not want back on her list, by a different
+    exactly the opportunity they said they do not want back on their list, by a different
     door. Both doors have to be closed.
     """
     return {
         str(r["name"]).strip().casefold()
-        for r in conn.execute("SELECT name FROM funders WHERE active=0")
+        for r in conn.execute(
+            "SELECT name FROM funders WHERE active=0 AND org_id=?", (org_id,))
     }
 
 
-def get_funder(conn, funder_id: str) -> dict | None:
-    row = conn.execute("SELECT * FROM funders WHERE id=?", (funder_id,)).fetchone()
+def get_funder(conn, funder_id: str, *, org_id: str) -> dict | None:
+    row = conn.execute("SELECT * FROM funders WHERE id=? AND org_id=?",
+                       (funder_id, org_id)).fetchone()
     return _funder_out(row) if row else None
 
 
-def create_funder(conn, data: dict) -> dict:
+def create_funder(conn, data: dict, *, org_id: str) -> dict:
     name = str(data.get("name", "")).strip()
     if not name:
         raise ValueError("a funder needs a name")
@@ -279,16 +293,16 @@ def create_funder(conn, data: dict) -> dict:
     stamp = now_iso()
     conn.execute(
         """INSERT INTO funders(
-               id, name, url, sector, funder_type, warm, active, tier, confidence,
-               programs, notes, created_at, updated_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
-           ON CONFLICT(id) DO UPDATE SET
+               org_id, id, name, url, sector, funder_type, warm, active, tier,
+               confidence, programs, notes, created_at, updated_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(org_id, id) DO UPDATE SET
                url=excluded.url, sector=excluded.sector,
                funder_type=excluded.funder_type, warm=excluded.warm,
                active=excluded.active, programs=excluded.programs,
                notes=excluded.notes, updated_at=excluded.updated_at""",
         (
-            funder_id, name, data.get("url"),
+            org_id, funder_id, name, data.get("url"),
             str(data.get("sector", "other")), str(data.get("funder_type", "other")),
             1 if data.get("warm") else 0,
             0 if data.get("active") is False else 1,
@@ -297,11 +311,11 @@ def create_funder(conn, data: dict) -> dict:
             stamp, stamp,
         ),
     )
-    return get_funder(conn, funder_id)  # type: ignore[return-value]
+    return get_funder(conn, funder_id, org_id=org_id)  # type: ignore[return-value]
 
 
-def update_funder(conn, funder_id: str, changes: dict) -> dict | None:
-    if get_funder(conn, funder_id) is None:
+def update_funder(conn, funder_id: str, changes: dict, *, org_id: str) -> dict | None:
+    if get_funder(conn, funder_id, org_id=org_id) is None:
         return None
     sets, values = [], []
     for field in _FUNDER_FIELDS:
@@ -322,13 +336,15 @@ def update_funder(conn, funder_id: str, changes: dict) -> dict | None:
         values.append(value)
     if sets:
         sets.append("updated_at=?")
-        values.extend([now_iso(), funder_id])
-        conn.execute(f"UPDATE funders SET {', '.join(sets)} WHERE id=?", values)
-    return get_funder(conn, funder_id)
+        values.extend([now_iso(), funder_id, org_id])
+        conn.execute(
+            f"UPDATE funders SET {', '.join(sets)} WHERE id=? AND org_id=?", values)
+    return get_funder(conn, funder_id, org_id=org_id)
 
 
-def delete_funder(conn, funder_id: str) -> bool:
-    cur = conn.execute("DELETE FROM funders WHERE id=?", (funder_id,))
+def delete_funder(conn, funder_id: str, *, org_id: str) -> bool:
+    cur = conn.execute("DELETE FROM funders WHERE id=? AND org_id=?",
+                       (funder_id, org_id))
     return cur.rowcount > 0
 
 
@@ -358,13 +374,13 @@ def _days_left(deadline: str | None) -> int | None:
         return None
 
 
-def save_opportunity(conn, opp, run_id: str | None = None) -> None:
+def save_opportunity(conn, opp, run_id: str | None = None, *, org_id: str) -> None:
     """Upsert one Opportunity. Re-running the same week updates rather than duplicates."""
     d = opp.to_dict()
     stamp = now_iso()
     conn.execute(
         """INSERT INTO opportunities(
-               id, run_id, month_key, found_on, title, funder, source_url,
+               org_id, id, run_id, month_key, found_on, title, funder, source_url,
                award_min, award_max, award_typical, deadline, deadline_type,
                estimated_effort_hours, program_match, score, score_rationale,
                funder_type, service_areas, geography, form_990_available,
@@ -372,8 +388,8 @@ def save_opportunity(conn, opp, run_id: str | None = None) -> None:
                section, source_kind, application_lead_time_days, time_to_funds_days,
                ein, form_990_url, form_990_year, form_990_total_revenue,
                form_990_total_expenses, fetched_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-           ON CONFLICT(id) DO UPDATE SET
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(org_id, id) DO UPDATE SET
                run_id=excluded.run_id, score=excluded.score,
                score_rationale=excluded.score_rationale,
                award_min=excluded.award_min, award_max=excluded.award_max,
@@ -396,7 +412,7 @@ def save_opportunity(conn, opp, run_id: str | None = None) -> None:
                form_990_total_expenses=excluded.form_990_total_expenses,
                fetched_at=excluded.fetched_at""",
         (
-            d["id"], run_id, month_key(), d.get("found_on") or stamp[:10],
+            org_id, d["id"], run_id, month_key(), d.get("found_on") or stamp[:10],
             d["title"], d["funder"], d["source_url"],
             d["award_min"], d["award_max"], d.get("award_typical"),
             d["deadline"], d.get("deadline_type", "unknown"),
@@ -416,9 +432,9 @@ def save_opportunity(conn, opp, run_id: str | None = None) -> None:
     )
 
 
-def list_opportunities(conn, *, month: str | None = None,
+def list_opportunities(conn, *, org_id: str, month: str | None = None,
                        run_id: str | None = None) -> list[dict]:
-    """Mauri's reading order, enforced in SQL so every surface agrees.
+    """the user's reading order, enforced in SQL so every surface agrees.
 
     Two rules now, and the second one used to be three:
 
@@ -434,32 +450,33 @@ def list_opportunities(conn, *, month: str | None = None,
     opportunity above a score-65 in the last real run, because the 18 had a figure on
     its page and the 65 did not.
     """
-    where, params = [], []
+    where, params = ["org_id=?"], [org_id]
     if month:
         where.append("month_key=?")
         params.append(month)
     if run_id:
         where.append("run_id=?")
         params.append(run_id)
-    sql = "SELECT * FROM opportunities"
-    if where:
-        sql += " WHERE " + " AND ".join(where)
+    sql = "SELECT * FROM opportunities WHERE " + " AND ".join(where)
     sql += " ORDER BY needs_human_check ASC, score DESC, funder ASC"
     return [_opp_out(r) for r in conn.execute(sql, params)]
 
 
-def available_months(conn) -> list[str]:
+def available_months(conn, *, org_id: str) -> list[str]:
     return [r["month_key"] for r in conn.execute(
-        "SELECT DISTINCT month_key FROM opportunities ORDER BY month_key DESC")]
+        "SELECT DISTINCT month_key FROM opportunities WHERE org_id=? "
+        "ORDER BY month_key DESC", (org_id,))]
 
 
 # --- runs ---------------------------------------------------------------------
 
-def create_run(conn, run_id: str | None = None) -> str:
+def create_run(conn, run_id: str | None = None, *, org_id: str,
+               started_by: str | None = None) -> str:
     run_id = run_id or uuid.uuid4().hex[:16]
     conn.execute(
-        "INSERT INTO runs(id, started_at, status) VALUES(?,?, 'running')",
-        (run_id, now_iso()),
+        "INSERT INTO runs(org_id, id, started_by, started_at, status) "
+        "VALUES(?,?,?,?, 'running')",
+        (org_id, run_id, started_by, now_iso()),
     )
     return run_id
 
@@ -483,20 +500,98 @@ def _run_out(row) -> dict:
     return d
 
 
-def get_run(conn, run_id: str) -> dict | None:
-    row = conn.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
+def get_run(conn, run_id: str, *, org_id: str | None = None) -> dict | None:
+    """One run. `org_id=None` is a deliberate escape hatch for the two callers that
+    legitimately have a run id but no org context — `RunManager._finalize`, which is
+    closing out a process it launched itself, and the boot-time reconciler. Every
+    request-driven caller passes one."""
+    if org_id is None:
+        row = conn.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
+    else:
+        row = conn.execute("SELECT * FROM runs WHERE id=? AND org_id=?",
+                           (run_id, org_id)).fetchone()
     return _run_out(row) if row else None
 
 
-def latest_run(conn) -> dict | None:
+def latest_run(conn, *, org_id: str) -> dict | None:
     row = conn.execute(
-        "SELECT * FROM runs ORDER BY started_at DESC LIMIT 1").fetchone()
+        "SELECT * FROM runs WHERE org_id=? ORDER BY started_at DESC LIMIT 1",
+        (org_id,)).fetchone()
     return _run_out(row) if row else None
 
 
-def list_runs(conn, limit: int = 20) -> list[dict]:
+def list_runs(conn, limit: int = 20, *, org_id: str) -> list[dict]:
     return [_run_out(r) for r in conn.execute(
-        "SELECT * FROM runs ORDER BY started_at DESC LIMIT ?", (limit,))]
+        "SELECT * FROM runs WHERE org_id=? ORDER BY started_at DESC LIMIT ?",
+        (org_id, limit))]
+
+
+def spend_summary(conn, *, org_id: str, month: str | None = None) -> dict:
+    """What this org has spent through Fundworthy this calendar month.
+
+    Deliberately *our* number, summed from the run log, rather than a reading of the
+    org's Anthropic balance — Anthropic publishes no credit-balance endpoint or header.
+    (`anthropic-ratelimit-tokens-remaining` looks like one and is not: it is tokens per
+    minute, and it refills.) So the honest thing to show a nonprofit is what this app
+    spent of their money, which is the number they can actually hold us to.
+    """
+    key = month or month_key()
+    row = conn.execute(
+        "SELECT COALESCE(SUM(usd_spent), 0.0) AS spent, COUNT(*) AS runs "
+        "FROM runs WHERE org_id=? AND started_at >= ?",
+        (org_id, f"{key}-01"),
+    ).fetchone()
+
+    settings = get_settings(conn, org_id=org_id)
+    cap = float(settings["monthly_budget_usd"])
+    spent = round(float(row["spent"]), 4)
+    return {
+        "month": key,
+        "spent_usd": spent,
+        "cap_usd": cap,
+        "remaining_usd": round(max(0.0, cap - spent), 4),
+        "runs": row["runs"],
+        "over_cap": spent >= cap,
+    }
+
+
+def runs_today(conn, *, org_id: str) -> int:
+    """How many searches this org has started in the last 24 hours.
+
+    The monthly spend cap bounds money, which only bites an org that has supplied a key.
+    An org with no key still costs us: the free deterministic tier fetches real pages
+    from real funders' websites, from one server IP. With open sign-up that is the abuse
+    surface that money no longer covers.
+    """
+    since = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    return conn.execute(
+        "SELECT COUNT(*) AS n FROM runs WHERE org_id=? AND started_at >= ?",
+        (org_id, since),
+    ).fetchone()["n"]
+
+
+def reconcile_interrupted_runs(conn) -> int:
+    """Close out rows left at 'running' by a process that is no longer alive.
+
+    Run state lives in `RunManager`, which is per-process memory. A `systemctl restart`
+    — the last step of every deploy — takes the API down together with any pipeline
+    subprocess it had launched, and nothing is left to write the row back. The run then
+    reads as permanently in-progress: the dashboard shows a spinner for a search that
+    stopped days ago.
+
+    Called once at startup, before serving. Deliberately unscoped by org — a restart
+    interrupts every org's work at once, and at boot there is no user to attribute it to.
+    """
+    cur = conn.execute(
+        "UPDATE runs SET status='failed', stop_reason='interrupted_by_restart', "
+        "finished_at=?, progress=? WHERE status='running'",
+        (now_iso(), dumps({"phase": "failed",
+                           "message": "The server restarted while this search was "
+                                      "running, so it did not finish."})),
+    )
+    if cur.rowcount:
+        log.warning("marked %d interrupted run(s) as failed at startup", cur.rowcount)
+    return cur.rowcount
 
 
 # --- misc ---------------------------------------------------------------------

@@ -1,9 +1,9 @@
 import { SECTOR_LABELS } from "../api";
 
 // The weekly knobs. Folded away behind "Adjust search settings" in the status strip,
-// because Mauri opens this page to read a list, not to change a floor she set in March.
+// because the user opens this page to read a list, not to change a floor they set in March.
 //
-// Collapsed, not deleted: these are the settings CLAUDE.md §3 was reversed for. A
+// Collapsed, not deleted: these are the settings CLAUDE.md was reversed for. A
 // spreadsheet cell cannot express "search these three programs, at this floor, this
 // week", which is why the dashboard exists at all.
 

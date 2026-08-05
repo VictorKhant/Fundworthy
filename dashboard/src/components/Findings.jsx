@@ -3,7 +3,7 @@ import { awardRange, money, FUNDER_TYPE_LABELS } from "../api";
 
 // One finding. The rule this component exists to enforce: a value the funder's own page
 // stated and a value the model inferred must never look the same. Sourced values are
-// solid sage chips; inferred ones are dashed and carry an "AI" mark. CLAUDE.md §6 —
+// solid sage chips; inferred ones are dashed and carry an "AI" mark. CLAUDE.md —
 // "judges include working funders, a wrong deadline in the demo is fatal" — is a UI
 // problem as much as a pipeline one, because a correctly-nulled field still misleads if
 // the page renders a guess next to it without saying which is which.
@@ -47,8 +47,8 @@ export function Finding({ o }) {
     <article className={`opp ${flagged ? "flagged" : ""}`}>
       <div className="opp-row">
         {/* The headline number is the AI's fit judgement — how well this funder matches
-            a programme — because that is the question Mauri is actually asking when she
-            scans the list. The 0-100 rank score is what the list is ordered by and lives
+            a programme — because that is the question the user is actually asking when they
+            scan the list. The 0-100 rank score is what the list is ordered by and lives
             one click down.
 
             It is drawn as an inferred value (dashed rule, "AI" label) and not in the
@@ -66,6 +66,16 @@ export function Finding({ o }) {
         >
           {o.confidence_pct != null ? `${o.confidence_pct}%` : "—"}
           <span className="opp-score-tag">fit · AI</span>
+          {/* The rank, back on the collapsed row.
+              The list says "ranked best first" and is sorted by score — but once the
+              card collapsed to four facts, the score moved behind "More details" and the
+              only visible number became fit. On real data that reads 12%, 18%, 3% down
+              the page, so the ordering looks arbitrary and the first question anyone
+              asks is why 12 is above 18. A list whose order has no visible cause reads
+              as broken; this is the cheapest possible way to give it one. */}
+          <span className="opp-rank" title="Score out of 100 — what this list is ranked by">
+            {o.score}<span className="opp-rank-unit">/100</span>
+          </span>
         </div>
 
         <div className="opp-body">
@@ -174,12 +184,12 @@ export function Finding({ o }) {
                 sorted by, and a list whose order has no visible cause reads as arbitrary.
 
                 "Provisional" when the funder's page stated no award amount: award size is
-                35 of the 100 points (CLAUDE.md §7), so that score is missing over a third
+                35 of the 100 points (CLAUDE.md), so that score is missing over a third
                 of its own basis and is not comparable to a fully sourced one. */}
             <Inferred
               title={
                 o.section === "scored"
-                  ? "Score out of 100. What this list is ranked by, weighted per CLAUDE.md §7."
+                  ? "Score out of 100. What this list is ranked by, weighted per CLAUDE.md."
                   : "Score out of 100 — provisional. The funder's page did not state an " +
                     "award amount, and award size is 35% of the score."
               }
@@ -223,7 +233,7 @@ export function Finding({ o }) {
   );
 }
 
-// The two blocks Mauri asked for, in her order: everything the agent is confident about
+// The two blocks the user asked for, in their order: everything the agent is confident about
 // first, everything it wants a second opinion on at the very bottom. The backend already
 // sorts this way, so the split here is presentational only — the order is enforced in
 // SQL so every surface agrees.

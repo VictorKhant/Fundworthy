@@ -3,8 +3,8 @@ import { api, SECTOR_LABELS } from "../api";
 
 // The partner list, editable. This used to be a hardcoded array in agent/sources.py.
 //
-// The case that made it worth building: one of RISE's eight partners stopped funding
-// them. Removing a funder should not require someone who can edit Python — but it also
+// The case that made it worth building: one of the organization's eight partners stopped
+// funding them. Removing a funder should not require someone who can edit Python — but it also
 // should not erase the fact that the relationship existed. So the primary action here is
 // the "Search this one" tick, not Delete: untick and the agent stops spending requests
 // on them while the record stays. Delete is there, behind a confirm, for a row that was
@@ -93,8 +93,8 @@ function Row({ funder, onToggle, onEdit, onDelete }) {
       <div className="funder-main">
         <div className="funder-name">
           {funder.name}
-          {/* "Partner" is a label now, not a ranking signal. RISE already receives
-              money from these and does not want to reapply, so a relationship is a
+          {/* "Partner" is a label now, not a ranking signal. The organization already
+              receives money from these and does not want to reapply, so a relationship is a
               reason to consider removing a funder — never a reason to rank it up. */}
           {funder.warm && <span className="chip">Existing relationship</span>}
           {!funder.active && <span className="chip muted">On the remove list</span>}

@@ -1,6 +1,6 @@
-"""The seam for finding funders outside RISE's partner list.
+"""The seam for finding funders outside the organization's partner list.
 
-Mauri asked for two things that pull in opposite directions: search the funders RISE
+the user asked for two things that pull in opposite directions: search the funders the org
 already knows first, *and* go looking for new ones — government RFPs and contracts
 included (§11 Q3, answered: yes).
 
@@ -15,7 +15,7 @@ null implementation that does nothing. That is deliberate:
     registry below. No pipeline code changes, and there is no merge conflict in
     fetch.py, parse.py, filters.py, or sources.py.
 
-A provider's job is narrow: given the program cards Mauri ticked, return `Source`
+A provider's job is narrow: given the program cards the user ticked, return `Source`
 records pointing at pages worth fetching. It does not fetch, parse, filter, or score —
 everything downstream of it is the pipeline that already exists, including the §6
 accuracy gate. A discovered source gets exactly the same scrutiny as a warm one.

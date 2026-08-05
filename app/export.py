@@ -1,12 +1,12 @@
-"""Download the findings as a spreadsheet file. (docs/DECISIONS.md B3)
+"""Download the findings as a spreadsheet file. (CLAUDE.md)
 
-B3 demoted the Google Sheet from "the product" to an export target, and docs/PLAN.md
-§Phase 3 scoped that export as an OAuth push into her live Sheet. This is the smaller
-thing that gets her the same outcome today: a CSV she opens in Sheets, Excel, or
+B3 demoted the Google Sheet from "the product" to an export target, and CLAUDE.md
+§Phase 3 scoped that export as an OAuth push into their live Sheet. This is the smaller
+thing that gets them the same outcome today: a CSV they open in Sheets, Excel, or
 Numbers. No Google API, no consent screen, no service account, no credential to
 rotate — which is also why it cannot break on a Thursday morning.
 
-The column order is copied from `sinks/sheets.py`, deliberately. Mauri already reads
+The column order is copied from `sinks/sheets.py`, deliberately. the user already reads
 that layout left to right (score, then why, then who), and a second layout would be a
 second thing to learn for no benefit.
 """
@@ -17,8 +17,8 @@ import csv
 import io
 
 # Same order and wording as sinks/sheets.py HEADERS. If you change one, change both —
-# they are two renderings of the same brief, and she should not be able to tell which
-# one she is looking at.
+# they are two renderings of the same brief, and they should not be able to tell which
+# one they are looking at.
 HEADERS = [
     "Score",
     "Why this one",
@@ -30,12 +30,12 @@ HEADERS = [
     "Deadline",
     "Days left",
     "Est. hours",
-    # The COO's own ranking criteria (§11 Q5). Two different kinds of time, which she
+    # The COO's own ranking criteria (§11 Q5). Two different kinds of time, which they
     # separated: days to BE READY to submit, vs days from submitting to money arriving.
     "Days to prepare",
     "Months to funds",
     "Fit %",                 # the AI's own confidence — inferred, labelled in the UI
-    "Their 990",             # shown as data, never scored — her call
+    "Their 990",             # shown as data, never scored — their call
     "Programs",
     "Needs a human check",
     "Link",
@@ -98,8 +98,8 @@ def to_csv(opportunities: list[dict]) -> str:
     """Render the brief as CSV text.
 
     Rows are written in the order given. Callers pass what `repo.list_opportunities`
-    returned, which is already sorted the way Mauri asked to read it — clean results
-    first, the ones needing her judgement last — so the file, the dashboard, and the
+    returned, which is already sorted the way the user asked to read it — clean results
+    first, the ones needing their judgement last — so the file, the dashboard, and the
     Sheet all agree without any of them re-deriving the order.
     """
     buf = io.StringIO()

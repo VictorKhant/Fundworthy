@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# One command to run the whole thing. (docs/PLAN.md §1)
+# One command to run the whole thing. (CLAUDE.md)
 #
-# This is the file that decides whether RISE can still use this in a month. Everything
+# This is the file that decides whether the org can still use this in a month. Everything
 # it does is something a person would otherwise have to be told to do in the right
 # order, and getting told wrong once is how a handed-over project dies.
 #
@@ -12,7 +12,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-PORT="${RISE_PORT:-8000}"
+PORT="${FUNDWORTHY_PORT:-8000}"
 DEV=0
 REBUILD=0
 for arg in "$@"; do
@@ -61,7 +61,7 @@ if [ "$DEV" = "1" ]; then
 fi
 
 echo
-echo "  RISE Fund Finder → http://localhost:${PORT}"
+echo "  Fundworthy → http://localhost:${PORT}"
 echo "  Stop it with Ctrl-C. Nothing is exposed to the internet."
 echo
 exec $PY -m uvicorn app.main:app --host 127.0.0.1 --port "$PORT"

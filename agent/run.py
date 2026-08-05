@@ -1,4 +1,4 @@
-"""Entrypoint and orchestration. (CLAUDE.md §10)
+"""Entrypoint and orchestration. (CLAUDE.md)
 
 The three tiers of §8, cheapest first:
 
@@ -10,12 +10,13 @@ sources_exhausted, disabled, or error.
 
     python -m agent.run --no-llm              # free tiers only, $0.00
     python -m agent.run --sink jsonl          # needs ANTHROPIC_API_KEY to score
-    python -m agent.run --sink sheets         # + RISE_SHEET_ID and a service account
+    python -m agent.run --sink sheets         # + FUNDWORTHY_SHEET_ID and a service account
 """
 
 from __future__ import annotations
 
 import argparse
+import signal
 import asyncio
 import logging
 import os
@@ -46,7 +47,7 @@ log = logging.getLogger("rise")
 def _is_thin_landing_page(page: ParsedPage) -> bool:
     """No amount, no deadline, barely any text — a nav page, not an opportunity.
 
-    Dropping these is what keeps the Sheet readable in the one hour Mauri has (§9).
+    Dropping these is what keeps the Sheet readable in the one hour the user has (§9).
     """
     return (page.award_max is None
             and page.earliest_deadline is None
@@ -56,14 +57,15 @@ def _is_thin_landing_page(page: ParsedPage) -> bool:
 def resolve_sources(cfg: Config, run: RunLog) -> tuple[list[Source], list[Source]]:
     """Which funder pages this run visits.
 
-    The funders table wins when it exists — that is the list Mauri edits. The shipped
+    The funders table wins when it exists — that is the list the user edits. The shipped
     registry in sources.py is the fallback for a fresh clone with no database. Either
-    way, sources she has deactivated never get fetched, and a partner who stopped
-    funding RISE stops costing us requests without losing its record.
+    way, sources they have deactivated never get fetched, and a partner who stopped
+    funding the organization stops costing us requests without losing its record.
     """
     from .sources import sources_from_db
 
-    from_db = sources_from_db(cfg.max_tier, cfg.sectors_active)
+    from_db = sources_from_db(cfg.max_tier, cfg.sectors_active,
+                              org_id=cfg.org_id)
     if from_db is not None:
         sources, skipped = from_db
         run.notes.append(
@@ -77,7 +79,7 @@ def resolve_sources(cfg: Config, run: RunLog) -> tuple[list[Source], list[Source
 
 
 def _discover_extra(cfg: Config, run: RunLog) -> list[Source]:
-    """Sources from beyond the partner list, when Mauri asked for them.
+    """Sources from beyond the partner list, when the user asked for them.
 
     The provider itself lives on another branch (agent/discovery.py explains why). What
     matters here is that the run log distinguishes "we looked and found nothing" from
@@ -98,7 +100,7 @@ def _discover_extra(cfg: Config, run: RunLog) -> list[Source]:
     return found
 
 
-async def enrich_990(run: RunLog) -> dict[str, dict]:
+async def enrich_990(run: RunLog, org_id: str) -> dict[str, dict]:
     """Look up 990 filings for any funder we have not checked yet, and cache them.
 
     Runs once per funder, ever — not once per run. A funder's filings change annually,
@@ -115,7 +117,7 @@ async def enrich_990(run: RunLog) -> dict[str, dict]:
         if not db_path().exists():
             return {}
         with session() as conn:
-            pending = funders_needing_990(conn)
+            pending = funders_needing_990(conn, org_id=org_id)
     except Exception:  # noqa: BLE001
         return {}
 
@@ -129,7 +131,7 @@ async def enrich_990(run: RunLog) -> dict[str, dict]:
             found += bool(data)
             try:
                 with session() as conn:
-                    save_funder_990(conn, f["id"], data)
+                    save_funder_990(conn, f["id"], data, org_id=org_id)
             except Exception as exc:  # noqa: BLE001 — never fail a run over this
                 log.debug("could not cache 990 for %s: %s", f["name"], exc)
         run.notes.append(
@@ -139,18 +141,18 @@ async def enrich_990(run: RunLog) -> dict[str, dict]:
 
     try:
         with session() as conn:
-            return funder_990_map(conn)
+            return funder_990_map(conn, org_id=org_id)
     except Exception:  # noqa: BLE001
         return {}
 
 
-def excluded_funders() -> set[str]:
-    """The remove list — funders Mauri has taken out of the search, casefolded.
+def excluded_funders(org_id: str) -> set[str]:
+    """The remove list — funders the user has taken out of the search, casefolded.
 
     Sources on it are never fetched (they are `active=0`, so `sources_from_db` does not
     return them at all). This set closes the other door: the two indexed databases
     return grants from every funder in the state, so an excluded funder can still reach
-    her through Grants.gov or the CA portal unless we drop it on the way in.
+    them through Grants.gov or the CA portal unless we drop it on the way in.
     """
     try:
         from app.db import db_path, session
@@ -159,7 +161,7 @@ def excluded_funders() -> set[str]:
         if not db_path().exists():
             return set()
         with session() as conn:
-            return excluded_funder_names(conn)
+            return excluded_funder_names(conn, org_id=org_id)
     except Exception:  # noqa: BLE001 — no database is a normal state
         return set()
 
@@ -192,7 +194,7 @@ async def crawl(cfg: Config, run: RunLog,
     sources, skipped = resolve_sources(cfg, run)
     sources = sources + _discover_extra(cfg, run)
     already_seen = already_seen or set()
-    excluded = excluded_funders()
+    excluded = excluded_funders(cfg.org_id)
     if excluded:
         run.notes.append(
             f"Remove list: {len(excluded)} funder(s) excluded from this search — "
@@ -227,9 +229,9 @@ async def crawl(cfg: Config, run: RunLog,
             run.rejected_by_filter[key] = run.rejected_by_filter.get(key, 0) + 1
             return
 
-        # Already shown to Mauri this month. Dropping it here — in the free tier,
+        # Already shown to the user this month. Dropping it here — in the free tier,
         # before triage — is the point: a repeat finding costs $0.00 rather than a
-        # Haiku call, and she does not re-read the same row four Thursdays running.
+        # Haiku call, and they do not re-read the same row four Thursdays running.
         # The archive resets monthly, so it can legitimately come back later.
         if stable_id(page.url, page.title) in already_seen:
             key = "already_seen_this_month"
@@ -278,8 +280,8 @@ async def crawl(cfg: Config, run: RunLog,
                     status=SourceStatus.OK, detail=result.note,
                 ))
                 log.info("  ✓ %-46s %s", source.funder, result.note)
-                # Warnings are things Mauri can act on — a ticked program whose card is
-                # empty searched nothing. They go in the run notes, where she reads
+                # Warnings are things the user can act on — a ticked program whose card is
+                # empty searched nothing. They go in the run notes, where they read
                 # them, not only in this source's detail line.
                 for warning in result.warnings:
                     run.notes.append(warning)
@@ -352,7 +354,7 @@ async def crawl(cfg: Config, run: RunLog,
 def _note_match_requirements(run: RunLog, titles: list[str]) -> None:
     """One line about matching funds, not one per record.
 
-    §11 Q4 (can RISE meet a match?) is unanswered, so these are surfaced rather than
+    §11 Q4 (can the organization meet a match?) is unanswered, so these are surfaced rather than
     filtered — but surfacing has to stay readable to count as surfacing.
     """
     if not titles:
@@ -384,10 +386,10 @@ def _rank_for_scoring(survivors: list[tuple[ParsedPage, Source]], cfg: Config) -
     """
     def key(item):
         page, source = item
-        # `1 if source.warm else 0` used to lead this tuple, so RISE's existing
+        # `1 if source.warm else 0` used to lead this tuple, so the organization's existing
         # relationships always spent the scoring budget first. The stakeholder has since
         # said they already receive money from those funders and do not want to reapply,
-        # so warmth is no longer a priority signal anywhere — a warm funder she wants
+        # so warmth is no longer a priority signal anywhere — a warm funder they want
         # skipped goes on the remove list and is never fetched at all.
         return (
             page.award_max or 0,
@@ -587,6 +589,31 @@ def _report(cfg: Config, run: RunLog, opportunities: list[Opportunity]) -> None:
     print()
 
 
+class RunInterrupted(Exception):
+    """SIGTERM arrived: a deploy restart, systemd, or the Stop button.
+
+    Raised from a signal handler so it lands in the ordinary `except Exception` around
+    the crawl — which already exists to salvage a partial run — rather than killing the
+    process where it stands.
+
+    That distinction is worth real money. Without it, Python's default SIGTERM handling
+    terminated the process outright: the salvage block never ran, and every opportunity
+    scored so far was lost along with the API credit spent on it. A deploy at minute
+    seven of a ten-minute run cost the org the whole run for nothing.
+    """
+
+
+def _install_stop_handler() -> None:
+    def handle(signum, _frame):
+        raise RunInterrupted(f"stopped by signal {signum}")
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(sig, handle)
+        except ValueError:  # not the main thread — the caller owns signals
+            log.debug("could not install a handler for %s", sig)
+
+
 async def main_async(args: argparse.Namespace) -> int:
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -595,24 +622,26 @@ async def main_async(args: argparse.Namespace) -> int:
     )
     # httpx logs every request at INFO, which drowns the run's own output — hundreds of
     # "HTTP Request: GET ... 200 OK" lines around the handful that say what happened.
-    # It is also what the dashboard streams under the Re-run button, so Mauri was
+    # It is also what the dashboard streams under the Re-run button, so the user was
     # reading raw request logs instead of progress. -v still turns it back on.
     if not args.verbose:
         for noisy in ("httpx", "httpcore", "urllib3"):
             logging.getLogger(noisy).setLevel(logging.WARNING)
 
+    _install_stop_handler()
     run = RunLog(started_at=datetime.now(timezone.utc))
 
     # Create and seed the settings database before reading config, so a first run picks
     # up the defaults from the same place every later run reads them.
     #
-    # Deliberately NOT done under RISE_STRICT_CONFIG. Strict mode is the scheduled job,
+    # Deliberately NOT done under FUNDWORTHY_STRICT_CONFIG. Strict mode is the scheduled job,
     # where the database is not checked in — auto-creating it there would hand back a
     # fresh `enabled=1` on every run and silently defeat the kill switch, which is the
-    # exact failure evidence/README.md E7 was written about. In strict mode a config we
-    # cannot read stays a refusal to run.
-    strict = os.environ.get("RISE_STRICT_CONFIG", "").strip().lower() in {
+    # exact failure this guards against. In strict mode a config we cannot read stays a
+    # refusal to run.
+    strict = os.environ.get("FUNDWORTHY_STRICT_CONFIG", "").strip().lower() in {
         "1", "true", "yes", "on"}
+    org_id = getattr(args, "org_id", None)
     if not strict and not args.no_archive:
         try:
             from app.db import init_db
@@ -622,7 +651,7 @@ async def main_async(args: argparse.Namespace) -> int:
             log.warning("Could not open the settings database (%s).", exc)
 
     try:
-        cfg = load_config()
+        cfg = load_config(org_id=org_id)
     except ConfigUnavailable as exc:
         # Strict mode: we could not confirm the kill switch is on, so we do not run.
         run.stop_reason = StopReason.ERROR
@@ -658,7 +687,7 @@ async def main_async(args: argparse.Namespace) -> int:
     budget = Budget(ceiling_usd=args.budget or cfg.weekly_budget_usd)
 
     # The monthly archive, both halves. The purge bounds the file; `already_seen` is
-    # what keeps Mauri from re-reading the same grant every Thursday. Both are skipped
+    # what keeps the user from re-reading the same grant every Thursday. Both are skipped
     # silently if there is no database — the agent still has to run from a fresh clone.
     already_seen: set[str] = set()
     if not args.no_archive:
@@ -668,8 +697,8 @@ async def main_async(args: argparse.Namespace) -> int:
 
             init_db()
             with session() as conn:
-                run.purged_rows = purge_old_months(conn)
-                already_seen = seen_ids_this_month(conn)
+                run.purged_rows = purge_old_months(conn, org_id=cfg.org_id)
+                already_seen = seen_ids_this_month(conn, org_id=cfg.org_id)
             if run.purged_rows:
                 run.notes.append(
                     f"Archive: purged {run.purged_rows} row(s) from earlier months.")
@@ -685,17 +714,28 @@ async def main_async(args: argparse.Namespace) -> int:
         survivors = await crawl(cfg, run, follow_links=not args.no_follow,
                                 already_seen=already_seen)
         log.info("%d candidates survived the free filters.", len(survivors))
-        funder_990 = await enrich_990(run) if use_llm else {}
+        funder_990 = await enrich_990(run, cfg.org_id) if use_llm else {}
         opportunities = evaluate(survivors, cfg, run, budget, use_llm=use_llm,
                                  funder_990=funder_990)
     except Exception as exc:  # noqa: BLE001
-        # Whatever went wrong, Mauri still gets what we did find, plus a run log
+        # Whatever went wrong, the user still gets what we did find, plus a run log
         # saying it was incomplete. A silent empty Sheet on Thursday morning is
         # worse than a short one with an explanation on it.
         failed = True
         run.stop_reason = StopReason.PARTIAL if opportunities else StopReason.ERROR
-        run.notes.append(f"ERROR: {exc!r}")
-        log.exception("Run failed — writing whatever was collected before the failure")
+        if isinstance(exc, RunInterrupted):
+            # Not a failure of ours, and the distinction matters to whoever reads the
+            # run log: the search was cut short from outside, and what it had already
+            # paid for is written out below rather than thrown away.
+            run.notes.append(
+                f"Stopped early ({exc}). Keeping the {len(opportunities)} "
+                "opportunit" + ("y" if len(opportunities) == 1 else "ies") +
+                " already scored — the money spent on them is not wasted.")
+            log.warning("Run interrupted — salvaging %d scored result(s)",
+                        len(opportunities))
+        else:
+            run.notes.append(f"ERROR: {exc!r}")
+            log.exception("Run failed — writing whatever was collected before the failure")
 
     from sinks.base import split_sections
 
@@ -718,26 +758,38 @@ async def main_async(args: argparse.Namespace) -> int:
             sheets = SheetsSink()
             sheets.ensure_config_tab()
             sinks.append(sheets)
+        elif args.sink == "web":
+            from sinks.webjson import WebJsonSink
+
+            sinks.append(WebJsonSink(out_path=args.web_out))
         elif args.sink == "jsonl":
             from sinks.jsonl import JsonlSink
 
             sinks.append(JsonlSink(out_dir=args.out))
         else:
-            # The default is both: SQLite is what the dashboard reads and what next
-            # week's dedup checks against, and run.json keeps the static export path
-            # alive for the Actions run and for anyone opening the built site directly.
+            # SQLite only. The dashboard reads the database through the API, which is
+            # behind sign-in; run.json was a second copy of the same findings as a flat
+            # file, and it used to be written into `dashboard/public/`.
+            #
+            # That directory is Vite's static-asset root: `npm run build` copies
+            # everything in it into `dashboard/dist/`, which app/main.py serves to
+            # anyone, unauthenticated, from the SPA catch-all. So the documented update
+            # procedure — pull, rebuild, restart — was one step away from publishing
+            # every org's grant pipeline at https://<host>/run.json. It was harmless
+            # when the app only listened on 127.0.0.1. It is not harmless now.
+            #
+            # The sink still exists and still works; it is opt-in via `--sink web`, and
+            # its default path is outside anything that gets served.
             from sinks.sqlite import SqliteSink
-            from sinks.webjson import WebJsonSink
 
-            sinks.append(SqliteSink(run_id=args.run_id))
-            sinks.append(WebJsonSink(out_path=args.web_out))
+            sinks.append(SqliteSink(run_id=args.run_id, org_id=cfg.org_id))
     except Exception as exc:  # noqa: BLE001
         log.error("Could not open the %s sink: %r", args.sink, exc)
         return 1
 
     # Per sink, not per run: with two sinks a failure writing run.json must not cost
     # us the SQLite write that next week's dedup depends on. Whatever happens, we
-    # still try to write a run log — a row saying the write failed is how Mauri finds
+    # still try to write a run log — a row saying the write failed is how the user finds
     # out, without having to call anyone (§13).
     written = 0
     for sink in sinks:
@@ -760,15 +812,21 @@ async def main_async(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="RISE San Diego funding opportunity agent")
+    p = argparse.ArgumentParser(description="the organization funding opportunity agent")
     p.add_argument("--sink", choices=["db", "web", "jsonl", "sheets"], default="db",
-                   help="db (default) writes SQLite + run.json; sheets is now export-only")
+                   help="db (default) writes SQLite, which is what the dashboard "
+                        "reads; web writes a static JSON file; sheets is export-only")
     p.add_argument("--run-id", help="attach this run's findings to an existing run row")
+    p.add_argument("--org-id", default=None,
+                   help="whose search this is: the org whose settings, program cards, "
+                        "funders and API key the run uses, and the org its findings are "
+                        "written to. Defaults to the single-tenant org.")
     p.add_argument("--no-archive", action="store_true",
                    help="skip the monthly dedup and purge (shows repeats again)")
     p.add_argument("--out", default="out", help="output dir for the jsonl sink")
-    p.add_argument("--web-out", default="dashboard/public/run.json",
-                   help="output path for the web sink (the file the dashboard reads)")
+    p.add_argument("--web-out", default="data/run.json",
+                   help="output path for the optional static JSON export. NOT under "
+                        "dashboard/ — see --sink.")
     p.add_argument("--dry-run", action="store_true", help="crawl and report, write nothing")
     p.add_argument("--no-follow", action="store_true", help="do not follow program links")
     p.add_argument("--no-llm", action="store_true",

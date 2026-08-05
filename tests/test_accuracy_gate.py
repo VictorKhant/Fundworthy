@@ -1,4 +1,4 @@
-"""Unit tests for the accuracy gate (agent/verify.py). (CLAUDE.md §6, §10)
+"""Unit tests for the accuracy gate (agent/verify.py). (CLAUDE.md)
 
 Runs with NO API key and NO network — this is what proves the "never state a number
 that wasn't on the page" guarantee without paying to score anything. Run it:
@@ -199,7 +199,7 @@ def test_a_non_html_content_type_is_refused():
 # award_max = None — the model had no quote to back an amount. Its rationale then read
 # "solid average awards (~$80k inferred from public announcements)". The field was
 # honest and the sentence was not, which is worse than either alone: the number reads
-# as sourced because everything around it is. And the sentence is the part Mauri reads.
+# as sourced because everything around it is. And the sentence is the part the user reads.
 
 PAGE_WITH_AMOUNTS = (
     "Grants of up to $25,000 are awarded annually. "

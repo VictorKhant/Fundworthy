@@ -1,7 +1,7 @@
-"""Deterministic accuracy gate. (CLAUDE.md §6)
+"""Deterministic accuracy gate. (CLAUDE.md)
 
 The scoring model may report an award amount or a deadline. Before either reaches
-Mauri marked as fact, we confirm it was actually on the page we fetched: the model must
+the user marked as fact, we confirm it was actually on the page we fetched: the model must
 return the *verbatim sentence* it read the value from, and we check that sentence is a
 literal substring of the fetched text. A value whose quote is missing, paraphrased, or
 absent from the page is discarded and flagged for a human — never shown as a number.
@@ -64,7 +64,7 @@ def unsourced_figures(prose: str | None, page_text: str) -> list[str]:
     """Dollar figures in `prose` that do not appear anywhere in `page_text`.
 
     The quote gate protects the structured fields. It does not protect the one-sentence
-    rationale — and that is the part Mauri actually reads.
+    rationale — and that is the part the user actually reads.
 
     Found on a real run: the Andy Warhol Foundation result correctly had `award_max =
     None`, because the model had no quote to back an amount. Its rationale then said

@@ -1,4 +1,4 @@
-"""RISE San Diego funding opportunity agent.
+"""the organization funding opportunity agent.
 
 Loading `.env` here, at package import, is deliberate: every entrypoint (`agent.run`,
 `tests.calibration`, `sinks.sheets`) goes through this package, so there is exactly

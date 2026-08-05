@@ -1,66 +1,28 @@
-import { useEffect, useRef, useState } from "react";
-import { initials, stubOrgs } from "../auth";
+import { initials, orgDisplayName } from "../auth";
 
-// The org switcher. Renders from a stub list; switching and "+ Add an organization" do
-// nothing yet, because there is no second database to switch to (see auth.js).
+// Names the organization you are signed in to. A label, not a switcher.
 //
-// It is here rather than waiting for the backend because it settles a layout question —
-// where the current organisation's name lives — that everything else in the sidebar has
-// to be positioned around.
+// It used to be a dropdown with a caret and an "+ Add an organization" item, both inert.
+// That was defensible while orgs did not exist — the control was holding a layout
+// position for a backend that was coming. It stopped being defensible the moment orgs
+// became real: a chevron next to a name now says "you can switch between these", and a
+// person who belongs to exactly one organization would click it, find nothing, and
+// reasonably conclude the app is broken.
+//
+// One person belongs to one organization. Colleagues join yours by invitation code
+// (Settings → Your organization), which is a different action in a different place, and
+// nothing here should imply otherwise. If a person ever belongs to several, this becomes
+// a real switcher — but then it will switch something.
 
 export default function OrgSwitcher({ orgName }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef(null);
-  const orgs = stubOrgs(orgName);
-  const active = orgs.find((o) => o.active) || orgs[0];
-
-  // Outside click closes. A dropdown you can only dismiss by re-clicking the control
-  // that opened it is the kind of thing that reads as broken to someone who has never
-  // been told it is a dropdown.
-  useEffect(() => {
-    if (!open) return undefined;
-    const onDown = (e) => {
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [open]);
+  const name = orgDisplayName(orgName);
 
   return (
-    <div className="orgswitch" ref={ref}>
-      <button className="orgswitch-btn" onClick={() => setOpen(!open)} aria-expanded={open}>
-        <span className="orgswitch-label">
-          <span className="orgswitch-avatar" aria-hidden="true">{initials(active.name)[0]}</span>
-          <span className="orgswitch-name">{active.name}</span>
-        </span>
-        <span className="orgswitch-caret" aria-hidden="true">▾</span>
-      </button>
-
-      {open && (
-        <div className="orgswitch-menu">
-          {orgs.map((o) => (
-            <button
-              key={o.id}
-              className={`orgswitch-item ${o.active ? "current" : ""}`}
-              onClick={() => setOpen(false)}
-              title={o.active ? undefined : "Switching organizations needs accounts — not built yet"}
-            >
-              <span className={`orgswitch-avatar ${o.active ? "" : "alt"}`} aria-hidden="true">
-                {initials(o.name)[0]}
-              </span>
-              {o.name}
-            </button>
-          ))}
-          <div className="orgswitch-rule" />
-          <button
-            className="orgswitch-item add"
-            onClick={() => setOpen(false)}
-            title="Needs accounts — not built yet"
-          >
-            + Add an organization
-          </button>
-        </div>
-      )}
+    <div className="orgswitch">
+      <div className="orgswitch-label static">
+        <span className="orgswitch-avatar" aria-hidden="true">{initials(name)[0]}</span>
+        <span className="orgswitch-name" title={name}>{name}</span>
+      </div>
     </div>
   );
 }

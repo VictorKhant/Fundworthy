@@ -1,4 +1,4 @@
-"""Deterministic rejects. Zero LLM cost. (CLAUDE.md §7, §8 tier 1)
+"""Deterministic rejects. Zero LLM cost. (CLAUDE.md tier 1)
 
 These run before any model call, so they are free. Everything they kill is a
 candidate we never pay to think about.
@@ -35,7 +35,9 @@ class Reject(str, Enum):
     BELOW_MIN_AWARD = "below_min_award"
     DEADLINE_TOO_SOON = "deadline_too_soon"
     DEADLINE_PASSED = "deadline_passed"
-    GEOGRAPHY = "geography_excludes_rise"
+    # Retired — kept so historical run rows that recorded it still read back. Nothing
+    # produces it any more; see the note above RELIGIOUS.
+    GEOGRAPHY = "geography_excludes_service_area"
     RELIGIOUS = "religious_organization"
     POLITICAL = "political_party"
     EXCLUDED_FUNDER = "excluded_funder"
@@ -60,26 +62,27 @@ class FilterResult:
 
 # --- §7 rejects ---------------------------------------------------------------
 
-# RISE operates across San Diego AND Imperial Counties — Far South/Border North
-# spans both. Never hardcode San Diego alone (§7 geography note).
-RISE_GEOGRAPHY = re.compile(
-    r"(san\s+diego|imperial\s+count|border\s+north|far\s+south|"
-    r"southern\s+california|\bcalifornia\b|\bstatewide\b|\bnational\b|"
-    r"\bnationwide\b|united\s+states|all\s+50\s+states)",
-    re.IGNORECASE,
-)
-
-# A page that restricts itself to somewhere RISE is not.
-GEOGRAPHY_EXCLUSIVE = re.compile(
-    r"((?:only|exclusively|solely|limited\s+to|restricted\s+to|must\s+be\s+located\s+in|"
-    r"serving\s+only)\s+(?:organizations?\s+)?(?:in|within|serving)?\s*"
-    r"(?!.{0,40}(?:san\s+diego|imperial|california))"
-    r"(new\s+york|texas|florida|illinois|massachusetts|washington\s+state|oregon|"
-    r"arizona|nevada|colorado|georgia|ohio|michigan|pennsylvania|"
-    r"los\s+angeles|orange\s+county|riverside|san\s+bernardino|bay\s+area|"
-    r"san\s+francisco|sacramento|fresno|central\s+valley|north\s+county\s+only))",
-    re.IGNORECASE,
-)
+# --- geography: deliberately not a filter --------------------------------------
+#
+# There used to be a geographic reject here, and it is gone rather than fixed.
+#
+# It began as two hardcoded regexes naming San Diego as "ours" and a dozen other places
+# as "not ours", which made the `org_location` setting a lie: a Chicago nonprofit could
+# type "Chicago, Illinois", watch it save, and still have every Illinois-only grant
+# discarded for free — in this tier, which never explains itself to anyone. Reading the
+# setting fixed the lie but kept the mistake, which is that a text filter is the wrong
+# instrument for this question at all.
+#
+# Where an org can apply is decided by **which funders it chose to search**, not by
+# pattern-matching prose on a page we already decided to fetch. An org that picks the
+# San Diego funder list is already only seeing San Diego funders; re-deriving that from
+# the words on each page adds nothing and gets it wrong in both directions — rejecting a
+# national program that happens to name a state, and passing a regional one that never
+# names its region.
+#
+# The replacement is a funder directory the org picks cities from (FUTURE.md §4a). Until
+# it exists, an unwanted funder is one un-tick on the remove list — a lever the user can
+# see and change, which a silent regex was not.
 
 RELIGIOUS = re.compile(
     r"\b(church|churches|diocese|diocesan|archdiocese|parish|ministry|ministries|"
@@ -104,9 +107,9 @@ POLITICAL = re.compile(
 #      and no source is named "County of San Diego Equity Impact Grant" — the registry
 #      has "County of San Diego". It has been sitting here since day one presented as a
 #      working §7 hard filter while rejecting nothing.
-#   2. Even working, it was a second exclusion list. Mauri now has a remove list she
-#      controls; a hardcoded one beside it means "excluded" has two meanings, only one
-#      of which she can see or change.
+#   2. Even working, it was a second exclusion list. the user now has a remove list they
+#      control; a hardcoded one beside it means "excluded" has two meanings, only one
+#      of which they can see or change.
 #
 # Both now live on the remove list (app/db.py seeds them), which matches on the funder
 # name AND the page title — so a single named PROGRAM can be excluded without excluding
@@ -115,7 +118,7 @@ POLITICAL = re.compile(
 
 # NOT in §7. Added after the first crawl surfaced "CALL FOR PANELISTS",
 # "Grant Panels", "Recent Grants Search", and "Volunteer Opportunities" as
-# candidates. None are money RISE can apply for. Killing them here is free;
+# candidates. None are money the organization can apply for. Killing them here is free;
 # letting them through means paying Haiku to tell us what a regex already knows.
 NOT_AN_OPPORTUNITY = re.compile(
     r"(call\s+for\s+panelists?|grant\s+panels?|panelist\s+application|"
@@ -134,16 +137,28 @@ MATCH_REQUIREMENT = re.compile(
 )
 
 
-def _geography_ok(text: str) -> tuple[bool, str]:
-    """Does this page's geography include where RISE works?
+def geography_ok(text: str, service_area: frozenset[str]) -> tuple[bool, str]:
+    """Does this page's geography include where this org works?
 
-    Deliberately permissive: absence of any geographic statement is treated as
-    eligible, because rejecting on silence would drop most national funders. Only an
-    explicit restriction to somewhere else is a reject.
+    Deliberately permissive, in two directions. Absence of any geographic statement is
+    eligible, because rejecting on silence would drop most national funders. And an org
+    that has not told us where it works rejects **nothing** on geography — an empty
+    `service_area` disables the filter rather than falling back to somebody else's
+    region, which is exactly the bug this replaced.
+
+    Only an explicit restriction to a place that is demonstrably not ours is a reject,
+    and a page that also claims national reach is never one.
     """
-    exclusive = GEOGRAPHY_EXCLUSIVE.search(text)
-    if exclusive and not RISE_GEOGRAPHY.search(exclusive.group(0)):
-        return False, exclusive.group(0)[:160]
+    if not service_area:
+        return True, ""
+    if UNIVERSAL_GEOGRAPHY.search(text):
+        return True, ""
+
+    for match in GEOGRAPHY_RESTRICTION.finditer(text):
+        place = re.sub(r"\s+", " ", match.group(1).lower())
+        if any(term in place or place in term for term in service_area):
+            continue
+        return False, match.group(0)[:160]
     return True, ""
 
 
@@ -162,10 +177,6 @@ def apply_filters(page: ParsedPage, funder: str, cfg: Config) -> FilterResult:
     title_and_url = f"{page.title} {page.url}"
     if NOT_AN_OPPORTUNITY.search(title_and_url):
         return FilterResult(True, Reject.NOT_AN_OPPORTUNITY, page.title[:120])
-
-    ok, detail = _geography_ok(haystack)
-    if not ok:
-        return FilterResult(True, Reject.GEOGRAPHY, detail)
 
     # --- amount. Null is a flag, never a reject (see module docstring).
     #
@@ -199,7 +210,7 @@ def apply_filters(page: ParsedPage, funder: str, cfg: Config) -> FilterResult:
                 "not enough runway for a 10-hour application",
             )
 
-    # §11 Q4 is unanswered — we do not know what match RISE can meet, so we cannot
+    # §11 Q4 is unanswered — we do not know what match the organization can meet, so we cannot
     # write this filter. Flagging is the honest behavior; guessing is not.
     if MATCH_REQUIREMENT.search(text):
         flags.append(Flag.MATCH_REQUIREMENT)

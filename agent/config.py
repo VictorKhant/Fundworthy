@@ -1,8 +1,8 @@
-"""Runtime configuration. (docs/PLAN.md §0, §2)
+"""Runtime configuration. (CLAUDE.md)
 
-Where config lives changed. CLAUDE.md §4 put it in a Google Sheets tab and §3 called
+Where config lives changed. CLAUDE.md put it in a Google Sheets tab and §3 called
 editing it in the dashboard a non-goal; both are deliberately reversed, because what
-Mauri actually asked for — tick these programs, with these search terms, at this floor,
+the user actually asked for — tick these programs, with these search terms, at this floor,
 this week — is not a thing a spreadsheet cell can express.
 
 Resolution order, most authoritative first:
@@ -14,9 +14,9 @@ Resolution order, most authoritative first:
      database, no Sheet and no key.
 
 The kill switch keeps its §8 guarantee in every one of those cases: under
-`RISE_STRICT_CONFIG` a config we cannot read is a refusal to run, never a silent
+`FUNDWORTHY_STRICT_CONFIG` a config we cannot read is a refusal to run, never a silent
 fallback to `enabled=True`. The direction of that failure is the whole point — a
-transient outage must not be able to swallow Mauri's decision to turn the agent off.
+transient outage must not be able to swallow the user's decision to turn the agent off.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 
 CONFIG_TAB = "Config"
 
-# CLAUDE.md §11 Q1 — ANSWERED. $10,000 is the smallest award RISE considers worth ten
+# CLAUDE.md Q1 — ANSWERED. $10,000 is the smallest award the organization considers worth ten
 # collective hours of team time. This used to be a $25,000 placeholder wrapped in
 # machinery that shouted "not a real answer" on every run; that machinery is gone,
 # because the question it was guarding is closed.
@@ -40,10 +40,10 @@ MIN_AWARD_DEFAULT = 10_000
 
 @dataclass
 class ProgramCard:
-    """One of RISE's programs, as Mauri edits it in the dashboard.
+    """One of the organization's programs, as the user edits it in the dashboard.
 
     This replaces the hardcoded three-value `Program` enum as the unit of "what are we
-    searching for". Seven programs exist; she ticks the ones that matter this week.
+    searching for". Seven programs exist; they tick the ones that matter this week.
     """
 
     slug: str
@@ -75,7 +75,7 @@ class ProgramCard:
         Order matters. A keyword API wants a handful of words: `search_queries` are
         written for a general web search ("arts and social justice grant California")
         and over-narrow a federal index that has no notion of California, so a curated
-        `default` for a program we already tuned wins over them. Cards Mauri creates
+        `default` for a program we already tuned wins over them. Cards the user creates
         have no default, so their own keywords drive the search — which is the whole
         point of making the cards editable.
         """
@@ -119,10 +119,21 @@ class Config:
     weekly_budget_usd: float = 1.00          # hard ceiling (§8)
     min_deadline_runway_days: int = 14       # reject inside this window (§7)
     source: str = "defaults"                 # "database" | "sheet" | "defaults"
+    # Whose run this is. Carried on the config rather than threaded through every
+    # function signature because every stage of the pipeline already receives a Config,
+    # and the org is exactly what a config *is* — one nonprofit's settings, cards,
+    # funders and key. Defaults to the single-tenant org so the CLI and the tests keep
+    # working unchanged.
+    org_id: str = "default"
+    # Where this org works, verbatim from the Settings page. Drives the geography filter
+    # (agent/filters.py). Empty means "they have not said", which disables geographic
+    # rejecting rather than guessing — the previous behaviour hardcoded San Diego and
+    # silently discarded another state's grants for free.
+    org_location: str = ""
 
     @property
     def programs_active(self) -> list[str]:
-        """Active program slugs. Kept as plain strings so a program Mauri invents in
+        """Active program slugs. Kept as plain strings so a program the user invents in
         the dashboard is a first-class citizen, not something the pipeline drops
         because it is missing from a Python enum."""
         return [p.slug for p in self.programs]
@@ -151,7 +162,7 @@ class Config:
         if self.source == "defaults":
             out.append(
                 "Running on shipped defaults — no database and no Sheet was readable. "
-                "Nothing Mauri set in the dashboard is being applied."
+                "Nothing the user set in the dashboard is being applied."
             )
         return out
 
@@ -194,9 +205,15 @@ class ConfigUnavailable(RuntimeError):
 
 # --- the database path (the normal one) ---------------------------------------
 
-def load_from_db(db_path=None) -> Config | None:
-    """Read settings and active program cards out of SQLite. None if unavailable."""
+def load_from_db(db_path=None, *, org_id: str | None = None) -> Config | None:
+    """Read settings and active program cards out of SQLite. None if unavailable.
+
+    `org_id` decides whose settings and whose program cards this run uses. Unscoped, a
+    run read every org's active cards at once and sent them all to Anthropic in one system
+    prompt — one nonprofit's program strategy going out on another's API key.
+    """
     try:
+        from app.db import DEFAULT_ORG_ID
         from app.db import db_path as default_db_path
         from app.db import session
         from app.repo import get_settings, list_programs
@@ -204,19 +221,20 @@ def load_from_db(db_path=None) -> Config | None:
         log.debug("app package unavailable (%s)", exc)
         return None
 
+    scope = org_id or DEFAULT_ORG_ID
     target = db_path or default_db_path()
     if db_path is None and not default_db_path().exists():
         return None
 
     try:
         with session(target) as conn:
-            settings = get_settings(conn)
-            cards = list_programs(conn, active_only=True)
+            settings = get_settings(conn, org_id=scope)
+            cards = list_programs(conn, org_id=scope, active_only=True)
     except Exception as exc:  # noqa: BLE001
         log.warning("could not read the settings database (%s)", exc)
         return None
 
-    cfg = Config(source="database")
+    cfg = Config(source="database", org_id=scope)
     cfg.enabled = bool(settings["enabled"])
     cfg.min_award = int(settings["min_award"])
     cfg.max_opportunities = int(settings["max_opportunities"])
@@ -224,6 +242,7 @@ def load_from_db(db_path=None) -> Config | None:
     cfg.min_deadline_runway_days = int(settings["min_deadline_runway_days"])
     cfg.sectors_active = list(settings["sectors_active"])
     cfg.search_beyond_partners = bool(settings["search_beyond_partners"])
+    cfg.org_location = str(settings.get("org_location") or "")
     cfg.programs = [
         ProgramCard(
             slug=c["slug"], name=c["name"], summary=c.get("summary", ""),
@@ -236,7 +255,7 @@ def load_from_db(db_path=None) -> Config | None:
         for c in cards
     ]
     # Government sources are a real scope decision (§11 Q3), and the answer is yes —
-    # Mauri wants RFPs and contracts too. Ticking the sector is what turns them on.
+    # the user wants RFPs and contracts too. Ticking the sector is what turns them on.
     cfg.max_tier = Tier.GOVERNMENT if "government" in cfg.sectors_active else (
         Tier.INTERMEDIARY if "intermediary" in cfg.sectors_active else Tier.WARM
     )
@@ -278,25 +297,26 @@ def load_from_sheet(sheet_id: str, credentials_path: str) -> Config:
 # --- the entrypoint -----------------------------------------------------------
 
 def load_config(sheet_id: str | None = None, credentials_path: str | None = None,
-                strict: bool | None = None, db_path=None) -> Config:
+                strict: bool | None = None, db_path=None,
+                org_id: str | None = None) -> Config:
     """Resolve config from the database, then the Sheet, then shipped defaults.
 
-    Under `RISE_STRICT_CONFIG` (which the scheduled job sets), reaching the "shipped
+    Under `FUNDWORTHY_STRICT_CONFIG` (which the scheduled job sets), reaching the "shipped
     defaults" step is a hard failure rather than a fallback. That is not paranoia: the
-    shipped default is `enabled=True`, so a silent fallback means Mauri sets the kill
+    shipped default is `enabled=True`, so a silent fallback means the user sets the kill
     switch to off, a transient outage swallows it, and the agent runs anyway — the one
-    failure the kill switch exists to prevent (evidence/README.md E7).
+    failure the kill switch exists to prevent.
     """
     if strict is None:
-        strict = os.environ.get("RISE_STRICT_CONFIG", "").strip() in _TRUE
+        strict = os.environ.get("FUNDWORTHY_STRICT_CONFIG", "").strip() in _TRUE
 
-    cfg = load_from_db(db_path)
+    cfg = load_from_db(db_path, org_id=org_id)
     if cfg is not None:
         log.info("Config: read from the settings database (%s).",
                  db_path or "data/rise.db")
         return cfg
 
-    sheet_id = sheet_id or os.environ.get("RISE_SHEET_ID")
+    sheet_id = sheet_id or os.environ.get("FUNDWORTHY_SHEET_ID")
     credentials_path = credentials_path or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     if sheet_id and credentials_path:
         try:
@@ -314,7 +334,7 @@ def load_config(sheet_id: str | None = None, credentials_path: str | None = None
 
     if strict:
         raise ConfigUnavailable(
-            "RISE_STRICT_CONFIG is on but no settings database and no readable Config "
+            "FUNDWORTHY_STRICT_CONFIG is on but no settings database and no readable Config "
             "tab were found. Refusing to run without confirming the kill switch."
         )
 

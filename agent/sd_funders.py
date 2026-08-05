@@ -2,7 +2,7 @@
 
 Where these came from
 ---------------------
-RISE told us the partner list was the wrong target: they already receive money from
+the org told us the partner list was the wrong target: they already receive money from
 those funders consistently and do not want to reapply. That left the crawl with almost
 nothing — the two indexed databases produced 37 candidates and zero survivors in the
 last scored run — so this registry is the replacement.
@@ -51,9 +51,9 @@ RESEARCHED_SOURCES: list[Source] = [
             "$30,000-$150,000. Two cycles listed: Part 1 Feb 12 2026 / Part 2 Feb "
             "25 2026, and Part 1 Jul 9 2026 / Part 2 Jul 21 2026 \u2014 BOTH have "
             "already passed as of today (Aug 2 2026), so the next actionable "
-            "cycle is Feb 2027. Two live blockers for RISE: (1) '1:1 Cost share "
+            "cycle is Feb 2027. Two live blockers for the org: (1) '1:1 Cost share "
             "required. Sources may include both cash and in-kind' \u2014 this is "
-            "CLAUDE.md \u00a711 Q4, still unanswered by Mauri; in-kind counting makes "
+            "CLAUDE.md \u00a711 Q4, still unanswered by the user; in-kind counting makes "
             "it more plausible than a cash match. (2) 'Applicant organizations "
             "must have completed at least 5 years of a"
         ),
@@ -96,7 +96,7 @@ RESEARCHED_SOURCES: list[Source] = [
             "ranging from $1,000 \u2013 $10,000 per recipient.' Its Oct 16 2025 news "
             "post announced $102,500 across 18 nonprofits (~$5.7K average). "
             "Expect the MIN_AWARD hard filter to reject everything this source "
-            "produces; keep it only if Mauri wants Imperial County coverage "
+            "produces; keep it only if the user wants Imperial County coverage "
             "regardless. CYCLE STATUS: the live page is still headed '2025 "
             "Imperial Valley HEALTH AND WELLNESS Grant' and says 'Applications "
             "have closed.' No 2026 cycle is announced on either"
@@ -118,7 +118,7 @@ RESEARCHED_SOURCES: list[Source] = [
             "fetch (Aug 2 2026): only ONE cycle marked 'Application Open' \u2014 San "
             "Marcos Community Foundation, restricted to '501(c)3 organizations "
             "located in and/or serving residents of San Marcos' (North County, "
-            "outside RISE's Far South/Border North footprint). County-wide "
+            "outside the org's Far South/Border North footprint). County-wide "
             "Cushman Foundation cycle shows 'Grant closed' but the page says the "
             "Cushman board 'reviews and awards grants on a quarterly basis "
             "throughout the year', so it should reopen"
@@ -139,10 +139,10 @@ RESEARCHED_SOURCES: list[Source] = [
             "coalitions that are providing direct services or programming in line "
             "with Pride's mission'. AWARD FLOOR WARNING \u2014 grants are "
             "'$1,000-$5,000' out of a '$70,000' pool. That is almost certainly "
-            "below whatever MIN_AWARD Mauri sets and will not justify a 10-hour "
+            "below whatever MIN_AWARD the user sets and will not justify a 10-hour "
             "application, so expect the deterministic filter to reject it every "
             "week (cheap, zero LLM cost, but also zero yield). Recommend the "
-            "parent agent flag this one for Mauri's call rather than auto- "
+            "parent agent flag this one for the user's call rather than auto- "
             "crawling it. Cycle is CLOSED right now: 'Typically,"
         ),
     ),
@@ -183,8 +183,8 @@ RESEARCHED_SOURCES: list[Source] = [
             "links \u2014 good crawl target. HARD ELIGIBILITY RESTRICTION: every cycle "
             "funds 'organizations serving the LGBTQIA+ community' (or, for the "
             "collaborative, 'organizations serving people living with HIV and "
-            "AIDS'). RISE only qualifies with a program that genuinely serves "
-            "those residents \u2014 this is a Mauri judgment call, not an agent one. "
+            "AIDS'). the org only qualifies with a program that genuinely serves "
+            "those residents \u2014 this is the user's judgment call, not an agent one. "
             "STALE STATUS BADGE: Summer Grant Cycle is badged 'Open' with "
             "'Applications are accepted through July 19th', a date already past "
             "at fetch time; treat that deadline as u"
@@ -318,7 +318,7 @@ RESEARCHED_SOURCES: list[Source] = [
             "SECOND GEOGRAPHY WARNING the candidate description missed: the "
             "exclusion list also bars, verbatim, 'Programs whose beneficiaries "
             "are outside of San Diego County and south Orange County'. IMPERIAL "
-            "COUNTY BENEFICIARIES ARE EXCLUDED. Since RISE's Far South/Border "
+            "COUNTY BENEFICIARIES ARE EXCLUDED. Since the org's Far South/Border "
             "North work spans San Diego AND Imperial"
         ),
     ),
@@ -359,7 +359,7 @@ RESEARCHED_SOURCES: list[Source] = [
             "'The deadlines to apply for grants are March 15, June 15, September "
             "15 and December 15.' But two honest flags. (1) PROGRAM FIT IS POOR: "
             "the page's stated focus is 'youth development, military & veterans, "
-            "hunger & nutrition, and other basic needs' \u2014 none of RISE's three "
+            "hunger & nutrition, and other basic needs' \u2014 none of the org's three "
             "programs are named, which is why programs is empty. (2) AWARD SIZE "
             "UNVERIFIED AND PROBABLY BELOW FLOOR: the page states only 'Each "
             "year, the foundation awards over $2 million in grants' \u2014 the "
@@ -467,7 +467,7 @@ RESEARCHED_SOURCES: list[Source] = [
             "letter is required to receive funding \u00b7 BLOCKING ELIGIBILITY CHECK "
             "BEFORE THIS IS USABLE: Hearst does not fund organizations 'operating "
             "with audited expenses less than $2 million.' That is CLAUDE.md open "
-            "question #7 \u2014 if RISE's audited expenses are under $2M, this funder "
+            "question #7 \u2014 if the org's audited expenses are under $2M, this funder "
             "is a guaranteed reject every week and should be pulled. The "
             "candidate write-up said $1M; the page says $2M. Confirmed good news: "
             "national (only exclusion is 'based outside of the United States'), "
@@ -492,7 +492,7 @@ RESEARCHED_SOURCES: list[Source] = [
             "reviewed on a rolling basis as the portal will remain open for REEJ- "
             "related LOIs year-round.' Award size stated verbatim on page: 'Most "
             "of our grants range from about $50,000 - $250,000' (PRIs "
-            "$250k-$750k) -- comfortably above any plausible RISE award floor. "
+            "$250k-$750k) -- comfortably above any plausible the org award floor. "
             "Decision timeline: 'NCF staff anticipates notifying applicants to "
             "learn more about their submissions within 12 weeks of submission.' "
             "NOT ELIGIBLE / excluded, verbatim: '501(c)(4)"
@@ -515,7 +515,7 @@ RESEARCHED_SOURCES: list[Source] = [
             "release dates: RWJF Health Policy Fellows (releases Aug 4, 2026) and "
             "Connecting Champions for Diversity, Equity, Inclusion, and Belonging "
             "in the Health Professions (releases Aug 6, 2026). Neither of those "
-            "two is a strong RISE fit \u2014 both are health-professions focused and "
+            "two is a strong the org fit \u2014 both are health-professions focused and "
             "the Fellows program is for individuals \u2014 so expect the crawler to "
             "reject the current contents"
         ),
@@ -559,9 +559,9 @@ RESEARCHED_SOURCES: list[Source] = [
             "Inquiry from a non-profit organization that provides services in any "
             "of the following five Southern California counties:' \u2014 Los Angeles, "
             "Imperial, Riverside, San Bernardino, Ventura. San Diego County "
-            "appears nowhere on the page. Imperial County IS included, so RISE is "
+            "appears nowhere on the page. Imperial County IS included, so the org is "
             "eligible only for work delivered in Imperial County (Far South / "
-            "Border North). Flag this to Mauri befor"
+            "Border North). Flag this to the user befor"
         ),
     ),
     Source(
@@ -577,7 +577,7 @@ RESEARCHED_SOURCES: list[Source] = [
             "a year. \u00b7 Cleanest entry on this list: a real, open, dated "
             "application page with unambiguous nonprofit-only eligibility. Also "
             "verbatim: 'A copy of the organization's 501(c)3 ruling from the IRS; "
-            "we do not accept proposals through fiscal sponsors' \u2014 RISE must "
+            "we do not accept proposals through fiscal sponsors' \u2014 the org must "
             "apply under its own EIN, no fiscal sponsorship. Deadlines are fixed "
             "and recurring: 'The postmark/email timestamp deadlines for proposals "
             "are March 1 and September 1 every year. Applicants are notified of "
@@ -819,7 +819,7 @@ RESEARCHED_SOURCES: list[Source] = [
             "Public Benefit Grant Program funds are only available for non-profit "
             "entities. \u00b7 Loads cleanly with no bot blocking. Genuinely valuable "
             "as one of the very few grant sources headquartered in Imperial "
-            "County, covering the half of RISE's Far South/Border North footprint "
+            "County, covering the half of the org's Far South/Border North footprint "
             "that every San Diego source misses. Rolling: 'Complete applications "
             "will be accepted until funds are exhausted' and 'Projects will be "
             "reviewed on a first-come first-served basis' \u2014 no deadline to race, "
@@ -848,7 +848,7 @@ RESEARCHED_SOURCES: list[Source] = [
             "gives no figures, and does not confirm the fee-waiver detail in the "
             "candidate description. Set award_min/award_max null and "
             "needs_human_check true; the award floor cannot be checked from this "
-            "source, which is a real risk given RISE's 10"
+            "source, which is a real risk given the org's 10"
         ),
     ),
     Source(
@@ -909,12 +909,12 @@ RESEARCHED_SOURCES: list[Source] = [
             "California-only with no county exclusion, so San Diego and Imperial "
             "both qualify. Organizations/community groups/Tribal Nations receive "
             "$10,000; individual artists receive $7,500 (individual track is "
-            "irrelevant to RISE). Deadline on the page is April 27 2026 for a "
+            "irrelevant to the org). Deadline on the page is April 27 2026 for a "
             "Sept 1 2026 - Aug 31 2027 grant period \u2014 that deadline has passed as "
             "of Aug 2 2026, so this is a spring-2027 target and the crawler "
             "should expect a closed cycle until roughly Feb-Mar 2027. HARD GATE: "
-            "the $500,000 annual-budget ceiling. This is CLAUDE.md \u00a711 Q7 (RISE's "
-            "annual operating budget) \u2014 if RISE is o"
+            "the $500,000 annual-budget ceiling. This is CLAUDE.md \u00a711 Q7 (the org's "
+            "annual operating budget) \u2014 if the org is o"
         ),
     ),
     Source(

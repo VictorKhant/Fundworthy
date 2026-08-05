@@ -1,9 +1,9 @@
-"""Fetching: httpx + retry + politeness delays. (CLAUDE.md §10)
+"""Fetching: httpx + retry + politeness delays. (CLAUDE.md)
 
 We are a small nonprofit's agent hitting funders' own websites once a week. Behave
 accordingly: identify ourselves honestly, obey robots.txt, one request at a time per
-host, and back off rather than hammer. A funder blocking RISE's IP would be a real
-cost to the organization.
+host, and back off rather than hammer. A funder blocking our IP would be a real
+cost to the nonprofits that rely on this.
 """
 
 from __future__ import annotations
@@ -13,21 +13,25 @@ import re
 import logging
 import urllib.robotparser
 from dataclasses import dataclass
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
+
+from .urlguard import BlockedURL, ensure_public_url
 
 log = logging.getLogger(__name__)
 
 USER_AGENT = (
-    "RISE-San-Diego-Funding-Agent/0.1 "
-    "(+https://risesd.org; nonprofit grant research; contact: RISE San Diego)"
+    "Fundworthy/0.1 "
+    "(+https://github.com/VictorKhant/Rise-Fund-Finder; nonprofit grant research)"
 )
 
 REQUEST_TIMEOUT = httpx.Timeout(20.0, connect=10.0)
 MAX_RETRIES = 2
 PER_HOST_DELAY_SECONDS = 2.0
 MAX_BYTES = 3_000_000  # a grants page over 3MB is not a grants page
+MAX_REDIRECTS = 5      # httpx's own default is 20; a grants page needs nowhere near it
+_REDIRECT_CODES = frozenset({301, 302, 303, 307, 308})
 
 # Content types we can actually read. Anything else — PDF above all — decodes into
 # noise that looks like text to everything downstream.
@@ -60,7 +64,11 @@ class Fetcher:
         self._client = httpx.AsyncClient(
             headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
             timeout=REQUEST_TIMEOUT,
-            follow_redirects=True,
+            # Redirects are followed by `_send`, one hop at a time, so that every hop can
+            # be checked against `urlguard` before we connect to it. With httpx doing it
+            # for us, a public URL redirecting to 169.254.169.254 was fetched and the
+            # body handed back — the redirect being exactly the part we never inspected.
+            follow_redirects=False,
         )
         return self
 
@@ -73,6 +81,47 @@ class Fetcher:
             self._host_locks[host] = asyncio.Lock()
         return self._host_locks[host]
 
+    async def _send(self, method: str, url: str, **kwargs) -> httpx.Response:
+        """One request, following redirects ourselves so every hop is checked.
+
+        Raises `BlockedURL` if the starting URL — or anywhere a redirect points — is not
+        a public address. Everything else propagates unchanged, so the retry and
+        error-handling in the callers keeps working exactly as before.
+        """
+        assert self._client is not None
+        current = url
+        for _hop in range(MAX_REDIRECTS + 1):
+            await ensure_public_url(current)
+            resp = await self._client.request(method, current, **kwargs)
+            if resp.status_code not in _REDIRECT_CODES:
+                return resp
+
+            location = resp.headers.get("location")
+            if not location:
+                return resp                      # a 30x with nowhere to go is just a 30x
+
+            # Resolved here rather than read off `resp.next_request`, which only exists
+            # when httpx's own redirect machinery ran. Doing it ourselves also handles
+            # the common relative form (`Location: /grants/`) and keeps the next URL
+            # something we derived, not something httpx handed us.
+            nxt = urljoin(current, location)
+
+            # 303, and 301/302 on a POST, become GET with no body — the same rule httpx
+            # applies. Keeping it means switching method and dropping the payload rather
+            # than replaying a write against a URL the origin chose.
+            if resp.status_code == 303 or (
+                    resp.status_code in (301, 302) and method.upper() == "POST"):
+                method = "GET"
+                kwargs.pop("json", None)
+                kwargs.pop("content", None)
+                kwargs.pop("data", None)
+            log.debug("redirect %s -> %s", current, nxt)
+            current = nxt
+
+        raise httpx.TooManyRedirects(
+            f"more than {MAX_REDIRECTS} redirects starting at {url}",
+            request=httpx.Request(method, url))
+
     async def _allowed(self, url: str) -> bool:
         """robots.txt check. A robots.txt we cannot read is treated as permissive —
         that is the conventional reading, and these are public grant pages."""
@@ -84,7 +133,7 @@ class Fetcher:
             rp: urllib.robotparser.RobotFileParser | None = None
             try:
                 assert self._client is not None
-                resp = await self._client.get(f"{origin}/robots.txt", timeout=10.0)
+                resp = await self._send("GET", f"{origin}/robots.txt", timeout=10.0)
                 if resp.status_code == 200:
                     rp = urllib.robotparser.RobotFileParser()
                     rp.parse(resp.text.splitlines())
@@ -98,6 +147,15 @@ class Fetcher:
         assert self._client is not None, "use `async with Fetcher() as f`"
         host = urlparse(url).netloc
 
+        # Before robots.txt, because fetching robots.txt is itself a request to the host
+        # and a blocked address should not get even that.
+        try:
+            await ensure_public_url(url)
+        except BlockedURL as exc:
+            log.warning("refusing to fetch %s: %s", url, exc)
+            return FetchResult(url=url, status=None, html=None,
+                               error=f"blocked_url: {exc}")
+
         if not await self._allowed(url):
             log.info("robots.txt disallows %s — skipping", url)
             return FetchResult(url=url, status=None, html=None, error="robots_disallowed")
@@ -106,7 +164,7 @@ class Fetcher:
             last_error: str | None = None
             for attempt in range(MAX_RETRIES + 1):
                 try:
-                    resp = await self._client.get(url)
+                    resp = await self._send("GET", url)
 
                     # Back off on rate limits and server errors; give up on 4xx.
                     if resp.status_code in (429, 503) and attempt < MAX_RETRIES:
@@ -146,6 +204,20 @@ class Fetcher:
                         final_url=str(resp.url),
                     )
 
+                except BlockedURL as exc:
+                    # A redirect pointed somewhere private. Not retryable, and not the
+                    # host's fault — stop here rather than spending two more attempts.
+                    log.warning("refusing to follow a redirect from %s: %s", url, exc)
+                    return FetchResult(url=url, status=None, html=None,
+                                       error=f"blocked_redirect: {exc}")
+                except httpx.TooManyRedirects:
+                    # Not a TransportError, so without this it escapes the retry loop and
+                    # takes the whole crawl down. A funder with a redirect loop is one
+                    # unhealthy source, which is a thing the run log already knows how to
+                    # say.
+                    log.info("%s exceeded %d redirects — giving up", url, MAX_REDIRECTS)
+                    return FetchResult(url=url, status=None, html=None,
+                                       error="too_many_redirects")
                 except (httpx.TimeoutException, httpx.TransportError) as exc:
                     last_error = f"{type(exc).__name__}: {exc}"
                     if attempt < MAX_RETRIES:
@@ -178,7 +250,7 @@ class Fetcher:
             last_error: str | None = None
             for attempt in range(MAX_RETRIES + 1):
                 try:
-                    resp = await self._client.request(
+                    resp = await self._send(
                         method,
                         url,
                         params=params,
@@ -191,6 +263,11 @@ class Fetcher:
                     if resp.status_code >= 400:
                         return None, f"http_{resp.status_code}"
                     return resp.json(), None
+                except BlockedURL as exc:
+                    log.warning("refusing to fetch %s: %s", url, exc)
+                    return None, f"blocked_url: {exc}"
+                except httpx.TooManyRedirects:
+                    return None, "too_many_redirects"
                 except (httpx.TimeoutException, httpx.TransportError) as exc:
                     last_error = f"{type(exc).__name__}: {exc}"
                     if attempt < MAX_RETRIES:

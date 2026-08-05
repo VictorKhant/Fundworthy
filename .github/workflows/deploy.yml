@@ -1,0 +1,109 @@
+# Push to main -> the VM updates itself.
+#
+# Two jobs, and the split is the point: the tests run on GitHub's machine, where a
+# failure costs nothing, and the deploy only starts if they passed. A pipeline that
+# deploys first and tests afterwards is a pipeline that tells you about the migration bug
+# after it has run against a nonprofit's only copy of their data.
+#
+# The interesting work is in scripts/deploy.sh, on the VM, because it needs the database
+# to decide whether deploying now is safe — a search is a 5-10 minute subprocess spending
+# an org's own Anthropic credit, and a restart cuts it off. Keeping the logic there also
+# means a human can run exactly the same deploy by hand when this file is the thing that
+# is broken.
+#
+# Secrets to set (Settings -> Secrets and variables -> Actions):
+#   VM_HOST         the hostname or IP of the box
+#   VM_USER         usually `ubuntu`
+#   VM_SSH_KEY      a private key created FOR THIS, not a person's own key
+#   VM_KNOWN_HOSTS  output of `ssh-keyscan <host>`
+#
+# Until all four exist the deploy job stops with an explanation instead of running. It
+# used to go ahead regardless: with the secrets unset the destination expanded to a bare
+# `@`, ssh printed its usage and exited 255, and the first thing anyone saw of this
+# pipeline was a red X with a wall of flags in it.
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  # So a failed deploy can be retried, and so the first one can be run deliberately
+  # rather than by pushing something.
+  workflow_dispatch:
+
+concurrency:
+  # Two deploys at once would race on the same working tree and the same service. Newer
+  # wins; the older is cancelled rather than queued, since it is about to be superseded.
+  group: deploy-production
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      # Offline by construction — no API key, no network, nothing to spend.
+      - run: python -m pytest tests/ -q
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Is deployment configured?
+        id: check
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+          VM_KNOWN_HOSTS: ${{ secrets.VM_KNOWN_HOSTS }}
+        run: |
+          missing=""
+          [ -z "$VM_HOST" ]        && missing="$missing VM_HOST"
+          [ -z "$VM_USER" ]        && missing="$missing VM_USER"
+          [ -z "$VM_SSH_KEY" ]     && missing="$missing VM_SSH_KEY"
+          [ -z "$VM_KNOWN_HOSTS" ] && missing="$missing VM_KNOWN_HOSTS"
+          if [ -n "$missing" ]; then
+            echo "::notice::Auto-deploy is not set up yet. Missing secrets:$missing"
+            echo "Add them under Settings -> Secrets and variables -> Actions."
+            echo "docs/UPGRADE.md section 8 has the commands. The tests above still ran."
+            echo "ready=no" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=yes" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Authorise the SSH key
+        if: steps.check.outputs.ready == 'yes'
+        env:
+          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+          VM_KNOWN_HOSTS: ${{ secrets.VM_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$VM_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # Pinned host key, not StrictHostKeyChecking=no. Disabling the check is the
+          # usual shortcut in deploy workflows and it means this job will happily hand
+          # its key to whatever answers on that address.
+          printf '%s\n' "$VM_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Deploy
+        if: steps.check.outputs.ready == 'yes'
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+        run: |
+          # The deploy script is refreshed from the branch before it runs, so a fix to
+          # the deploy procedure itself takes effect on the next deploy rather than the
+          # one after it.
+          ssh -i ~/.ssh/id_ed25519 -o BatchMode=yes "$VM_USER@$VM_HOST" \
+            'set -e
+             cd ~/Rise-Fund-Finder
+             git fetch origin main
+             git checkout origin/main -- scripts/deploy.sh
+             chmod +x scripts/deploy.sh
+             ./scripts/deploy.sh'

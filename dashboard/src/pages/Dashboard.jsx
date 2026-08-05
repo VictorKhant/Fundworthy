@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, money } from "../api";
+import DownloadCsv from "../components/DownloadCsv";
 import Findings from "../components/Findings";
 import Funders from "../components/Funders";
 import Programs from "../components/Programs";
@@ -8,11 +9,11 @@ import SearchSettings from "../components/SearchSettings";
 import StatusStrip from "../components/StatusStrip";
 import { useRun } from "../useRun";
 
-// "This week" — the page Mauri opens on Thursday morning.
+// "This week" — the page the user opens on Thursday morning.
 //
 // The findings moved to the top in this pass. The old order put the controls above the
 // list they produce, which was the right instinct and the wrong execution: it meant four
-// screens of knobs before the thing she came to read. The controls are still above the
+// screens of knobs before the thing they came to read. The controls are still above the
 // list, condensed into one always-visible status strip; the knobs themselves fold away
 // behind it, because a floor set in March does not need re-reading every week.
 //
@@ -76,14 +77,7 @@ export default function Dashboard({ state, onChange }) {
         </div>
 
         <div className="row">
-          {/* A plain <a download>, not a button with an onClick: the browser saves the
-              file natively, so it still works if JavaScript fails elsewhere on the page,
-              and there is no spinner state to get stuck in. */}
-          {total > 0 && (
-            <a className="button" href={api.exportUrl()} download>
-              Download spreadsheet
-            </a>
-          )}
+          {total > 0 && <DownloadCsv />}
           {isRunning ? (
             <button className="danger" onClick={stop}>
               Stop the search

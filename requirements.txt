@@ -17,4 +17,7 @@ python-dotenv==1.0.1       # local .env for dev runs; a no-op in CI, where secre
 fastapi==0.141.1           # the REST API the dashboard calls
 uvicorn[standard]==0.52.1  # the server start.sh runs
 cryptography==50.0.0       # Fernet — the API key is never stored in plaintext
+pyjwt[crypto]==2.13.0      # verifies Firebase ID tokens (app/auth.py) — not firebase-admin: a
+                           # Firebase ID token is a plain RS256 JWT, and the SDK would add gRPC
+                           # plus a service-account file we would then have to guard
 pytest==9.1.1              # the test suite

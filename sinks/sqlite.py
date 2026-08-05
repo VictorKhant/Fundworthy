@@ -1,9 +1,9 @@
-"""The SQLite sink — now the primary destination. (docs/PLAN.md §0)
+"""The SQLite sink — now the primary destination. (CLAUDE.md)
 
-CLAUDE.md §4 said "the Sheet *is* the product". That is no longer true: the dashboard is,
+CLAUDE.md said "the Sheet *is* the product". That is no longer true: the dashboard is,
 and this sink is what feeds it. `sinks/sheets.py` survives unchanged as an *export*
-target for the shortlist Mauri keeps, so the argument that mattered — she still ends up
-owning her data in a tool she understands — survives the change.
+target for the shortlist the user keeps, so the argument that mattered — they still end up
+owning their data in a tool they understand — survives the change.
 
 Writing through the sink protocol rather than straight from the runner is what keeps
 that possible. The agent still emits Opportunity records and knows nothing about where
@@ -27,9 +27,15 @@ class SqliteSink:
 
     name = "sqlite"
 
-    def __init__(self, run_id: str | None = None, db_path=None) -> None:
+    def __init__(self, run_id: str | None = None, db_path=None,
+                 org_id: str | None = None) -> None:
         self.run_id = run_id
         self.db_path = db_path
+        # Whose findings these are. Without it every org's results landed in one pile
+        # keyed only by (source_url, title), so two nonprofits looking at the same grant
+        # page overwrote each other's row.
+        from app.db import DEFAULT_ORG_ID
+        self.org_id = org_id or DEFAULT_ORG_ID
 
     def _ready(self) -> None:
         """Make sure the schema exists before writing.
@@ -50,7 +56,8 @@ class SqliteSink:
         self._ready()
         with session(self.db_path) as conn:
             for opp in opportunities:
-                repo.save_opportunity(conn, opp, run_id=self.run_id)
+                repo.save_opportunity(conn, opp, run_id=self.run_id,
+                                      org_id=self.org_id)
         return len(opportunities)
 
     def write_run_log(self, run: RunLog) -> None:
@@ -58,7 +65,7 @@ class SqliteSink:
         d = run.to_dict()
         with session(self.db_path) as conn:
             if self.run_id is None or repo.get_run(conn, self.run_id) is None:
-                self.run_id = repo.create_run(conn, self.run_id)
+                self.run_id = repo.create_run(conn, self.run_id, org_id=self.org_id)
             repo.update_run(
                 conn, self.run_id,
                 finished_at=d["finished_at"],

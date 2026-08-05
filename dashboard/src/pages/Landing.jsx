@@ -3,7 +3,7 @@
 // example on the marketing page cannot drift from the product.
 //
 // The honesty section is not marketing garnish. "Amount not stated instead of a guessed
-// number" and "AI judgements carry a visible AI mark" are the two rules from CLAUDE.md §6
+// number" and "AI judgements carry a visible AI mark" are the two rules from CLAUDE.md
 // that the whole pipeline is arranged around, and stating them up front is what earns the
 // short list its credibility.
 
@@ -87,7 +87,7 @@ export default function Landing({ onSignIn, onCreate }) {
             <a href="#how" className="lp-ghostlink">See how it works →</a>
           </div>
           <p className="lp-fineprint">
-            First built with RISE San Diego. No credit card — you bring your own AI key.
+            First built with the organization. No credit card — you bring your own AI key.
           </p>
         </div>
 
@@ -191,10 +191,7 @@ export default function Landing({ onSignIn, onCreate }) {
 
       <footer className="lp-footer">
         <span className="lp-footmark">Fundworthy</span>
-        <span>
-          First built with RISE San Diego at the AI Trailblazers Social Impact
-          Hack-AI-thon, 2026.
-        </span>
+        <span>A funding-opportunity agent for nonprofits.</span>
       </footer>
     </div>
   );

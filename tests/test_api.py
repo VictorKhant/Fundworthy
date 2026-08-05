@@ -10,6 +10,8 @@ after it has been shared.
 
 from __future__ import annotations
 
+import os
+
 import sys
 from pathlib import Path
 
@@ -19,15 +21,15 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import secrets
-from app.db import init_db, session
+from app.db import DEFAULT_ORG_ID, init_db, session
 
 FAKE_KEY = "sk-ant-api03-THIS-IS-NOT-A-REAL-KEY-0000000000-4f2a"
 
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
-    monkeypatch.setenv("RISE_DB_PATH", str(tmp_path / "rise.db"))
-    monkeypatch.setenv("RISE_KEYFILE", str(tmp_path / ".fernet-key"))
+    monkeypatch.setenv("FUNDWORTHY_DB_PATH", str(tmp_path / "rise.db"))
+    monkeypatch.setenv("FUNDWORTHY_KEYFILE", str(tmp_path / ".fernet-key"))
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     init_db()
 
@@ -119,7 +121,7 @@ def test_key_round_trips_for_server_side_use(client):
     """Encrypted at rest, but the pipeline still has to be able to use it."""
     client.post("/api/settings/api-key", json={"api_key": FAKE_KEY})
     with session() as conn:
-        assert secrets.read_api_key(conn) == FAKE_KEY
+        assert secrets.read_api_key(conn, org_id=DEFAULT_ORG_ID) == FAKE_KEY
 
 
 def test_deleting_the_key_clears_it(client):
@@ -127,7 +129,7 @@ def test_deleting_the_key_clears_it(client):
     body = client.delete("/api/settings/api-key").json()
     assert body["has_api_key"] is False
     with session() as conn:
-        assert secrets.read_api_key(conn) is None
+        assert secrets.read_api_key(conn, org_id=DEFAULT_ORG_ID) is None
 
 
 def test_a_corrupt_stored_key_degrades_instead_of_crashing(client, tmp_path):
@@ -166,8 +168,8 @@ def test_program_crud_through_the_api(client):
     assert created.status_code == 201
     pid = created.json()["program"]["id"]
 
-    updated = client.put(f"/api/programs/{pid}", json={"summary": "Edited by Mauri"})
-    assert updated.json()["program"]["summary"] == "Edited by Mauri"
+    updated = client.put(f"/api/programs/{pid}", json={"summary": "Edited by the user"})
+    assert updated.json()["program"]["summary"] == "Edited by the user"
     assert updated.json()["program"]["keywords"] == ["capacity building"], \
         "a partial edit must not wipe the rest of the card"
 
@@ -329,7 +331,7 @@ def test_deleting_the_saved_key_admits_the_environment_still_scores(client, monk
 
 # --- the remove list ----------------------------------------------------------
 #
-# The stakeholder does not want opportunities from funders RISE already receives money
+# The stakeholder does not want opportunities from funders the organization already receives money
 # from — they get the cheque without reapplying. So warmth stopped being a priority
 # signal and became a reason to EXCLUDE, and the exclusion happens in the Python stage
 # where it costs nothing.
@@ -369,7 +371,7 @@ def test_an_excluded_funder_is_also_dropped_from_indexed_results(client):
     target = client.get("/api/funders").json()["funders"][0]
     client.put(f"/api/funders/{target['id']}", json={"active": False})
 
-    assert target["name"].casefold() in excluded_funders()
+    assert target["name"].casefold() in excluded_funders(DEFAULT_ORG_ID)
 
 
 def test_warmth_no_longer_orders_the_funder_list(client):
@@ -380,7 +382,7 @@ def test_warmth_no_longer_orders_the_funder_list(client):
 
 def test_stopping_a_run_is_not_recorded_as_a_failure():
     """Pressing Stop sends SIGTERM, so the child exits with a negative code. The pump
-    thread reached _finalize before stop() could mark the row, and a run Mauri ended
+    thread reached _finalize before stop() could mark the row, and a run the user ended
     deliberately reported "failed (exit -15)". Decided from the exit code now, so there
     is no race to lose."""
     from app.db import init_db, session
@@ -389,7 +391,7 @@ def test_stopping_a_run_is_not_recorded_as_a_failure():
 
     init_db()
     with session() as conn:
-        run_id = repo.create_run(conn)
+        run_id = repo.create_run(conn, org_id=DEFAULT_ORG_ID)
 
     RunManager()._finalize(run_id, -15)          # SIGTERM
     with session() as conn:
@@ -405,9 +407,41 @@ def test_a_real_crash_is_still_recorded_as_a_failure(client):
     from app.db import session
 
     with session() as conn:
-        run_id = repo.create_run(conn)
+        run_id = repo.create_run(conn, org_id=DEFAULT_ORG_ID)
     RunManager()._finalize(run_id, 1)            # non-zero, not a signal
     with session() as conn:
         run = repo.get_run(conn, run_id)
     assert run["status"] == "failed"
     assert run["stop_reason"] == "exit_1"
+
+
+# --- the suite must not inherit the machine it runs on --------------------------
+
+def test_the_environment_is_hermetic():
+    """A regression guard with a real deploy behind it.
+
+    `agent/__init__.py` calls `load_dotenv()` at import time, so importing anything from
+    `agent` pulls the box's own `.env` into `os.environ`. On the deployed VM that file
+    sets FIREBASE_PROJECT_ID and ALLOWED_EMAILS — so sign-in switched on mid-test-run and
+    37 API tests failed with 401s that had nothing to do with the code under test. The
+    suite passed where it was written and failed where it mattered, which is the one
+    thing a deploy gate must never do.
+
+    `FUNDWORTHY_DB_PATH` is the sharp one: inherited from a real `.env`, a test calling
+    `init_db()` before setting its own path would have migrated the live database.
+    """
+    import agent  # noqa: F401 — the import is the thing being tested
+
+    for name in ("FIREBASE_PROJECT_ID", "FIREBASE_WEB_API_KEY", "ALLOWED_EMAILS",
+                 "FUNDWORTHY_OPEN_SIGNUP", "ANTHROPIC_API_KEY"):
+        assert os.environ.get(name) is None, (
+            f"{name} leaked in from the environment — see tests/conftest.py")
+
+    # Pointed somewhere disposable, never at whatever `data/rise.db` resolves to.
+    assert "rise.db" not in os.environ.get("FUNDWORTHY_DB_PATH", "")
+
+
+def test_sign_in_is_off_for_the_api_suite_whatever_the_box_thinks():
+    from app import auth
+
+    assert auth.enabled() is False

@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 
 // The agent's own output, streamed. Shown whenever a search is running, regardless of
 // whether the settings panel is open — a search that is spending money must be visible
-// without Mauri first having to find the right disclosure to open.
+// without the user first having to find the right disclosure to open.
 
 export default function RunLog({ isRunning, log }) {
   const ref = useRef(null);

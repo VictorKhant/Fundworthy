@@ -3,11 +3,11 @@
 Runs offline with no API key and no network. The three things worth actually testing
 here are the ones that would fail silently in production:
 
-  - the dedup probe, because a false negative means Mauri re-reads the same grant every
-    Thursday and a false positive means a real opportunity never reaches her at all;
+  - the dedup probe, because a false negative means the user re-reads the same grant every
+    Thursday and a false positive means a real opportunity never reaches them at all;
   - the purge boundary, because off-by-one means either the file grows forever or this
     month's findings get deleted the moment the month ticks over;
-  - the reading order, because "human-check rows last" is something she asked for
+  - the reading order, because "human-check rows last" is something they asked for
     directly and it is easy to break from any of three different surfaces.
 
     .venv/bin/python -m pytest tests/test_db.py -q
@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from agent.models import DeadlineType, FunderType, Opportunity, Program, stable_id
 from app import archive, repo
-from app.db import DEFAULT_SETTINGS, init_db, month_key, session
+from app.db import DEFAULT_ORG_ID, DEFAULT_SETTINGS, init_db, month_key, session
 
 
 @pytest.fixture()
@@ -34,8 +34,8 @@ def db(tmp_path, monkeypatch):
     """A real database file per test — SQLite behaviour differs enough in :memory:
     (WAL, separate connections) that testing against a file is the honest choice."""
     path = tmp_path / "rise.db"
-    monkeypatch.setenv("RISE_DB_PATH", str(path))
-    monkeypatch.setenv("RISE_KEYFILE", str(tmp_path / ".fernet-key"))
+    monkeypatch.setenv("FUNDWORTHY_DB_PATH", str(path))
+    monkeypatch.setenv("FUNDWORTHY_KEYFILE", str(tmp_path / ".fernet-key"))
     init_db(path)
     return path
 
@@ -67,15 +67,15 @@ def test_init_is_idempotent(db):
     init_db(db)
     init_db(db)
     with session(db) as conn:
-        assert len(repo.list_programs(conn)) == 7
+        assert len(repo.list_programs(conn, org_id=DEFAULT_ORG_ID)) == 7
 
 
 def test_seeds_the_seven_programs_with_three_active(db):
     with session(db) as conn:
-        programs = repo.list_programs(conn)
+        programs = repo.list_programs(conn, org_id=DEFAULT_ORG_ID)
         active = [p["slug"] for p in programs if p["active"]]
     assert len(programs) == 7
-    # The three Mauri named as priorities, and only those.
+    # The three the user named as priorities, and only those.
     assert sorted(active) == ["ARTS", "RESILIENCE", "RULFP"]
 
 
@@ -84,7 +84,7 @@ def test_the_other_four_programs_are_seeded_empty_not_invented(db):
     nothing else. Writing a description of a real organisation's programme that we
     never read is the same failure mode §6 forbids for award amounts."""
     with session(db) as conn:
-        rest = [p for p in repo.list_programs(conn)
+        rest = [p for p in repo.list_programs(conn, org_id=DEFAULT_ORG_ID)
                 if p["slug"] in {"ILIA", "RISE_NOW", "ON_THE_RISE", "NP_TRAININGS"}]
     assert len(rest) == 4
     for p in rest:
@@ -96,16 +96,16 @@ def test_the_other_four_programs_are_seeded_empty_not_invented(db):
 
 def test_seeds_funders_from_the_source_registry(db):
     with session(db) as conn:
-        funders = repo.list_funders(conn)
+        funders = repo.list_funders(conn, org_id=DEFAULT_ORG_ID)
     warm = [f for f in funders if f["warm"]]
-    assert len(warm) == 8, "the eight partners from CLAUDE.md §7"
+    assert len(warm) == 8, "the eight partners from CLAUDE.md"
     assert all(f["sector"] for f in funders), "every funder carries a sector tag"
 
 
 def test_award_floor_default_is_ten_thousand(db):
     """§11 Q1, answered. The placeholder is gone."""
     with session(db) as conn:
-        assert repo.get_settings(conn)["min_award"] == 10_000
+        assert repo.get_settings(conn, org_id=DEFAULT_ORG_ID)["min_award"] == 10_000
     assert DEFAULT_SETTINGS["min_award"] == "10000"
 
 
@@ -118,7 +118,7 @@ def test_settings_round_trip_with_types(db):
             "enabled": False,
             "sectors_active": ["government", "foundation"],
             "run_budget_usd": "0.50",
-        })
+        }, org_id=DEFAULT_ORG_ID)
     assert out["min_award"] == 25_000 and isinstance(out["min_award"], int)
     assert out["enabled"] is False
     assert out["sectors_active"] == ["government", "foundation"]
@@ -127,7 +127,7 @@ def test_settings_round_trip_with_types(db):
 
 def test_unknown_settings_are_ignored_not_stored(db):
     with session(db) as conn:
-        out = repo.update_settings(conn, {"drop_database": "yes please"})
+        out = repo.update_settings(conn, {"drop_database": "yes please"}, org_id=DEFAULT_ORG_ID)
         assert "drop_database" not in out
         rows = {r["key"] for r in conn.execute("SELECT key FROM settings")}
     assert "drop_database" not in rows
@@ -138,7 +138,7 @@ def test_corrupt_setting_falls_back_to_the_default(db):
     with session(db) as conn:
         conn.execute("UPDATE settings SET value='not a number' WHERE key='min_award'")
     with session(db) as conn:
-        assert repo.get_settings(conn)["min_award"] == 10_000
+        assert repo.get_settings(conn, org_id=DEFAULT_ORG_ID)["min_award"] == 10_000
 
 
 # --- programs -----------------------------------------------------------------
@@ -151,52 +151,52 @@ def test_program_crud(db):
             "keywords": ["capacity building"],
             "active": True,
             "min_award": 5_000,
-        })
+        }, org_id=DEFAULT_ORG_ID)
         assert created["slug"] == "RISE_CONSULT"
         assert created["min_award"] == 5_000
 
         updated = repo.update_program(conn, created["id"],
-                                      {"summary": "Edited by Mauri", "active": False})
-        assert updated["summary"] == "Edited by Mauri"
+                                      {"summary": "Edited by the user", "active": False}, org_id=DEFAULT_ORG_ID)
+        assert updated["summary"] == "Edited by the user"
         assert updated["active"] is False
 
-        assert repo.delete_program(conn, created["id"]) is True
-        assert repo.get_program(conn, created["id"]) is None
+        assert repo.delete_program(conn, created["id"], org_id=DEFAULT_ORG_ID) is True
+        assert repo.get_program(conn, created["id"], org_id=DEFAULT_ORG_ID) is None
 
 
 def test_duplicate_program_names_get_distinct_slugs(db):
     """Two cards with the same slug would silently collapse into one searched program."""
     with session(db) as conn:
-        a = repo.create_program(conn, {"name": "RISE Arts"})
-        b = repo.create_program(conn, {"name": "RISE Arts"})
+        a = repo.create_program(conn, {"name": "RISE Arts"}, org_id=DEFAULT_ORG_ID)
+        b = repo.create_program(conn, {"name": "RISE Arts"}, org_id=DEFAULT_ORG_ID)
     assert a["slug"] != b["slug"]
 
 
 def test_program_needs_a_name(db):
     with session(db) as conn:
         with pytest.raises(ValueError):
-            repo.create_program(conn, {"summary": "no name"})
+            repo.create_program(conn, {"summary": "no name"}, org_id=DEFAULT_ORG_ID)
 
 
 # --- funders ------------------------------------------------------------------
 
 def test_funder_deactivation_keeps_the_record(db):
-    """The case that motivated the whole feature: a partner stops funding RISE. It
+    """The case that motivated the whole feature: a partner stops funding the organization. It
     leaves the search, but the relationship history stays."""
     with session(db) as conn:
-        funders = repo.list_funders(conn)
+        funders = repo.list_funders(conn, org_id=DEFAULT_ORG_ID)
         target = next(f for f in funders if f["warm"])
-        repo.update_funder(conn, target["id"], {"active": False})
+        repo.update_funder(conn, target["id"], {"active": False}, org_id=DEFAULT_ORG_ID)
 
-        assert repo.get_funder(conn, target["id"])["active"] is False
-        assert target["id"] not in {f["id"] for f in repo.list_funders(conn, active_only=True)}
-        assert target["id"] in {f["id"] for f in repo.list_funders(conn)}
+        assert repo.get_funder(conn, target["id"], org_id=DEFAULT_ORG_ID)["active"] is False
+        assert target["id"] not in {f["id"] for f in repo.list_funders(conn, active_only=True, org_id=DEFAULT_ORG_ID)}
+        assert target["id"] in {f["id"] for f in repo.list_funders(conn, org_id=DEFAULT_ORG_ID)}
 
 
 def test_funder_create_is_idempotent_on_name(db):
     with session(db) as conn:
-        first = repo.create_funder(conn, {"name": "New Partner Fund", "sector": "foundation"})
-        again = repo.create_funder(conn, {"name": "new partner fund", "sector": "government"})
+        first = repo.create_funder(conn, {"name": "New Partner Fund", "sector": "foundation"}, org_id=DEFAULT_ORG_ID)
+        again = repo.create_funder(conn, {"name": "new partner fund", "sector": "government"}, org_id=DEFAULT_ORG_ID)
     assert first["id"] == again["id"], "same funder, not two rows"
     assert again["sector"] == "government", "the second write updates"
 
@@ -204,7 +204,7 @@ def test_funder_create_is_idempotent_on_name(db):
 # --- opportunities, dedup, purge ----------------------------------------------
 
 def test_save_and_read_back_every_new_attribute(db):
-    """All eleven columns Mauri asked for survive a round trip."""
+    """All eleven columns the user asked for survive a round trip."""
     opp = _opp(
         award_typical=35_000,
         deadline_type=DeadlineType.ROLLING,
@@ -216,8 +216,8 @@ def test_save_and_read_back_every_new_attribute(db):
         contact_note="grants@example.invalid",
     )
     with session(db) as conn:
-        repo.save_opportunity(conn, opp, run_id="run1")
-        got = repo.list_opportunities(conn)[0]
+        repo.save_opportunity(conn, opp, run_id="run1", org_id=DEFAULT_ORG_ID)
+        got = repo.list_opportunities(conn, org_id=DEFAULT_ORG_ID)[0]
 
     assert got["award_typical"] == 35_000
     assert got["deadline_type"] == "rolling"
@@ -233,9 +233,9 @@ def test_save_and_read_back_every_new_attribute(db):
 
 def test_rerunning_updates_rather_than_duplicates(db):
     with session(db) as conn:
-        repo.save_opportunity(conn, _opp(score=50), run_id="run1")
-        repo.save_opportunity(conn, _opp(score=90), run_id="run2")
-        rows = repo.list_opportunities(conn)
+        repo.save_opportunity(conn, _opp(score=50), run_id="run1", org_id=DEFAULT_ORG_ID)
+        repo.save_opportunity(conn, _opp(score=90), run_id="run2", org_id=DEFAULT_ORG_ID)
+        rows = repo.list_opportunities(conn, org_id=DEFAULT_ORG_ID)
     assert len(rows) == 1
     assert rows[0]["score"] == 90
 
@@ -243,44 +243,44 @@ def test_rerunning_updates_rather_than_duplicates(db):
 def test_dedup_probe_hits_and_misses(db):
     known = stable_id("https://example.invalid/a", "A grant")
     with session(db) as conn:
-        assert archive.seen_this_month(conn, known) is False
-        repo.save_opportunity(conn, _opp(), run_id="run1")
-        assert archive.seen_this_month(conn, known) is True
-        assert archive.seen_this_month(conn, "never-seen-id") is False
+        assert archive.seen_this_month(conn, known, org_id=DEFAULT_ORG_ID) is False
+        repo.save_opportunity(conn, _opp(), run_id="run1", org_id=DEFAULT_ORG_ID)
+        assert archive.seen_this_month(conn, known, org_id=DEFAULT_ORG_ID) is True
+        assert archive.seen_this_month(conn, "never-seen-id", org_id=DEFAULT_ORG_ID) is False
 
 
 def test_dedup_is_scoped_to_the_month(db):
     """The documented exception: a grant seen last month is allowed to resurface."""
     known = stable_id("https://example.invalid/a", "A grant")
     with session(db) as conn:
-        repo.save_opportunity(conn, _opp(), run_id="run1")
+        repo.save_opportunity(conn, _opp(), run_id="run1", org_id=DEFAULT_ORG_ID)
         conn.execute("UPDATE opportunities SET month_key='2020-01' WHERE id=?", (known,))
-        assert archive.seen_this_month(conn, known) is False
-        assert archive.seen_this_month(conn, known, month="2020-01") is True
+        assert archive.seen_this_month(conn, known, org_id=DEFAULT_ORG_ID) is False
+        assert archive.seen_this_month(conn, known, month="2020-01", org_id=DEFAULT_ORG_ID) is True
 
 
 def test_seen_ids_batch_matches_the_single_probe(db):
     with session(db) as conn:
-        repo.save_opportunity(conn, _opp(), run_id="run1")
-        ids = archive.seen_ids_this_month(conn)
+        repo.save_opportunity(conn, _opp(), run_id="run1", org_id=DEFAULT_ORG_ID)
+        ids = archive.seen_ids_this_month(conn, org_id=DEFAULT_ORG_ID)
     assert ids == {stable_id("https://example.invalid/a", "A grant")}
 
 
 def test_purge_deletes_earlier_months_and_keeps_this_one(db):
     with session(db) as conn:
-        repo.save_opportunity(conn, _opp(), run_id="run1")
+        repo.save_opportunity(conn, _opp(), run_id="run1", org_id=DEFAULT_ORG_ID)
         repo.save_opportunity(
             conn,
             _opp(id=stable_id("https://example.invalid/b", "Old grant"),
                  title="Old grant", source_url="https://example.invalid/b"),
             run_id="run0",
-        )
+        org_id=DEFAULT_ORG_ID)
         conn.execute("UPDATE opportunities SET month_key='2020-01' "
                      "WHERE source_url='https://example.invalid/b'")
 
     with session(db) as conn:
-        removed = archive.purge_old_months(conn)
-        remaining = repo.list_opportunities(conn)
+        removed = archive.purge_old_months(conn, org_id=DEFAULT_ORG_ID)
+        remaining = repo.list_opportunities(conn, org_id=DEFAULT_ORG_ID)
 
     assert removed == 1
     assert len(remaining) == 1
@@ -289,25 +289,25 @@ def test_purge_deletes_earlier_months_and_keeps_this_one(db):
 
 def test_purge_is_a_no_op_when_everything_is_current(db):
     with session(db) as conn:
-        repo.save_opportunity(conn, _opp(), run_id="run1")
+        repo.save_opportunity(conn, _opp(), run_id="run1", org_id=DEFAULT_ORG_ID)
     with session(db) as conn:
-        assert archive.purge_old_months(conn) == 0
-        assert len(repo.list_opportunities(conn)) == 1
+        assert archive.purge_old_months(conn, org_id=DEFAULT_ORG_ID) == 0
+        assert len(repo.list_opportunities(conn, org_id=DEFAULT_ORG_ID)) == 1
 
 
 # --- reading order ------------------------------------------------------------
 
 def test_human_check_rows_sort_last(db):
-    """Mauri asked for this explicitly: she wants to read everything the agent is sure
+    """the user asked for this explicitly: they want to read everything the agent is sure
     about before anything it wants a second opinion on."""
     with session(db) as conn:
         repo.save_opportunity(conn, _opp(
             id="needs-check", title="Ambiguous", source_url="https://example.invalid/x",
-            score=99, needs_human_check=True), run_id="r")
+            score=99, needs_human_check=True), run_id="r", org_id=DEFAULT_ORG_ID)
         repo.save_opportunity(conn, _opp(
             id="clean-low", title="Clean but lower", source_url="https://example.invalid/y",
-            score=20, needs_human_check=False), run_id="r")
-        rows = repo.list_opportunities(conn)
+            score=20, needs_human_check=False), run_id="r", org_id=DEFAULT_ORG_ID)
+        rows = repo.list_opportunities(conn, org_id=DEFAULT_ORG_ID)
 
     assert [r["id"] for r in rows] == ["clean-low", "needs-check"], \
         "a 99-scoring row that needs a human check still comes after a clean 20"
@@ -326,12 +326,12 @@ def test_a_stated_award_amount_does_not_outrank_a_better_score(db):
         repo.save_opportunity(conn, _opp(
             id="low-but-has-amount", title="Prebys Rooted and Rising",
             source_url="https://example.invalid/prebys",
-            award_max=150_000, score=18), run_id="r")
+            award_max=150_000, score=18), run_id="r", org_id=DEFAULT_ORG_ID)
         repo.save_opportunity(conn, _opp(
             id="high-no-amount", title="City of SD — Apply for Funding",
             source_url="https://example.invalid/sd",
-            award_min=None, award_max=None, score=65), run_id="r")
-        rows = repo.list_opportunities(conn)
+            award_min=None, award_max=None, score=65), run_id="r", org_id=DEFAULT_ORG_ID)
+        rows = repo.list_opportunities(conn, org_id=DEFAULT_ORG_ID)
 
     assert [r["id"] for r in rows] == ["high-no-amount", "low-but-has-amount"], \
         "score must decide the order, not whether an amount happened to be published"
@@ -345,14 +345,14 @@ def test_a_missing_amount_is_no_longer_a_human_check(db):
     assert opp.needs_human_check is False
 
     with session(db) as conn:
-        repo.save_opportunity(conn, opp, run_id="r")
-        assert repo.list_opportunities(conn)[0]["needs_human_check"] is False
+        repo.save_opportunity(conn, opp, run_id="r", org_id=DEFAULT_ORG_ID)
+        assert repo.list_opportunities(conn, org_id=DEFAULT_ORG_ID)[0]["needs_human_check"] is False
 
 
 def test_month_summary_counts(db):
     with session(db) as conn:
-        repo.save_opportunity(conn, _opp(), run_id="r")
-        summary = archive.month_summary(conn)
+        repo.save_opportunity(conn, _opp(), run_id="r", org_id=DEFAULT_ORG_ID)
+        summary = archive.month_summary(conn, org_id=DEFAULT_ORG_ID)
     assert summary["current_month"] == month_key()
     assert summary["months"][0]["total"] == 1
 
@@ -370,7 +370,7 @@ def test_sources_sharing_a_funder_name_get_separate_rows(db):
     from app.db import REMOVE_LIST_SEED
 
     with session(db) as conn:
-        seeded = repo.list_funders(conn)
+        seeded = repo.list_funders(conn, org_id=DEFAULT_ORG_ID)
 
     # The table also holds remove-list-only rows — entries that are not crawl sources,
     # like the County Equity Impact Grant, which is a PROGRAMME rather than a funder.
@@ -397,8 +397,8 @@ def test_indexed_adapters_survive_the_round_trip(db):
 
 
 def test_unticking_a_sector_also_stops_its_indexed_sources(db):
-    """The CA Grants Portal and Grants.gov are government money. If Mauri unticks
-    government funding, not searching the government's own databases is what she
+    """The CA Grants Portal and Grants.gov are government money. If the user unticks
+    government funding, not searching the government's own databases is what they
     asked for — the tick has to mean the same thing everywhere."""
     from agent.sources import Tier, sources_from_db
 
@@ -428,16 +428,16 @@ def test_credit_never_lands_on_an_unchecked_source():
 def test_source_kind_survives_the_sink(db):
     """Provenance was being dropped on the way into the database, so every record read
     back as a funder page regardless of where it came from — and the dashboard could
-    not tell Mauri which results came from a public database rather than a partner."""
+    not tell the user which results came from a public database rather than a partner."""
     from agent.models import SourceKind
 
     with session(db) as conn:
         repo.save_opportunity(conn, _opp(
             id="from-db", title="A state grant",
             source_url="https://example.invalid/state",
-            source_kind=SourceKind.INDEXED_DATABASE), run_id="r")
-        repo.save_opportunity(conn, _opp(source_kind=SourceKind.FUNDER_PAGE), run_id="r")
-        rows = {o["id"]: o for o in repo.list_opportunities(conn)}
+            source_kind=SourceKind.INDEXED_DATABASE), run_id="r", org_id=DEFAULT_ORG_ID)
+        repo.save_opportunity(conn, _opp(source_kind=SourceKind.FUNDER_PAGE), run_id="r", org_id=DEFAULT_ORG_ID)
+        rows = {o["id"]: o for o in repo.list_opportunities(conn, org_id=DEFAULT_ORG_ID)}
 
     assert rows["from-db"]["source_kind"] == "indexed_database"
     assert rows[stable_id("https://example.invalid/a", "A grant")]["source_kind"] \
@@ -448,8 +448,8 @@ def test_sqlite_sink_creates_its_own_schema(tmp_path, monkeypatch):
     """The sink is the last thing a multi-minute run does, so the database it opens at
     the end need not be the one it read config from at the start. Losing a whole
     scored run to `no such table` at the final step is the most expensive way to fail."""
-    monkeypatch.setenv("RISE_DB_PATH", str(tmp_path / "gone.db"))
-    monkeypatch.setenv("RISE_KEYFILE", str(tmp_path / ".fernet-key"))
+    monkeypatch.setenv("FUNDWORTHY_DB_PATH", str(tmp_path / "gone.db"))
+    monkeypatch.setenv("FUNDWORTHY_KEYFILE", str(tmp_path / ".fernet-key"))
 
     from sinks.sqlite import SqliteSink
 
@@ -458,13 +458,13 @@ def test_sqlite_sink_creates_its_own_schema(tmp_path, monkeypatch):
     assert sink.write_opportunities([_opp()]) == 1
 
     with session() as conn:
-        assert len(repo.list_opportunities(conn)) == 1
+        assert len(repo.list_opportunities(conn, org_id=DEFAULT_ORG_ID)) == 1
 
 
 # --- one exclusion mechanism, not two -----------------------------------------
 #
 # filters.py used to carry a hardcoded EXCLUDED_FUNDERS beside the remove list. Two
-# problems: "excluded" meant two different things, only one of which Mauri could see —
+# problems: "excluded" meant two different things, only one of which the user could see —
 # and the hardcoded one NEVER FIRED. It matched on funder name, and no source is called
 # "County of San Diego Equity Impact Grant"; the registry has "County of San Diego".
 # Zero occurrences across every recorded run, while presenting as a working §7 filter.
@@ -473,12 +473,12 @@ def test_the_hardcoded_exclusion_list_is_gone(db):
     import agent.filters as filters
 
     assert not hasattr(filters, "EXCLUDED_FUNDERS"), \
-        "exclusion lives on the remove list, which Mauri controls — nowhere else"
+        "exclusion lives on the remove list, which the user controls — nowhere else"
 
 
 def test_the_eight_former_partners_ship_on_the_remove_list(db):
     with session(db) as conn:
-        removed = {f["name"] for f in repo.list_funders(conn) if not f["active"]}
+        removed = {f["name"] for f in repo.list_funders(conn, org_id=DEFAULT_ORG_ID) if not f["active"]}
     for name in ("San Diego Foundation", "Alliance Healthcare Foundation",
                  "Prebys Foundation", "City of San Diego Economic Development",
                  "City of San Diego Commission for Arts and Culture",
@@ -488,7 +488,7 @@ def test_the_eight_former_partners_ship_on_the_remove_list(db):
 
 def test_every_removal_records_why(db):
     with session(db) as conn:
-        removed = [f for f in repo.list_funders(conn) if not f["active"]]
+        removed = [f for f in repo.list_funders(conn, org_id=DEFAULT_ORG_ID) if not f["active"]]
     assert removed
     for f in removed:
         assert f["exclude_reason"], f"{f['name']} was removed with no reason recorded"
@@ -500,7 +500,7 @@ def test_a_named_programme_can_be_removed_without_removing_its_funder(db):
     from agent.run import _on_remove_list
 
     with session(db) as conn:
-        excluded = repo.excluded_funder_names(conn)
+        excluded = repo.excluded_funder_names(conn, org_id=DEFAULT_ORG_ID)
 
     assert _on_remove_list("County of San Diego",
                            "Equity Impact Grant — County of San Diego", excluded)
@@ -512,7 +512,7 @@ def test_removing_a_funder_removes_all_of_its_pages(db):
     from agent.run import _on_remove_list
 
     with session(db) as conn:
-        excluded = repo.excluded_funder_names(conn)
+        excluded = repo.excluded_funder_names(conn, org_id=DEFAULT_ORG_ID)
     assert _on_remove_list("California Arts Council", "Grants", excluded)
     assert _on_remove_list("California Arts Council", "Grant Programs", excluded)
 
@@ -521,7 +521,7 @@ def test_a_funder_not_on_the_list_is_untouched(db):
     from agent.run import _on_remove_list
 
     with session(db) as conn:
-        excluded = repo.excluded_funder_names(conn)
+        excluded = repo.excluded_funder_names(conn, org_id=DEFAULT_ORG_ID)
     assert not _on_remove_list("The Parker Foundation", "Grant Making", excluded)
     assert not _on_remove_list("W.K. Kellogg Foundation", "Grantseekers", excluded)
 
@@ -544,7 +544,7 @@ def test_seeding_is_idempotent_and_does_not_duplicate_names(db):
 
     init_db(db); init_db(db)
     with session(db) as conn:
-        names = [f["name"] for f in repo.list_funders(conn)]
+        names = [f["name"] for f in repo.list_funders(conn, org_id=DEFAULT_ORG_ID)]
     dupes = [n for n, c in Counter(names).items() if c > 1]
     # Grants.gov and SAM.gov legitimately share a funder name; nothing else may.
     assert dupes == ["U.S. Federal Government"], f"unexpected duplicates: {dupes}"

@@ -1,9 +1,9 @@
-"""Static JSON sink for the website. (CLAUDE.md §4; decision A6 Opt 2)
+"""Static JSON sink for the website. (CLAUDE.md; decision A6 Opt 2)
 
 Writes ONE committed file the read-only site loads directly — no serverless reader, no
 Google credential in a browser, and the Sheet stays private. The website renders these
-opportunities for Mauri to review and prune; the ones she keeps get exported to her own
-Google Sheet via her Gmail later (Phase 3). This sink only produces the data file.
+opportunities for the user to review and prune; the ones they keep get exported to their own
+Google Sheet via their Gmail later (Phase 3). This sink only produces the data file.
 
 Only public-safe fields are emitted (an explicit allowlist). Any award or deadline that
 did not survive the accuracy gate (agent/verify.py) is already null on the record, so
@@ -47,7 +47,11 @@ class WebJsonSink:
 
     name = "web"
 
-    def __init__(self, out_path: str | Path = "dashboard/public/run.json") -> None:
+    # NOT `dashboard/public/`. Vite copies that directory verbatim into `dashboard/dist/`
+    # on every build, and app/main.py serves `dist/` to unauthenticated callers through
+    # the SPA catch-all — so writing findings there meant the next `npm run build`
+    # published them at /run.json. Default somewhere nothing serves from.
+    def __init__(self, out_path: str | Path = "data/run.json") -> None:
         self.out_path = Path(out_path)
         self.out_path.parent.mkdir(parents=True, exist_ok=True)
         self._opportunities: list[Opportunity] = []

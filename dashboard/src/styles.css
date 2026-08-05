@@ -1,7 +1,7 @@
-/* Fundworthy — warm paper, sage, clay. (UI-ROADMAP.md, Phase 1)
+/* Fundworthy — warm paper, sage, clay. (FUTURE.md)
 
    What is NOT cosmetic and must survive any future restyle. These are correctness
-   requirements from CLAUDE.md §6, not preferences:
+   requirements from CLAUDE.md, not preferences:
 
      .chip.inferred    marks a value the AI judged rather than read off the funder's
                        page. Dashed --dash border + a visible "AI" mark. If that
@@ -16,7 +16,7 @@
 
    Dark mode: deliberately dropped in this pass. The old cool-grey dark palette would
    have clashed with the warm light one, and shipping a half-converted dark theme is
-   worse than shipping none. See UI-ROADMAP.md Phase 1. */
+   worse than shipping none. See FUTURE.md. */
 
 :root {
   --bg: #F7F5F1;          /* warm paper */
@@ -545,6 +545,15 @@ tbody tr:last-child td { border-bottom: none; }
   display: block; font-size: 10px; font-weight: 400; letter-spacing: .08em;
   text-transform: uppercase; color: var(--muted);
 }
+/* The rank. Deliberately quieter than the fit numeral above it — it explains the
+   ordering rather than competing to be read first — but present, because a sorted list
+   with no visible sort key reads as arbitrary. Solid, not dashed: unlike fit, the score
+   is computed from the funder's own page against weights the COO set. */
+.opp-rank {
+  display: block; margin-top: 5px; font-size: 12.5px; font-weight: 500;
+  color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.opp-rank-unit { font-size: 10px; opacity: .7; }
 .opp-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .opp-funder { font-weight: 600; font-size: 15.5px; }
 .opp-title { font-size: 14px; color: var(--body); margin: 2px 0 8px; }
@@ -788,3 +797,63 @@ button.authbrand:hover { border-color: transparent; }
   margin: 22px 0 0; font-size: 13px; color: var(--muted);
   max-width: 380px; text-align: center;
 }
+
+/* --- organization: members, invites, spend -------------------------------- */
+
+/* The switcher became a label (see OrgSwitcher.jsx). It keeps the button's box so the
+   sidebar layout is unchanged, minus every affordance that implied it could be clicked. */
+.orgswitch-label.static {
+  padding: 9px 11px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--card); width: 100%;
+}
+.orgswitch-label.static .orgswitch-name { font-weight: 600; }
+
+.spend { margin: 4px 0 18px; }
+.spend-row { display: flex; align-items: baseline; gap: 8px; margin-bottom: 7px; }
+.spend-row strong { font-size: 22px; letter-spacing: -0.01em; }
+
+.meter {
+  height: 7px; border-radius: 99px; background: var(--line-soft);
+  overflow: hidden; margin-bottom: 7px;
+}
+.meter > span { display: block; height: 100%; border-radius: 99px; background: var(--accent); }
+.meter.warn > span { background: #C08A3E; }
+.meter.over > span { background: #B4503F; }
+
+.sub { font-size: 14px; margin: 20px 0 8px; }
+ul.plain { list-style: none; padding: 0; margin: 0 0 12px; }
+
+.member, .invite {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 9px 0; border-bottom: 1px solid var(--line-soft);
+}
+.member > span:first-child { font-weight: 500; }
+.member > .small { margin-left: auto; }
+
+/* The code gets read aloud and retyped, so it is spaced and monospaced rather than set
+   in the body face where 8/B and 5/S sit close together. */
+.invite-code {
+  font-family: var(--mono); font-size: 15px; letter-spacing: 0.09em;
+  padding: 5px 9px; background: var(--accent-soft); color: var(--accent-deep);
+  border-radius: 8px;
+}
+button.text.danger { color: #B4503F; margin-left: auto; }
+
+.welcome { max-width: 560px; }
+.join { display: flex; flex-wrap: wrap; gap: 9px; align-items: flex-end; margin: 14px 0 6px; }
+.join label { flex-basis: 100%; font-size: 13px; color: var(--muted); }
+.join input {
+  flex: 1 1 220px; font-family: var(--mono); font-size: 16px;
+  letter-spacing: 0.09em; text-transform: uppercase;
+}
+
+.steps { list-style: none; padding: 0; margin: 14px 0 0; counter-reset: step; }
+.step { display: flex; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line-soft); }
+.step-n {
+  flex: 0 0 26px; height: 26px; border-radius: 99px; display: grid; place-items: center;
+  font-size: 13px; font-weight: 600;
+  background: var(--line-soft); color: var(--muted);
+}
+.step.done .step-n { background: var(--accent-soft); color: var(--accent); }
+.step.done > div > strong { color: var(--muted); font-weight: 500; }
+.step p { margin: 3px 0 0; }

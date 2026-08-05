@@ -3,9 +3,9 @@ import { pacificStamp } from "../api";
 // One line, always on screen: is the researcher on, when did it last run, what has it
 // spent against the ceiling, and the way in to the knobs.
 //
-// The spend is not optional and not collapsible. CLAUDE.md §8 caps a run at $1.00, and
-// the whole product only works if Mauri trusts that — so the ceiling, the spend, and the
-// reason the run stopped are here, not in a log file she would have to be shown how to
+// The spend is not optional and not collapsible. CLAUDE.md caps a run at $1.00, and
+// the whole product only works if the user trusts that — so the ceiling, the spend, and the
+// reason the run stopped are here, not in a log file they would have to be shown how to
 // find. This is the third of the correctness rules at the top of styles.css.
 
 const STOP_REASONS = {
@@ -22,7 +22,7 @@ export default function StatusStrip({ enabled, run, ceiling, knobsOpen, onToggle
   const pct = Math.min(100, (spent / (ceiling || 1)) * 100);
 
   // One broken funder and a genuinely quiet week both produce a short list. Saying which
-  // is the difference between a list she can trust and one she has to re-check by hand.
+  // is the difference between a list they can trust and one they have to re-check by hand.
   const broken = (run?.source_health || []).filter(
     (h) => h.status === "unreachable" || h.status === "unparseable"
   );
@@ -45,7 +45,7 @@ export default function StatusStrip({ enabled, run, ceiling, knobsOpen, onToggle
 
         <span className="status-item">
           {/* Four decimals, not two. A run that cost $0.0043 rendered as "$0.00" reads
-              as free, and the point of showing spend at all is that she can see the
+              as free, and the point of showing spend at all is that they can see the
               real number move. */}
           Spent <strong>${spent.toFixed(4)}</strong> of ${ceiling.toFixed(2)}
           <span

@@ -1,4 +1,4 @@
-"""The source registry — what the crawler actually visits. (CLAUDE.md §11 Q2)
+"""The source registry — what the crawler actually visits. (CLAUDE.md Q2)
 
 Tiering is deliberate. Tier 1 is live now; tiers 2 and 3 are registered but disabled
 so the crawl scope can be widened by flipping a flag rather than by writing code.
@@ -32,7 +32,7 @@ class Tier(IntEnum):
     """
 
     INDEXED = 0       # complete lists behind a public API (see apis.py)
-    WARM = 1          # the 8 funders Mauri confirmed warm (§7)
+    WARM = 1          # the 8 funders the user confirmed warm (§7)
     INTERMEDIARY = 2  # networks and conveners that aggregate opportunities
     GOVERNMENT = 3    # public RFPs and procurement (§11 Q3 — doubles scope)
 
@@ -55,7 +55,7 @@ class Source:
     confidence: Confidence = Confidence.LIKELY
     warm: bool = False
     notes: str = ""
-    sector: str = ""   # blank => derived by sector_for(); see STAKEHOLDER.md Q10
+    sector: str = ""   # blank => derived by sector_for(); see FUTURE.md
     adapter: str | None = None   # key into apis.ADAPTERS; None means crawl the HTML
 
     @property
@@ -70,10 +70,10 @@ class Source:
 def sector_for(source: "Source") -> str:
     """Which funding sector this source belongs to.
 
-    Mauri named four sectors she wants funding found in but we do not yet have the
-    list (STAKEHOLDER.md Q10). Rather than guess at four names, every source carries a
+    the user named four sectors they want funding found in but we do not yet have the
+    list (FUTURE.md). Rather than guess at four names, every source carries a
     sector tag derived from what we already know, and the dashboard exposes them as
-    checkboxes. When she gives us the real four, this function and the labels change —
+    checkboxes. When they give us the real four, this function and the labels change —
     no pipeline code does.
     """
     if source.sector:
@@ -83,8 +83,8 @@ def sector_for(source: "Source") -> str:
     if source.tier in (Tier.GOVERNMENT, Tier.INDEXED):
         # The two indexed lists are the CA Grants Portal and Grants.gov — state and
         # federal money. Tagging them "government" means the sector checkbox governs
-        # them like any other source: if Mauri unticks government funding, not
-        # searching the government's own grant databases is what she asked for.
+        # them like any other source: if the user unticks government funding, not
+        # searching the government's own grant databases is what they asked for.
         return "government"
     if source.tier == Tier.INTERMEDIARY:
         return "intermediary"
@@ -130,7 +130,7 @@ INDEXED_SOURCES: list[Source] = [
 ]
 
 
-# --- Tier 1: the eight warm funders (§7, confirmed warm by Mauri) --------------
+# --- Tier 1: the eight warm funders (§7, confirmed warm by the user) --------------
 
 WARM_SOURCES: list[Source] = [
     Source(
@@ -286,9 +286,9 @@ def _researched() -> list[Source]:
     return RESEARCHED_SOURCES
 
 
-# WARM_SOURCES stays in the registry, but its meaning has changed. RISE already receives
-# money from those funders and does not want to reapply, so they are seeded like anything
-# else and Mauri puts the ones she means on the remove list. They are no longer a
+# WARM_SOURCES stays in the registry, but its meaning has changed. The organization already
+# receives money from those funders and does not want to reapply, so they are seeded like
+# anything else and the user puts the ones they mean on the remove list. They are no longer a
 # priority — see agent/sd_funders.py for what replaced them as the actual target.
 ALL_SOURCES: list[Source] = (
     INDEXED_SOURCES + WARM_SOURCES + INTERMEDIARY_SOURCES + GOVERNMENT_SOURCES
@@ -312,9 +312,9 @@ def unconfirmed_sources(max_tier: Tier = Tier.WARM) -> list[Source]:
 # --- the database-backed registry ---------------------------------------------
 #
 # The lists above are now the SHIPPED SEED, not the live registry. On first boot they
-# are copied into the funders table (app/db.py seed_funders) and from then on Mauri
-# owns the list: she adds partners, edits URLs, and — the case that motivated this —
-# DEACTIVATES a partner who stops funding RISE, without losing the relationship record.
+# are copied into the funders table (app/db.py seed_funders) and from then on the user
+# owns the list: they add partners, edit URLs, and — the case that motivated this —
+# DEACTIVATE a partner who stops funding the organization, without losing the relationship record.
 #
 # They stay here rather than being deleted because they carry the URL-confidence
 # research from the first crawls (see the notes on each entry), and because a fresh
@@ -322,19 +322,23 @@ def unconfirmed_sources(max_tier: Tier = Tier.WARM) -> list[Source]:
 
 def sources_from_db(max_tier: Tier = Tier.WARM,
                     sectors: list[str] | None = None,
-                    db_path=None) -> tuple[list[Source], list[Source]] | None:
+                    db_path=None,
+                    org_id: str | None = None) -> tuple[list[Source], list[Source]] | None:
     """(fetchable, unconfirmed) built from the funders table, or None if unavailable.
 
-    `sectors` is the set of sector tags Mauri ticked for this run. An empty or missing
+    `sectors` is the set of sector tags the user ticked for this run. An empty or missing
     list means "no sector filter" rather than "nothing" — silently searching nothing
     would look identical to a quiet week, which is the one ambiguity this project
     cannot afford.
     """
     try:
+        from app.db import DEFAULT_ORG_ID
         from app.db import db_path as default_db_path
         from app.db import loads, session
     except ImportError:
         return None
+
+    scope = org_id or DEFAULT_ORG_ID
 
     target = db_path or default_db_path()
     if db_path is None and not default_db_path().exists():
@@ -343,7 +347,8 @@ def sources_from_db(max_tier: Tier = Tier.WARM,
     try:
         with session(target) as conn:
             rows = [dict(r) for r in conn.execute(
-                "SELECT * FROM funders WHERE active=1 ORDER BY warm DESC, name")]
+                "SELECT * FROM funders WHERE active=1 AND org_id=? "
+                "ORDER BY warm DESC, name", (scope,))]
     except Exception:  # noqa: BLE001
         return None
 

@@ -1,19 +1,20 @@
 import { useEffect, useState } from "react";
+import Organization from "../components/Organization";
 import { api } from "../api";
 
 // The API key page.
 //
-// CLAUDE.md §2 said "Mauri never sees a terminal, a repo, a config file, or an API key."
+// CLAUDE.md said "the user never sees a terminal, a repo, a config file, or an API key."
 // The last of those has changed, deliberately: §11 Q6 asks who owns the key and the bill,
 // and there is no honest answer that does not involve someone at the organisation holding
-// it. What survives is the part that mattered — she handles it in one box, once, and
+// it. What survives is the part that mattered — they handle it in one box, once, and
 // never again. The three-step walkthrough is the rest of that promise: "go to
 // console.anthropic.com" is not instructions to someone who has never been there.
 //
 // The box is write-only. Once saved, the key is encrypted on disk and no endpoint will
 // return it; the page can only ever show the last four characters. That is why there is a
-// "Check it still works" control — she can confirm the saved key is good without anyone
-// having to read it back to her.
+// "Check it still works" control — they can confirm the saved key is good without anyone
+// having to read it back to them.
 
 const STEPS = [
   <>
@@ -205,14 +206,22 @@ function OrgPanel({ settings, onChange }) {
             onChange={(e) => setDraft({ ...draft, org_name: e.target.value })}
           />
         </label>
+        {/* Not a filter. It used to feed a geographic reject that ran on the words of
+            every page, which was the wrong instrument — where you can apply is decided
+            by which funders you chose to search, not by pattern-matching prose. This
+            now only picks which city's funder directory you are shown first. */}
         <label className="field">
-          <span>Where you work</span>
+          <span>Your city</span>
           <input
             type="text"
             value={draft.org_location}
-            placeholder="San Diego County, California"
+            placeholder="San Diego, California"
             onChange={(e) => setDraft({ ...draft, org_location: e.target.value })}
           />
+          <span className="muted small">
+            Only decides which funders we show you first. It never hides a grant from
+            you — that is the funder list's job, and yours.
+          </span>
         </label>
       </div>
 
@@ -226,7 +235,7 @@ function OrgPanel({ settings, onChange }) {
 
       <p className="muted small">
         Inviting teammates and switching between organizations needs accounts, which this
-        version does not have — see HANDOFF.md.
+        version does not have — see FUTURE.md.
       </p>
     </section>
   );
@@ -244,6 +253,7 @@ export default function Settings({ state, onChange }) {
 
       <KeyPanel state={state} onChange={onChange} />
       <OrgPanel settings={state.settings} onChange={onChange} />
+      <Organization spend={state.spend} onChange={onChange} />
 
       <section className="panel">
         <h2>Turning it off</h2>
@@ -258,9 +268,10 @@ export default function Settings({ state, onChange }) {
         <h2>Where your data lives</h2>
         <p className="settings-lede">
           Everything — your programs, your funder list, this month's findings, and the key
-          — is in a single file on this computer (<code>data/rise.db</code>). Nothing is
-          sent anywhere except the funder pages the researcher reads and the Claude API
-          that scores them. The app is not reachable from the internet.
+          — is in a single database on the server this app runs on. Nothing is sent
+          anywhere except the funder pages the researcher reads and the Claude API that
+          scores them, and your searches run on your own key so they are billed to you and
+          visible to nobody else.
         </p>
       </section>
     </>
