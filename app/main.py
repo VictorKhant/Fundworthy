@@ -767,7 +767,14 @@ def create_app() -> FastAPI:
     if DIST.exists():
         app.mount("/assets", StaticFiles(directory=DIST / "assets"), name="assets")
 
-        @app.get("/{path:path}", include_in_schema=False)
+        # GET *and* HEAD. FastAPI, unlike a plain Starlette route, does not add HEAD
+        # alongside GET, so every page and every static file answered `405 Method Not
+        # Allowed` to a HEAD — including robots.txt and sitemap.xml. HTTP requires HEAD
+        # wherever GET is served (it is defined as GET without the body), and the clients
+        # that use it are exactly the ones we care about here: crawlers checking a file's
+        # type and size before downloading it, and uptime monitors, which read a 405 as
+        # the site being down.
+        @app.api_route("/{path:path}", methods=["GET", "HEAD"], include_in_schema=False)
         def spa(path: str):
             """Serve the built dashboard, falling back to index.html for client routes.
 
