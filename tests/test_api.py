@@ -20,7 +20,8 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tests.helpers import seed_starter_funders  # noqa: E402
+from tests.helpers import (seed_starter_funders,  # noqa: E402
+                           seed_starter_programs)
 
 from app import secrets
 from app.db import DEFAULT_ORG_ID, init_db, session
@@ -35,6 +36,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     init_db()
     seed_starter_funders()
+    seed_starter_programs()
 
     from app.main import create_app
 
@@ -394,6 +396,7 @@ def test_stopping_a_run_is_not_recorded_as_a_failure():
 
     init_db()
     seed_starter_funders()
+    seed_starter_programs()
     with session() as conn:
         run_id = repo.create_run(conn, org_id=DEFAULT_ORG_ID)
 

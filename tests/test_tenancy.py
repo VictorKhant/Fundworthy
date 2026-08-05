@@ -21,7 +21,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tests.helpers import seed_starter_funders  # noqa: E402
+from tests.helpers import (seed_starter_funders,  # noqa: E402
+                           seed_starter_programs)
 
 from app import archive, repo, secrets           # noqa: E402
 from app.db import (DEFAULT_ORG_ID, ensure_org, init_db, month_key,  # noqa: E402
@@ -40,6 +41,7 @@ def db(tmp_path, monkeypatch):
     monkeypatch.setenv("FUNDWORTHY_KEYFILE", str(tmp_path / ".fernet-key"))
     init_db(path)
     seed_starter_funders(path)
+    seed_starter_programs(path)
     with session(path) as conn:
         ensure_org(conn, B, "Second Nonprofit")
     return path
@@ -587,8 +589,48 @@ def test_two_new_accounts_get_the_same_thing(tmp_path, monkeypatch):
         second = org_for_user(conn, "uid-2", "my.friend@example.org")
 
         assert first != second
-        assert (len(repo.list_funders(conn, org_id=first))
-                == len(repo.list_funders(conn, org_id=second)) == 0)
+        for org in (first, second):
+            assert repo.list_funders(conn, org_id=org) == []
+            assert repo.list_programs(conn, org_id=org) == []
+
+
+def test_a_new_org_gets_no_program_cards(tmp_path, monkeypatch):
+    """A funder list is shared knowledge — who gives money, in this city — so one org's
+    research helps the next. A program card is the opposite: it describes what *this*
+    nonprofit does, in their words, so another org's cards are not merely unhelpful but
+    wrong. Seven cards about somebody else's arts programme made the app look configured
+    when it was not, and the newcomer's first job was working out what to delete."""
+    path = tmp_path / "rise.db"
+    monkeypatch.setenv("FUNDWORTHY_DB_PATH", str(path))
+    monkeypatch.setenv("FUNDWORTHY_KEYFILE", str(tmp_path / ".fernet-key"))
+    monkeypatch.delenv("FUNDWORTHY_PILOT_EMAILS", raising=False)
+    init_db(path)
+
+    with session(path) as conn:
+        # Even the default org, which is what a first sign-in claims.
+        assert repo.list_programs(conn, org_id=DEFAULT_ORG_ID) == []
+
+        org = org_for_user(conn, "uid-1", "new@example.org")
+        assert repo.list_programs(conn, org_id=org) == []
+        # ...but they do get working settings, so the app is configured, just empty.
+        assert repo.get_settings(conn, org_id=org)["min_award"] == 10_000
+
+
+def test_a_run_with_no_program_cards_says_so_rather_than_searching_for_nothing(
+        tmp_path, monkeypatch):
+    """An empty dashboard is the intended first five minutes, so the pipeline has to
+    handle it as a state rather than an error."""
+    from agent.config import load_from_db
+
+    path = tmp_path / "rise.db"
+    monkeypatch.setenv("FUNDWORTHY_DB_PATH", str(path))
+    monkeypatch.setenv("FUNDWORTHY_KEYFILE", str(tmp_path / ".fernet-key"))
+    init_db(path)
+
+    cfg = load_from_db(path)
+    assert cfg is not None
+    assert cfg.programs == []
+    assert cfg.programs_active == []
 
 
 def test_a_starter_list_can_be_imported_and_is_idempotent(db):

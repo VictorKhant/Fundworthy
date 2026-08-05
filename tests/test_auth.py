@@ -32,7 +32,8 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tests.helpers import seed_starter_funders  # noqa: E402
+from tests.helpers import (seed_starter_funders,  # noqa: E402
+                           seed_starter_programs)
 
 from app import auth
 from app.db import init_db
@@ -85,6 +86,7 @@ def _client(tmp_path, monkeypatch, keypair, **env):
         monkeypatch.setenv(k, v)
     init_db()
     seed_starter_funders()
+    seed_starter_programs()
 
     from app.main import create_app
 
