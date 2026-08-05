@@ -395,11 +395,33 @@ def seed_org(conn: sqlite3.Connection, org_id: str) -> None:
     the assistant drafts a card you correct. That is the intended first five minutes, and
     it only works if the page is actually empty.
 
+    **Funders are the exception, and they come back.** They were seeded, then removed
+    entirely when it turned out whoever signed in first inherited 52 and the next account
+    got none. Removing them fixed the unfairness and introduced a worse problem: a new
+    account opened onto an empty list, and a Re-run with no funders does nothing at all.
+    Every org now gets the same starter lists, so it is even *and* the app works on the
+    first click. Which lists is `agent/directory.DEFAULT_ON_SIGNUP`, and choosing your own
+    city is the Discover funders page.
+
     Settings still reconcile on every boot rather than once: `seed_settings` is INSERT ...
     ON CONFLICT DO NOTHING per key, so a genuinely new setting appears for an existing org
     without touching a value anyone has chosen.
     """
     seed_settings(conn, org_id)
+
+    # Once. The marker is what stops a restart or a pipeline run resurrecting a funder
+    # the org deliberately removed — the bug this whole seeding path had before.
+    marker = f"seeded_at:{org_id}"
+    if conn.execute("SELECT 1 FROM meta WHERE key=?", (marker,)).fetchone():
+        return
+
+    from agent.directory import DEFAULT_ON_SIGNUP
+
+    for key in DEFAULT_ON_SIGNUP:
+        import_starter_list(conn, key, org_id)
+    conn.execute("INSERT INTO meta(key, value) VALUES(?,?) "
+                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                 (marker, now_iso()))
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
@@ -673,17 +695,11 @@ def org_for_user(conn: sqlite3.Connection, uid: str, email: str) -> str:
         (uid, email, org_id, now_iso(), now_iso()),
     )
     if org_id != DEFAULT_ORG_ID:
-        # Settings only — deliberately NOT the funders or the program cards.
-        #
-        # A new nonprofit signing up must not land on a dashboard pre-loaded with 44 San
-        # Diego funders and seven program cards belonging to the pilot org. That data is
-        # not theirs, it is wrong for anywhere outside California, and it makes the app
-        # look broken before they have done anything. They get working defaults and an
-        # empty funder list, and onboarding fills it in.
-        seed_settings(conn, org_id)
-        conn.execute("INSERT INTO meta(key, value) VALUES(?,?) "
-                     "ON CONFLICT(key) DO NOTHING",
-                     (f"seeded_at:{org_id}", now_iso()))
+        # The same provisioning the default org gets, so "what do I start with" has one
+        # answer rather than depending on which door you came through. Settings, and the
+        # starter funder lists — **not** program cards, which describe what one nonprofit
+        # does and are wrong for anybody else.
+        seed_org(conn, org_id)
     log.info("first sign-in for %s — assigned to org %s", email, org_id)
     return org_id
 

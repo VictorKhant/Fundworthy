@@ -172,8 +172,12 @@ nonprofit signs up, gets an empty list, and has to know the names of their own l
 foundations before the product does anything for them. Hand-researching a second city
 does not fix it either — it just moves the cliff.
 
-**The page.** A third section, between *This week* and *Past findings*: a directory of
-grantmakers **by city**. Not this week's opportunities — the standing list of who gives
+**The page exists** — *Discover funders*, above Settings in the sidebar. It holds the
+starter lists and the funder list itself, and a disabled card describing the part below.
+What follows is what that card is a placeholder for.
+
+**By city.** Today there is one city, so the lists are flat. A directory of grantmakers
+**by city** Not this week's opportunities — the standing list of who gives
 money where. An org browses it, picks the cities they can apply in, and those funders
 feed the weekly search. Selecting cities on the dashboard replaces every notion of a
 geographic filter (see the note at the top of `agent/filters.py` for why the old one is

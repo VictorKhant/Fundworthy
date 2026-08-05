@@ -477,19 +477,20 @@ def test_a_revoked_invite_cannot_be_used(db):
 
 # --- a new org starts clean ---------------------------------------------------
 
-def test_a_new_org_does_not_inherit_the_pilots_funders_or_programs(db):
-    """A nonprofit in Chicago must not sign in to 44 San Diego funders and seven program
-    cards belonging to somebody else. It looks broken, and none of it is theirs."""
+def test_a_new_org_gets_the_starter_funders_but_none_of_the_pilots_own_data(db):
+    """A newcomer gets the shipped funder lists — an empty list means Re-run does nothing
+    — but nothing that belongs to the pilot: not their program cards, and not their
+    remove-list decisions, which record relationships a stranger does not have."""
     with session(db) as conn:
         org_for_user(conn, "uid-1", "first@example.org")          # adopts the pilot org
         newcomer = org_for_user(conn, "uid-2", "second@example.org")
 
-        assert repo.list_funders(conn, org_id=newcomer) == []
+        funders = repo.list_funders(conn, org_id=newcomer)
+        assert len(funders) > 40
+        assert all(f["active"] for f in funders), (
+            "the pilot's 'we already get money from them' is not a newcomer's")
         assert repo.list_programs(conn, org_id=newcomer) == []
-        # ...but they still get working defaults rather than an unconfigured app.
         assert repo.get_settings(conn, org_id=newcomer)["min_award"] == 10_000
-        # ...and the pilot org keeps everything.
-        assert len(repo.list_funders(conn, org_id=A)) > 40
 
 
 # --- deploy safety ------------------------------------------------------------
@@ -589,8 +590,12 @@ def test_two_new_accounts_get_the_same_thing(tmp_path, monkeypatch):
         second = org_for_user(conn, "uid-2", "my.friend@example.org")
 
         assert first != second
+        counts = {org: len(repo.list_funders(conn, org_id=org))
+                  for org in (first, second)}
+        assert len(set(counts.values())) == 1, counts
+        assert all(n > 0 for n in counts.values()), "an empty list means Re-run does nothing"
+        # Program cards are the exception: they describe one nonprofit's own work.
         for org in (first, second):
-            assert repo.list_funders(conn, org_id=org) == []
             assert repo.list_programs(conn, org_id=org) == []
 
 
@@ -685,3 +690,28 @@ def test_importing_is_scoped_to_your_own_org(db):
 
         assert len(repo.list_funders(conn, org_id=B)) == 1
         assert len(repo.list_funders(conn, org_id=A)) == before_a
+
+
+def test_a_new_account_can_actually_run_a_search(db):
+    """The production bug this fixes: a new account opened onto an empty funder list, so
+    Re-run had nothing to search and did nothing. Whatever else is true of a new org, the
+    pipeline must have sources to work with."""
+    from agent.sources import Tier, sources_from_db
+
+    with session(db) as conn:
+        newcomer = org_for_user(conn, "uid-new", "newcomer@example.org")
+        assert len(repo.list_funders(conn, org_id=newcomer)) > 40
+
+    fetchable, _ = sources_from_db(Tier.GOVERNMENT, [], db_path=db, org_id=newcomer)
+    assert len(fetchable) > 0, "a new org's funders never reach the crawler"
+
+
+def test_the_starter_lists_include_the_grant_databases(db):
+    """Grants.gov and the CA portal are searched as databases rather than crawled, and
+    they are the two sources that are useful to an org anywhere. A new account that got
+    only hand-researched San Diego pages would be missing the half that generalises."""
+    with session(db) as conn:
+        newcomer = org_for_user(conn, "uid-new", "newcomer@example.org")
+        adapters = {f["adapter"] for f in repo.list_funders(conn, org_id=newcomer)}
+
+    assert {"grants_gov", "ca_grants_portal"} <= adapters

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
 import { authEnabled, authError, currentUser, initAuth, onUserChange, signOutNow } from "./auth";
-import GettingStarted from "./components/GettingStarted";
 import JoinOrg from "./components/JoinOrg";
+import Tutorial from "./components/Tutorial";
 import Sidebar from "./components/Sidebar";
 import Archive from "./pages/Archive";
 import Dashboard from "./pages/Dashboard";
+import Discover from "./pages/Discover";
 import Landing from "./pages/Landing";
 import Login from "./pages/Login";
 import Settings from "./pages/Settings";
@@ -50,7 +51,7 @@ function initialScreen() {
 // six lines: a refresh no longer throws you back to the dashboard, you can send someone
 // a link to the page you mean, and the section is addressable — which is what lets the
 // handoff guide be built from screenshots of the real thing rather than mock-ups.
-const PAGES = ["dashboard", "archive", "settings"];
+const PAGES = ["dashboard", "archive", "discover", "settings"];
 
 function initialPage() {
   const want = window.location.hash.replace(/^#\/?/, "");
@@ -106,6 +107,10 @@ export default function App() {
   // Set once the person says "I'm setting this up for the first time", so the join
   // prompt does not come back on every refresh of a still-empty dashboard.
   const [startedFresh, setStartedFresh] = useState(false);
+  // Lets someone who has finished the walkthrough keep using the app in the same session
+  // even if a step is technically incomplete — clicking Finish is a decision, and
+  // re-imposing the guide after it would be nagging.
+  const [tutorialDone, setTutorialDone] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -188,6 +193,14 @@ export default function App() {
   // joining a colleague?" a real question — redeeming a code MOVES you into their org,
   // so offering it to someone who has already entered their programs would be offering
   // to throw that work away.
+  // Read from the account, not from a flag we store: whether you still need setting up
+  // *is* whether you have a key and a ticked program. Nothing to drift out of sync, and
+  // doing a step elsewhere in the app counts.
+  const needsTutorial =
+    Boolean(state) &&
+    !tutorialDone &&
+    (!state.key_available || !(state.programs || []).some((p) => p.active));
+
   const untouched =
     authEnabled() &&
     !startedFresh &&
@@ -236,13 +249,21 @@ export default function App() {
           />
         )}
 
-        {state && page === "dashboard" && !untouched && (
-          <GettingStarted state={state} setPage={setPage} onChange={refresh} />
+        {/* The walkthrough takes over the page rather than sitting above the dashboard.
+            A first-run guide next to the thing it is guiding you through is a guide you
+            read past — and the dashboard is meaningless until these steps are done
+            anyway, since it would be a Re-run button with nothing to search for. */}
+        {state && page === "dashboard" && needsTutorial && (
+          <Tutorial state={state} onChange={refresh}
+                    onDone={() => setTutorialDone(true)} />
         )}
 
-        {state && page === "dashboard" && <Dashboard state={state} onChange={refresh} />}
+        {state && page === "dashboard" && !needsTutorial && (
+          <Dashboard state={state} onChange={refresh} />
+        )}
         {state && page === "settings" && <Settings state={state} onChange={refresh} />}
         {page === "archive" && <Archive />}
+        {state && page === "discover" && <Discover state={state} onChange={refresh} />}
 
         <footer>
           Fundworthy — a funding-opportunity agent for nonprofits.
