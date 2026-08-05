@@ -49,8 +49,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import archive, auth, export, repo, secrets
-from .db import (DEFAULT_ORG_ID, SECTORS, init_db, month_key, org_for_user,
-                 session)
+from .db import (DEFAULT_ORG_ID, SECTORS, InviteError, create_invite, init_db,
+                 list_invites, month_key, org_for_user, org_members, redeem_invite,
+                 revoke_invite, session)
 from .runner import MANAGER
 
 log = logging.getLogger(__name__)
@@ -407,21 +408,15 @@ def list_runs(limit: int = 20, org: str = Depends(current_org)) -> dict:
 def current_run(org: str = Depends(current_org)) -> dict:
     """This org's current run — or its last one if nothing is going.
 
-    `MANAGER` is a single process-wide slot, so "is a run happening" and "is *your* run
-    happening" are different questions. Reporting the raw `MANAGER.is_running` showed
-    every org a spinner and a live log whenever any org was crawling, which leaked the
-    funders another nonprofit searches and offered a Stop button for a run that was not
-    theirs.
+    Scoped to the org throughout: "is a run happening" and "is *your* run happening" are
+    different questions, and answering the first showed every org a spinner, a live log
+    of another nonprofit's funders, and a Stop button for a run that was not theirs.
     """
     mine = MANAGER.current_run_id_for(org)
     with session() as conn:
         run = repo.get_run(conn, mine, org_id=org) if mine \
             else repo.latest_run(conn, org_id=org)
-    return {"running": bool(mine), "run": run,
-            "log": MANAGER.log_tail() if mine else [],
-            # A different org is using the single run slot. Say so plainly rather than
-            # letting the Re-run button fail with a bare 409.
-            "busy_elsewhere": MANAGER.is_running and not mine}
+    return {"running": bool(mine), "run": run, "log": MANAGER.log_tail(org)}
 
 
 @api.post("/runs", status_code=202)
@@ -472,8 +467,7 @@ def state(org: str = Depends(current_org)) -> dict:
             "needs_check": [r for r in rows if r["needs_human_check"]],
             "latest_run": repo.latest_run(conn, org_id=org),
             "running": bool(MANAGER.current_run_id_for(org)),
-            "busy_elsewhere": MANAGER.is_running
-                              and not MANAGER.current_run_id_for(org),
+            "spend": repo.spend_summary(conn, org_id=org),
         }
 
 
@@ -497,6 +491,66 @@ def auth_config() -> dict:
     it before anyone can be signed in. See `auth.browser_config` for why none of it is
     secret."""
     return auth.browser_config()
+
+
+# --- your organization --------------------------------------------------------
+
+@api.get("/org")
+def read_org(org: str = Depends(current_org)) -> dict:
+    """Who is in your org, and the outstanding invitations."""
+    with session() as conn:
+        row = conn.execute("SELECT name FROM orgs WHERE id=?", (org,)).fetchone()
+        return {
+            "org_id": org,
+            "name": (row["name"] if row else "") or "",
+            "members": org_members(conn, org),
+            "invites": [i for i in list_invites(conn, org) if not i["redeemed_at"]],
+        }
+
+
+@api.post("/org/invites", status_code=201)
+def make_invite(org: str = Depends(current_org),
+                user=Depends(auth.require_user)) -> dict:
+    """Create a code that lets one colleague join this org.
+
+    Anyone in the org can invite, because there are no roles yet — everyone who can
+    already replace the API key can also add a colleague, so a role check here would be
+    theatre. Roles are FUTURE.md §2.
+    """
+    with session() as conn:
+        invite = create_invite(conn, org, created_by=user.email if user else None)
+    log.info("invite created for org %s by %s", org, user.email if user else "local")
+    return {"invite": invite}
+
+
+@api.delete("/org/invites/{code}")
+def drop_invite(code: str, org: str = Depends(current_org)) -> dict:
+    with session() as conn:
+        if not revoke_invite(conn, code, org):
+            raise HTTPException(404, "No such unused invitation.")
+    return {"revoked": code}
+
+
+class JoinIn(BaseModel):
+    code: str = Field(min_length=4, max_length=64)
+
+
+@api.post("/org/join")
+def join_org(body: JoinIn, user=Depends(auth.require_user)) -> dict:
+    """Redeem an invitation and move into that colleague's organization.
+
+    Note this deliberately does **not** depend on `current_org`: resolving the caller's
+    current org would create an empty one for them a moment before they leave it.
+    """
+    if user is None:
+        raise HTTPException(
+            400, "Joining an organization needs sign-in, which this install has off.")
+    try:
+        with session() as conn:
+            org_id = redeem_invite(conn, body.code, user.uid, user.email)
+    except InviteError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"org_id": org_id, "joined": True}
 
 
 @api.get("/auth/me")
@@ -566,6 +620,40 @@ def create_app() -> FastAPI:
         # unless it is named here.
         expose_headers=["Content-Disposition"],
     )
+
+    @app.middleware("http")
+    async def security_headers(request, call_next):
+        """Headers that tell the browser to be strict. Cheap, and they only start
+        mattering once the app is reachable from somewhere other than localhost.
+
+        No HSTS here on purpose: it belongs on the TLS terminator (nginx), and setting
+        it from the app would also send it to a local `http://127.0.0.1:8000` install,
+        pinning that hostname to HTTPS in the developer's browser for a year.
+        """
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault(
+            "Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+        # The dashboard is self-hosted except for Google Fonts and Firebase Auth, both
+        # of which the sign-in page loads dynamically. `connect-src` has to allow
+        # Google's identity endpoints or sign-in breaks.
+        response.headers.setdefault("Content-Security-Policy", "; ".join([
+            "default-src 'self'",
+            "script-src 'self' 'unsafe-inline' https://apis.google.com",
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+            "font-src 'self' https://fonts.gstatic.com",
+            "img-src 'self' data: https:",
+            "connect-src 'self' https://identitytoolkit.googleapis.com "
+            "https://securetoken.googleapis.com https://www.googleapis.com",
+            "frame-src https://accounts.google.com "
+            "https://*.firebaseapp.com",
+            "frame-ancestors 'none'",
+            "base-uri 'self'",
+            "form-action 'self'",
+        ]))
+        return response
 
     app.include_router(public)
     # One dependency, one router, every route. Not per-endpoint: a gate you have to

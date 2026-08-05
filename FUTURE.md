@@ -120,12 +120,30 @@ Also fixed alongside it:
   the next restart — then all 44 came back, re-activated. Seeding is now first-boot-only,
   marked in `meta`.
 
+### Since shipped
+
+- **Colleague invites.** An admin generates a single-use code (`POST /api/org/invites`)
+  and shares it however they already talk to their team; the joiner redeems it
+  (`POST /api/org/join`) and lands in that org with its funders, cards and findings.
+  Deliberately a code rather than an emailed link — sending mail needs a provider, a
+  domain reputation and a bounce story, and CLAUDE.md rules out the app sending mail on
+  anyone's behalf.
+- **A new org starts clean.** Signing up no longer hands a Chicago nonprofit 44 San Diego
+  funders and seven program cards belonging to the pilot; new orgs get working settings
+  and an empty funder list.
+- **Concurrent runs across orgs**, one per org — see §9.
+- **A per-org monthly spend cap** (`monthly_budget_usd`) that refuses a run once the
+  month's ceiling is reached, and trims the month's last run to the remaining headroom
+  rather than overshooting it.
+
 ### What tenancy still does **not** give you
 
-- **One user = one org.** There is no way to invite a colleague into an existing org, so
-  two staff at the same nonprofit currently get two separate dashboards. This is the safe
-  direction to be wrong in, and it is the next piece of work here.
-- **No org names, no org admin.** `orgs.name` exists and nothing sets it.
+- **No roles.** Anyone in an org can invite a colleague, replace the API key, and delete
+  every funder. Fine for a nonprofit of three who trust each other; not fine as a product.
+- **No frontend for any of it.** The invite, member-list and spend endpoints exist and
+  have tests; nothing in `dashboard/src/` calls them yet, and there is no onboarding
+  walkthrough for a new org (§4).
+- **No org names.** `orgs.name` exists and nothing sets it.
 - **The org switcher is still a stub** (`dashboard/src/components/OrgSwitcher.jsx`). It
   renders a chevron and an "+ Add an organization" button that do nothing, which now
   actively misleads: it implies switching is possible.
@@ -184,17 +202,31 @@ Found during the post-deployment audit. Roughly in priority order.
    is blocked, which is the whole of the realistic risk; this is written down rather than
    papered over.
 
-2. **No rate limit or cumulative spend cap.** `POST /api/runs` and `POST /api/programs/draft`
-   both spend real money. `run_budget_usd` is a *per-run* ceiling that the API accepts up
-   to `le=20`, and nothing bounds runs per day. Twenty clicks over an afternoon is $400.
-   Needs a trailing-window spend guard in `RunManager.start` and a lower bound on the
-   setting. **Independently: set a spend limit on the Anthropic account itself today** —
-   that is the only ceiling that survives a bug in our own budget logic.
+2. **Rate limiting** — partly done. A per-org **monthly** cap now exists
+   (`monthly_budget_usd`, enforced in `RunManager.start`), which was the severe half:
+   before per-org keys, repeated Re-run clicks drained *somebody else's* credit. Now an
+   org can only overspend its own, and only up to its own ceiling.
+
+   Still open: no per-minute rate limit on `POST /api/runs` or `POST /api/programs/draft`,
+   so a script can still hammer the box (not the budget). And each org should be told
+   during onboarding to set a spend limit in **their own** Anthropic console — that is
+   the only ceiling that survives a bug in ours.
+
+   Worth knowing, since it comes up every time: **Anthropic publishes no credit-balance
+   endpoint or header.** The `anthropic-ratelimit-tokens-remaining` header is tokens per
+   minute and refills; it is not dollars. So "show the org how much credit is left" is
+   not buildable — `repo.spend_summary` shows what *we* spent instead, which is the
+   number they can hold us to.
 3. **No request-size limits or nginx rate limiting.** No `client_max_body_size`, no limit
    zone, and `proxy_read_timeout 900s` is a cheap way to tie up workers.
 4. **Secrets on the box.** `data/.fernet-key` sits next to `data/rise.db`, and it now
    guards *every* org's key rather than one. Anyone with read access to `data/` has both.
-5. **No security headers** (HSTS, CSP, `X-Content-Type-Options`, `Referrer-Policy`).
+5. **Security headers** — ✅ done in the app (`app/main.py` middleware: CSP,
+   `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`).
+   **HSTS is deliberately not there** — it belongs on nginx, because setting it from the
+   app would also send it to a local `http://127.0.0.1:8000` install and pin that
+   hostname to HTTPS in a developer's browser for a year. Add it to the nginx server
+   block on the VM.
 6. **npm audit reports 2 vulnerabilities** (1 moderate, 1 high) as of the Firebase merge.
    Not yet triaged; `audit fix --force` is a breaking change so it needs a real look.
 
@@ -310,13 +342,17 @@ The order in which things actually break — the VM's raw compute is never near 
 
 1. **Anthropic API cost** — solved by BYO-key, now genuinely per-org (§3).
 2. **Anthropic rate limits** — per-tenant under BYO-key.
-3. **The single-run lock.** `MANAGER = RunManager()` in `app/runner.py` is a per-process
-   singleton allowing **one run at a time across the whole box**, with its live log in
-   process memory. It now knows *whose* run it holds, so orgs no longer see each other's
-   logs — but org B still waits while org A crawls, and you still cannot add uvicorn
-   workers (each would get its own `MANAGER`, and two could double-spend a budget).
-   Replacing it with a real queue (Arq/RQ/Celery) and moving run state into the database
-   is the load-bearing change for real multi-tenancy.
+3. **The run manager.** `MANAGER` in `app/runner.py` now allows one run **per org**, up
+   to `FUNDWORTHY_MAX_CONCURRENT_RUNS` (default 3) at once. The old global lock was
+   correct while there was one shared key and therefore one shared budget; per-org keys
+   removed that reason, and making one nonprofit wait a week for another's crawl was
+   costing the product its whole point. What remains is the part that was always
+   per-org: a second run for the *same* org would double-spend that org's budget.
+
+   Still in-process, so it is still the load-bearing change: run state and logs live in
+   this process's memory, which means you cannot add uvicorn workers (each gets its own
+   `MANAGER`, and `/api/runs/current` only sees its own worker's runs). A real queue
+   (Arq/RQ/Celery) plus run state in the database is the fix.
 4. **Polite-crawler collisions.** N orgs crawling the same ~50 funder sites every week is
    N hits from one server IP in a burst, which the per-host politeness in `agent/fetch.py`
    cannot prevent *across* tenants. A shared URL+week fetch cache fixes it — not for cost

@@ -87,9 +87,15 @@ nowhere else — no query parameter, body field, or header can select a tenant. 
 install (no sign-in) it resolves to `DEFAULT_ORG_ID`, which is also the org every
 pre-tenancy row was migrated into, so an existing install keeps its data.
 
-Today **one user = one org**: the first person to sign in adopts the existing data, and
-everyone after gets their own empty org. Inviting a colleague into an existing org is not
-built — see [FUTURE.md](FUTURE.md) §3.
+**Joining an org** is an invitation code, not an email link: an admin generates a
+single-use code (`POST /api/org/invites`) and shares it through a channel they already
+trust; the colleague redeems it (`POST /api/org/join`) and lands in that org with its
+funders, cards and findings. Sending mail would need a provider, a domain reputation and
+a bounce story — and §8 rules out the app sending mail on anyone's behalf.
+
+Otherwise the first person to sign in adopts the pre-tenancy data and everyone after gets
+their own **empty** org: working settings, no funders, no program cards. A new nonprofit
+must not inherit the pilot's 44 San Diego funders.
 
 **Stubbed (present but not wired to a backend):**
 
@@ -168,6 +174,7 @@ seat.
 | `FUNDWORTHY_DB_PATH` | Override the SQLite path (default `data/rise.db`) |
 | `FUNDWORTHY_KEYFILE` | Override the Fernet key path (default `data/.fernet-key`) |
 | `FUNDWORTHY_PORT` | Port for `start.sh` (default 8000) |
+| `FUNDWORTHY_MAX_CONCURRENT_RUNS` | How many orgs may crawl at once (default 3). A machine guard, not a tenancy rule |
 | `FUNDWORTHY_STRICT_CONFIG` | Scheduled-job mode: a config that can't be read is a refusal to run, never a fallback to defaults (protects the kill switch) |
 | `FUNDWORTHY_SHEET_ID` | Google Sheet id for the legacy Sheets export sink |
 | `FIREBASE_PROJECT_ID` | **Turns sign-in on.** Unset = local mode, no login |

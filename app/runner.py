@@ -25,6 +25,7 @@ import subprocess
 import sys
 import threading
 from collections import deque
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import repo
@@ -36,50 +37,90 @@ log = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MAX_LOG_LINES = 400
 
+# How many orgs may crawl at once. Not a tenancy rule — a machine guard. Each run is a
+# subprocess doing HTTP and HTML parsing, and the target box is a 2-4 core free-tier VM.
+# Raise it on a bigger machine; replace the whole thing with a job queue past a handful
+# of orgs (FUTURE.md).
+MAX_CONCURRENT_RUNS = int(os.environ.get("FUNDWORTHY_MAX_CONCURRENT_RUNS", "3"))
+
 # Lines from the child that mean something to a non-technical reader. Everything else
 # (httpx chatter, robots.txt fetches) is kept in the buffer but not surfaced as status.
 _INTERESTING = ("✓", "✗", "⚠", "scored", "Crawling", "candidates survived",
                 "Archive", "Sources", "dropped", "Budget", "Wrote", "RUN SUMMARY")
 
 
-class RunManager:
-    """One run at a time, across the whole box, and it knows whose run it is.
+@dataclass
+class _Slot:
+    """One org's in-flight run. Its log lives here, not in the manager, so two orgs
+    crawling at once cannot interleave their output into one buffer."""
+    proc: subprocess.Popen
+    run_id: str
+    org_id: str
+    lines: deque[str] = field(default_factory=lambda: deque(maxlen=MAX_LOG_LINES))
 
-    The single slot is a budget guard, not a tenancy model: two concurrent runs could
-    double-spend one org's ceiling. It is also the main thing standing between this and
-    real multi-tenancy, because it means org B waits while org A crawls (FUTURE.md).
-    Until a job queue replaces it, the slot at least records its owner, so the dashboard
-    can tell "your search is running" from "somebody else's is".
+    @property
+    def alive(self) -> bool:
+        return self.proc.poll() is None
+
+
+class RunManager:
+    """One run at a time **per org**, several orgs at once.
+
+    This used to be one run at a time across the whole box, and the reason was sound
+    while it lasted: with a single shared Anthropic key there was a single shared budget,
+    so two concurrent runs really could double-spend one $1 ceiling.
+
+    Per-org keys removed that. Two orgs now spend different money against different rate
+    limits, so making one wait for the other buys nothing and costs them a week — the
+    weekly run is the product. What survives is the part that was always about one org:
+    a second run for the *same* org would double-spend that org's budget, so each org
+    still gets exactly one slot. Double-clicking Re-run is still refused; another
+    nonprofit's crawl no longer blocks yours.
+
+    `MAX_CONCURRENT_RUNS` is a machine guard, not a tenancy rule: each run is a Python
+    subprocess doing HTTP and parsing on a small free-tier VM, and unbounded fan-out
+    would take the API down with it. Past a handful of orgs this whole class should
+    become a real job queue (FUTURE.md).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, max_concurrent: int = MAX_CONCURRENT_RUNS) -> None:
         self._lock = threading.Lock()
-        self._proc: subprocess.Popen | None = None
-        self._run_id: str | None = None
-        self._org_id: str | None = None
-        self._lines: deque[str] = deque(maxlen=MAX_LOG_LINES)
+        self._slots: dict[str, _Slot] = {}
+        self._max_concurrent = max_concurrent
 
     # --- state ---------------------------------------------------------------
 
+    def _reap(self) -> None:
+        """Drop finished slots. Called under the lock by everything that reads state."""
+        for org_id in [o for o, s in self._slots.items() if not s.alive]:
+            del self._slots[org_id]
+
     @property
     def is_running(self) -> bool:
-        return self._proc is not None and self._proc.poll() is None
+        """Is anything running at all. Ops and shutdown only — a request must never use
+        this to decide what to show a user; use `current_run_id_for`."""
+        with self._lock:
+            self._reap()
+            return bool(self._slots)
 
-    def current_run_id(self) -> str | None:
-        return self._run_id if self.is_running else None
+    @property
+    def active_count(self) -> int:
+        with self._lock:
+            self._reap()
+            return len(self._slots)
 
     def current_run_id_for(self, org_id: str) -> str | None:
-        """The live run id **if it belongs to this org**, else None.
+        """The live run id for this org, or None. Every request-facing caller uses this,
+        so one org can never see another's log, progress, or Stop button."""
+        with self._lock:
+            self._reap()
+            slot = self._slots.get(org_id)
+            return slot.run_id if slot else None
 
-        Every request-facing caller uses this rather than `current_run_id`, so that one
-        org can never see another's log, progress, or Stop button.
-        """
-        if not self.is_running or self._org_id != org_id:
-            return None
-        return self._run_id
-
-    def log_tail(self, limit: int = 60) -> list[str]:
-        return list(self._lines)[-limit:]
+    def log_tail(self, org_id: str, limit: int = 60) -> list[str]:
+        with self._lock:
+            slot = self._slots.get(org_id)
+            return list(slot.lines)[-limit:] if slot else []
 
     # --- control -------------------------------------------------------------
 
@@ -87,18 +128,41 @@ class RunManager:
               max_opportunities: int | None = None, org_id: str,
               started_by: str | None = None) -> str:
         with self._lock:
-            if self.is_running:
+            self._reap()
+            if org_id in self._slots:
+                raise RuntimeError("A search is already running for your organization.")
+            if len(self._slots) >= self._max_concurrent:
                 raise RuntimeError(
-                    "A search is already running." if self._org_id == org_id else
-                    "Another organization's search is running on this server. "
-                    "Searches run one at a time — try again in a few minutes."
+                    "The server is running as many searches as it can handle right now. "
+                    "Yours will start if you try again in a few minutes."
                 )
 
             with session() as conn:
+                # The month's ceiling, checked before anything is spent rather than
+                # after. `run_budget_usd` bounds one run; without this an org could
+                # press Re-run all afternoon and each run would pass its own check.
+                spend = repo.spend_summary(conn, org_id=org_id)
+                if spend["over_cap"]:
+                    raise RuntimeError(
+                        f"Your organization has used its ${spend['cap_usd']:.2f} monthly "
+                        f"limit for {spend['month']} (${spend['spent_usd']:.2f} spent). "
+                        "Raise the limit on the Settings page, or wait for next month."
+                    )
+
                 run_id = repo.create_run(conn, org_id=org_id, started_by=started_by)
                 repo.update_run(conn, run_id, progress=dumps(
                     {"phase": "starting", "message": "Starting the search…"}))
                 key, key_source = resolve_api_key(conn, org_id=org_id)
+
+                # Never let one run overshoot what is left in the month. A $1 run with
+                # $0.40 of headroom becomes a $0.40 run, not a $1 overspend.
+                headroom = spend["remaining_usd"]
+                ceiling = float(repo.get_settings(conn, org_id=org_id)["run_budget_usd"])
+                effective = min(budget if budget is not None else ceiling, headroom)
+                if effective < (budget if budget is not None else ceiling):
+                    log.info("run %s capped at $%.2f by the monthly limit", run_id,
+                             effective)
+                budget = round(effective, 4)
 
             cmd = [sys.executable, "-m", "agent.run", "--sink", "db",
                    "--run-id", run_id, "--org-id", org_id]
@@ -118,7 +182,6 @@ class RunManager:
             else:
                 env.pop("ANTHROPIC_API_KEY", None)
 
-            self._lines.clear()
             if not key:
                 opener = ("Starting the search…  (No API key saved for your "
                           "organization, so this run will not score anything — add one "
@@ -130,67 +193,71 @@ class RunManager:
                           "computer, not one saved in Settings.)")
             else:
                 opener = "Starting the search…"
-            self._lines.append(opener)
-            self._proc = subprocess.Popen(
+
+            proc = subprocess.Popen(
                 cmd, cwd=str(REPO_ROOT), env=env,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, bufsize=1,
             )
-            self._run_id = run_id
-            self._org_id = org_id
+            slot = _Slot(proc=proc, run_id=run_id, org_id=org_id)
+            slot.lines.append(opener)
+            self._slots[org_id] = slot
 
-        threading.Thread(target=self._pump, args=(self._proc, run_id),
-                         daemon=True, name=f"rise-run-{run_id}").start()
+        threading.Thread(target=self._pump, args=(slot,),
+                         daemon=True, name=f"fundworthy-run-{run_id}").start()
         return run_id
 
     def stop(self, *, org_id: str | None = None) -> bool:
         """The user's stop button. Terminate, then kill if it will not go.
 
-        `org_id=None` means "stop whatever is running" and is for internal callers only
-        (shutdown). A request always passes one, so nobody can stop a run that is not
-        theirs — silently, since telling them a run exists is itself a small leak.
+        `org_id=None` stops everything and is for shutdown only. A request always passes
+        one, so nobody can stop a run that is not theirs — and it returns False rather
+        than saying "that isn't yours", since confirming a run exists is itself a leak.
         """
         with self._lock:
-            if not self.is_running or self._proc is None:
-                return False
-            if org_id is not None and self._org_id != org_id:
-                return False
-            proc, run_id = self._proc, self._run_id
+            self._reap()
+            targets = ([self._slots[org_id]] if org_id in self._slots
+                       else [] if org_id is not None else list(self._slots.values()))
+        if not targets:
+            return False
 
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=5)
+        for slot in targets:
+            slot.proc.terminate()
+            try:
+                slot.proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                slot.proc.kill()
+                slot.proc.wait(timeout=5)
 
-        if run_id:
             with session() as conn:
-                run = repo.get_run(conn, run_id)
+                run = repo.get_run(conn, slot.run_id)
                 if run and run["status"] == "running":
-                    repo.update_run(conn, run_id, status="stopped",
+                    repo.update_run(conn, slot.run_id, status="stopped",
                                     stop_reason="stopped_by_user")
-        self._lines.append("Stopped by you.")
+            slot.lines.append("Stopped by you.")
         return True
 
     # --- output --------------------------------------------------------------
 
-    def _pump(self, proc: subprocess.Popen, run_id: str) -> None:
-        """Drain the child's output into the ring buffer and the run row."""
-        assert proc.stdout is not None
+    def _pump(self, slot: "_Slot") -> None:
+        """Drain one child's output into its own slot's buffer and the run row."""
+        assert slot.proc.stdout is not None
         try:
-            for raw in proc.stdout:
+            for raw in slot.proc.stdout:
                 line = raw.rstrip()
                 if not line:
                     continue
-                self._lines.append(line)
+                slot.lines.append(line)
                 if any(token in line for token in _INTERESTING):
-                    self._write_progress(run_id, line)
+                    self._write_progress(slot.run_id, line)
         except Exception as exc:  # noqa: BLE001
-            log.warning("run %s: output pump failed (%s)", run_id, exc)
+            log.warning("run %s: output pump failed (%s)", slot.run_id, exc)
         finally:
-            code = proc.wait()
-            self._finalize(run_id, code)
+            code = slot.proc.wait()
+            self._finalize(slot.run_id, code)
+            with self._lock:
+                if self._slots.get(slot.org_id) is slot:
+                    del self._slots[slot.org_id]
 
     def _write_progress(self, run_id: str, message: str) -> None:
         try:
