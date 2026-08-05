@@ -226,10 +226,10 @@ def test_a_valid_allow_listed_token_gets_in(signed_in, token_for):
     assert me["auth_required"] is True
     assert me["email"] == ALLOWED
     assert me["name"] == "Test Admin"
-    # An org id, but deliberately NOT `default`: that org holds the pre-tenancy data and
-    # its key, and it is claimed by name via FUNDWORTHY_PILOT_EMAILS rather than by
-    # whoever signs in first. See app/db.py: _claims_default_org.
-    assert me["org_id"] and me["org_id"] != "default"
+    # On a fresh install the first person in gets the default org — shipped seed content
+    # is not somebody else's work. It is only withheld once that org has accumulated
+    # findings or a saved API key. See app/db.py: _claims_default_org.
+    assert me["org_id"] == "default"
 
 
 def test_the_allow_list_is_case_insensitive(signed_in, token_for):

@@ -603,11 +603,20 @@ def _claims_default_org(conn: sqlite3.Connection, email: str) -> bool:
     if not nobody_yet:
         return False
 
-    # "Empty" means no funders and no findings. Settings alone are just defaults.
+    # What counts as "somebody's data" is narrower than it looks. Shipped seed content —
+    # the 44 researched funders and the program cards — is not somebody's work; it is a
+    # starting point every fresh install gets. Counting it made a brand-new deployment
+    # look occupied, so its first user was handed a new empty org while the seeded
+    # funders sat orphaned beside it, and the operator had to set an env var to undo
+    # something that should never have happened.
+    #
+    # Accumulated findings and a saved API key are different: those are the pilot's own,
+    # and handing them to a stranger is the thing this guard exists to prevent.
     has_data = conn.execute(
-        "SELECT (SELECT COUNT(*) FROM funders WHERE org_id=?) + "
-        "       (SELECT COUNT(*) FROM opportunities WHERE org_id=?) AS n",
-        (DEFAULT_ORG_ID, DEFAULT_ORG_ID),
+        "SELECT (SELECT COUNT(*) FROM opportunities WHERE org_id=?) + "
+        "       (SELECT COUNT(*) FROM settings WHERE org_id=? AND key=? "
+        "        AND value IS NOT NULL) AS n",
+        (DEFAULT_ORG_ID, DEFAULT_ORG_ID, "anthropic_api_key"),
     ).fetchone()["n"] > 0
 
     if has_data:

@@ -37,10 +37,27 @@ say "Pausing new searches"
 mkdir -p "$(dirname "$DRAIN")"
 touch "$DRAIN"
 
+# Python, not the sqlite3 CLI. The CLI is a separate apt package that is not on a stock
+# Ubuntu image — the first real deploy died here with `sqlite3: command not found` — and
+# the venv we are about to deploy into has the module built in. One less thing to install
+# on a box being rebuilt at 2am.
+PY_BIN="$APP_DIR/.venv/bin/python"
+
+count_running() {
+    "$PY_BIN" - "$DB" <<'PYEOF' 2>/dev/null || echo 0
+import sqlite3, sys
+try:
+    con = sqlite3.connect(sys.argv[1])
+    print(con.execute("SELECT COUNT(*) FROM runs WHERE status='running'").fetchone()[0])
+except Exception:
+    print(0)          # no database yet, or no runs table — nothing to wait for
+PYEOF
+}
+
 say "Waiting for searches already running to finish"
 waited=0
 while :; do
-    running=$(sqlite3 "$DB" "SELECT COUNT(*) FROM runs WHERE status='running';" 2>/dev/null || echo 0)
+    running=$(count_running)
     [ "$running" -eq 0 ] && break
     if [ "$waited" -ge "$MAX_WAIT" ]; then
         echo "Still $running search(es) running after ${MAX_WAIT}s. Not deploying."
@@ -58,18 +75,35 @@ echo "    none running — safe to deploy"
 # endpoint would be an unauthenticated fact about usage, and the API is about to be
 # restarted anyway.
 
-say "Backing up the database and the encryption key"
-mkdir -p "$BACKUP_DIR"
+# Best effort, and deliberately never fatal. A snapshot before a schema migration costs
+# a second and occasionally saves an afternoon, but a deploy should not be blocked by a
+# missing directory or a database that does not exist yet on a fresh box.
+#
+# `.backup` rather than `cp`: WAL keeps recent writes in a side file, so copying rise.db
+# alone can capture a torn database that looks fine until the day you need it. The Fernet
+# key rides along because without it every stored API key is ciphertext nobody can read.
+say "Snapshotting the database (best effort)"
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
-# .backup, not cp: SQLite in WAL mode has writes sitting in a side file, so copying
-# rise.db alone can capture a torn database that looks fine until it does not.
-sqlite3 "$DB" ".backup '$BACKUP_DIR/rise-$stamp.db'"
-cp "$APP_DIR/data/.fernet-key" "$BACKUP_DIR/fernet-key-$stamp"
-# Losing the Fernet key makes every stored API key permanently unrecoverable, so it is
-# backed up beside the database and never separately from it.
-ls -t "$BACKUP_DIR"/rise-*.db | tail -n +15 | xargs -r rm --
-ls -t "$BACKUP_DIR"/fernet-key-* | tail -n +15 | xargs -r rm --
-echo "    $BACKUP_DIR/rise-$stamp.db"
+if [ -f "$DB" ]; then
+    mkdir -p "$BACKUP_DIR"
+    if "$PY_BIN" - "$DB" "$BACKUP_DIR/rise-$stamp.db" <<'PYEOF'
+import sqlite3, sys
+src, dst = sys.argv[1], sys.argv[2]
+with sqlite3.connect(src) as s, sqlite3.connect(dst) as d:
+    s.backup(d)
+PYEOF
+    then
+        [ -f "$APP_DIR/data/.fernet-key" ] &&
+            cp "$APP_DIR/data/.fernet-key" "$BACKUP_DIR/fernet-key-$stamp"
+        ls -t "$BACKUP_DIR"/rise-*.db 2>/dev/null | tail -n +15 | xargs -r rm --
+        ls -t "$BACKUP_DIR"/fernet-key-* 2>/dev/null | tail -n +15 | xargs -r rm --
+        echo "    $BACKUP_DIR/rise-$stamp.db"
+    else
+        echo "    could not snapshot — carrying on"
+    fi
+else
+    echo "    no database yet, nothing to snapshot"
+fi
 
 say "Pulling"
 before=$(git rev-parse --short HEAD)
@@ -80,7 +114,10 @@ echo "    $before -> $after"
 
 say "Installing"
 .venv/bin/pip install -q -r requirements.txt
-(cd dashboard && npm ci --silent && npm run build --silent)
+# `npm ci` is the right call — it installs exactly the lockfile — but it refuses outright
+# if package.json and the lockfile have drifted, which would turn a CSS change into a
+# failed deploy. Fall back rather than stopping.
+(cd dashboard && { npm ci --silent || npm install --silent; } && npm run build --silent)
 
 say "Running the tests before touching the service"
 # The suite is offline and takes seconds. A deploy that skips it is a deploy that

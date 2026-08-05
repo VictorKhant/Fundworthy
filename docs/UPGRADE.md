@@ -1,19 +1,53 @@
 # Deploying this update
 
-The live box is running the code from before tenancy existed. This upgrade changes the
-database schema, so it is not the usual `git pull`.
+The live box may still be running code from before organizations existed. That change
+altered the database schema, so there are two ways in and they are genuinely different.
 
-Roughly **30 minutes**, most of it verification. Do it when nobody is mid-search.
+**Pick the one that describes you.** Most of this document is the careful path; if you
+are still building, take the first one and skip nine tenths of it.
 
-> ### Read this first
->
-> **The v7 migration rewrites four tables in place.** It has been tested against a copy
-> of the live database and it is idempotent, but it is still the pilot org's only copy of
-> their funders, findings, and encrypted API key. **Step 1 is not optional.**
->
-> **You also need `data/.fernet-key`, not just the database.** It is the key that
-> decrypts every stored API key. Backing up `rise.db` alone gets you a database full of
-> ciphertext nobody can read.
+---
+
+## Path A — no real users yet (probably you)
+
+If the only accounts are yours and your teammate's, there is nothing on that box worth
+migrating. Starting clean is faster, less to go wrong, and leaves no half-migrated state
+to debug later.
+
+```bash
+ssh fundworthy
+cd ~/Rise-Fund-Finder
+
+sudo systemctl stop fundworthy
+rm -f data/rise.db data/rise.db-wal data/rise.db-shm
+# Keep data/.fernet-key or delete it — deleting it just means re-pasting the API key,
+# since it is what decrypts the stored one.
+
+git fetch origin main && git reset --hard origin/main
+.venv/bin/pip install -r requirements.txt
+(cd dashboard && npm install && npm run build)
+sudo systemctl start fundworthy
+```
+
+Then set sign-up mode in `.env` (§5), restart, and sign in. **You do not need
+`FUNDWORTHY_PILOT_EMAILS`** — on a fresh database the first person to sign in gets the
+default organization, including the 44 researched San Diego funders that ship with it.
+That variable only exists to stop a stranger inheriting *accumulated* work: real findings
+or a saved API key. A fresh install has neither.
+
+Jump to §5.
+
+---
+
+## Path B — there is data somebody would miss
+
+Real findings, a saved API key, funders someone curated. Then the migration matters and
+so does the backup.
+
+> **The v7 migration rewrites four tables in place.** It has been tested against a copy of
+> a real database and it is idempotent, but it is still somebody's only copy. **Back up
+> first, and back up two files:** `data/rise.db` **and** `data/.fernet-key`. Without the
+> key you have a database full of ciphertext nobody can read.
 
 ---
 
@@ -21,36 +55,34 @@ Roughly **30 minutes**, most of it verification. Do it when nobody is mid-search
 
 Every row now belongs to an organization. Each org has its own Anthropic API key, its own
 funders, program cards, findings and archive — so a second nonprofit signing in gets
-their own empty dashboard instead of the pilot's data and the pilot's key. Runs happen
-concurrently across orgs rather than one at a time. There is a monthly spend cap per org.
-The fetcher refuses to fetch private addresses. And pushing to `main` now deploys.
+their own empty dashboard instead of somebody else's data and somebody else's key. Runs
+happen concurrently across orgs rather than one at a time. There is a monthly spend cap
+per org. The fetcher refuses to fetch private addresses. And pushing to `main` deploys.
 
 ---
 
-## 1 · Back up. Actually do this.
+## 1 · Back up (Path B only)
+
+`sqlite3` is a separate apt package and is not on a stock Ubuntu image. The venv's Python
+has it built in, so use that rather than installing anything:
 
 ```bash
-ssh fundworthy          # or: ssh -i ~/.ssh/fundworthy_vm ubuntu@$VM_IP
 cd ~/Rise-Fund-Finder
-
 mkdir -p ~/fundworthy-backups
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 
-# `.backup`, not `cp`. SQLite in WAL mode keeps recent writes in a side file, so copying
-# rise.db alone can capture a torn database that looks fine until the day you need it.
-sqlite3 data/rise.db ".backup '$HOME/fundworthy-backups/rise-$STAMP.db'"
+# .backup, not cp: WAL keeps recent writes in a side file, so copying rise.db alone can
+# capture a torn database that looks fine until the day you need it.
+.venv/bin/python - <<EOF
+import sqlite3
+with sqlite3.connect("data/rise.db") as s, \
+     sqlite3.connect("$HOME/fundworthy-backups/rise-$STAMP.db") as d:
+    s.backup(d)
+EOF
 cp data/.fernet-key ~/fundworthy-backups/fernet-key-$STAMP
-
 ls -la ~/fundworthy-backups/
-```
 
-Confirm both files are there and the `.db` is not zero bytes. If `sqlite3` is missing:
-`sudo apt install -y sqlite3`.
-
-**Record the commit you are on**, so you can get back to it:
-
-```bash
-git rev-parse --short HEAD    # write this down
+git rev-parse --short HEAD    # write this down, it is your way back
 ```
 
 ---
@@ -58,12 +90,11 @@ git rev-parse --short HEAD    # write this down
 ## 2 · Check nobody is mid-search
 
 ```bash
-sqlite3 data/rise.db "SELECT COUNT(*) FROM runs WHERE status='running';"
+.venv/bin/python -c "import sqlite3;print(sqlite3.connect('data/rise.db').execute(\
+  \"SELECT COUNT(*) FROM runs WHERE status='running'\").fetchone()[0])"
 ```
 
-`0` means go. Anything else: wait, or stop it from the dashboard. A restart mid-run used
-to destroy the run and the money spent on it — this update fixes that, but the fix is not
-running yet.
+`0` means go.
 
 ---
 
@@ -75,51 +106,41 @@ git fetch origin main
 git reset --hard origin/main
 
 .venv/bin/pip install -r requirements.txt
-cd dashboard && npm install && npm run build && cd ..
+(cd dashboard && npm install && npm run build)
 
-# The suite is offline — no key, no network, nothing spent. Run it BEFORE restarting, so
-# a problem is something you read about rather than something your users discover.
-.venv/bin/python -m pytest tests/ -q      # expect 264 passed, 1 skipped
+# Offline — no key, no network, nothing spent. Run it BEFORE restarting, so a problem is
+# something you read about rather than something your users discover.
+.venv/bin/python -m pytest tests/ -q      # expect 253 passed, 1 skipped
 
 sudo systemctl restart fundworthy
 ```
 
 ---
 
-## 4 · Verify the migration
+## 4 · Verify
 
 ```bash
-sqlite3 data/rise.db "SELECT value FROM meta WHERE key='schema_version';"   # 7
-sqlite3 data/rise.db "SELECT COUNT(*) FROM funders WHERE org_id='default';" # your funder count
-sqlite3 data/rise.db "SELECT COUNT(*) FROM opportunities;"                  # unchanged
-sqlite3 data/rise.db "SELECT name FROM sqlite_master WHERE name LIKE '%pre_org%';"  # empty
-```
+P=.venv/bin/python
+$P -c "import sqlite3;print(sqlite3.connect('data/rise.db').execute(\
+  \"SELECT value FROM meta WHERE key='schema_version'\").fetchone())"          # 7
+$P -c "import sqlite3;print(sqlite3.connect('data/rise.db').execute(\
+  \"SELECT name FROM sqlite_master WHERE name LIKE '%pre_org%'\").fetchall())"  # []
 
-That last one matters: `*__pre_org` tables left behind mean the migration stopped
-halfway. If you see any, restore from step 1 and stop.
-
-Then the app itself:
-
-```bash
 sudo systemctl status fundworthy --no-pager
-sudo journalctl -u fundworthy -n 30 --no-pager | grep -i "sign-in\|migrated\|interrupted"
+sudo journalctl -u fundworthy -n 30 --no-pager | grep -i "sign-in\|migrated"
 curl -s -o /dev/null -w '%{http_code}\n' https://$HOST/api/state    # 401
-curl -sI https://$HOST/ | grep -i "content-security-policy"          # present
 ```
 
-Do **not** sign in yet — do step 5 first. Which account inherits the existing funders,
-findings and saved API key is decided by `FUNDWORTHY_PILOT_EMAILS`, and until that is set
-nobody inherits them. (Signing in early is not destructive: it gives you a new empty org,
-and setting the variable afterwards still works. It just looks alarming.)
+An empty second result matters: leftover `*__pre_org` tables mean the migration stopped
+halfway. On Path B, restore and stop. On Path A, just wipe and start over.
 
-### If something is wrong
+### If something is wrong (Path B)
 
 ```bash
-cd ~/Rise-Fund-Finder
 git reset --hard <the commit you wrote down>
 cp ~/fundworthy-backups/rise-$STAMP.db data/rise.db
 cp ~/fundworthy-backups/fernet-key-$STAMP data/.fernet-key
-cd dashboard && npm run build && cd ..
+(cd dashboard && npm run build)
 sudo systemctl restart fundworthy
 ```
 
@@ -147,15 +168,14 @@ FUNDWORTHY_PILOT_EMAILS=whoever@has-been-using-it.org
 ALLOWED_EMAILS=admin@your-org.org,someone@else.org
 ```
 
-> **`FUNDWORTHY_PILOT_EMAILS` is not optional if you open sign-up.** The pre-tenancy
-> organization holds the existing funders, findings, **and the saved Anthropic key**.
-> Whoever lands in it can spend that key. It used to be claimed by whoever signed in
-> first — which was safe only because an allow-list meant that person was trusted. With
-> open sign-up, that rule would hand it to the first stranger who found the URL.
+> **`FUNDWORTHY_PILOT_EMAILS` is only for Path B**, and only once the default
+> organization has accumulated something: real findings, or a saved API key. Whoever
+> lands in that org can spend that key, so with open sign-up it must not go to whoever
+> happens to sign in first.
 >
-> Set it to the address of whoever has actually been using Fundworthy. If you leave it
-> unset, nobody inherits that org: the data stays put and one env var plus a restart
-> reunites them with it later. That is recoverable; giving it away is not.
+> **On a fresh database, leave it out.** Shipped seed content — the 44 researched
+> funders, the program cards — does not count as somebody's work, so the first person to
+> sign in simply gets the default org and everything in it. That is what you want.
 
 ```bash
 sudo systemctl restart fundworthy

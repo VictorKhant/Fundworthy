@@ -254,27 +254,36 @@ def test_the_pre_tenancy_org_is_claimed_by_name_not_by_arriving_first(db, monkey
         assert org_for_user(conn, "uid-owner", "Owner@Example.org") == DEFAULT_ORG_ID
 
 
-def test_a_stranger_signing_in_first_does_not_inherit_the_pilots_data(db, monkeypatch):
-    """The security property, stated as a test. The fixture's default org is seeded with
-    the pilot's funders, so this is the real shape of the risk."""
+def test_a_stranger_does_not_inherit_accumulated_findings(db, monkeypatch):
+    """The security property, stated as a test: findings are the pilot's own work."""
     monkeypatch.delenv("FUNDWORTHY_PILOT_EMAILS", raising=False)
     with session(db) as conn:
+        repo.save_opportunity(conn, _opp(), run_id="old", org_id=DEFAULT_ORG_ID)
+
         got = org_for_user(conn, "uid-stranger", "stranger@example.com")
         assert got != DEFAULT_ORG_ID
-        assert repo.list_funders(conn, org_id=got) == []
-        # ...and the pilot's data is still sitting there, waiting to be claimed.
-        assert len(repo.list_funders(conn, org_id=DEFAULT_ORG_ID)) > 40
+        # ...and the findings are still sitting there, waiting to be claimed.
+        assert len(repo.list_opportunities(
+            conn, org_id=DEFAULT_ORG_ID, month=month_key())) == 1
 
 
-def test_a_genuinely_fresh_install_still_gives_its_first_user_the_default_org(
-        tmp_path, monkeypatch):
-    """An install with nothing in it has nothing to steal, so accumulating an orphan org
-    beside an empty default one would be pure clutter."""
+def test_a_stranger_does_not_inherit_a_saved_api_key(db, monkeypatch):
     monkeypatch.delenv("FUNDWORTHY_PILOT_EMAILS", raising=False)
-    path = tmp_path / "fresh.db"
-    monkeypatch.setenv("FUNDWORTHY_DB_PATH", str(path))
-    init_db(path, seed=False)
-    with session(path) as conn:
+    with session(db) as conn:
+        secrets.store_api_key(conn, "sk-ant-THE-PILOTS-KEY", org_id=DEFAULT_ORG_ID)
+        got = org_for_user(conn, "uid-stranger", "stranger@example.com")
+
+        assert got != DEFAULT_ORG_ID
+        assert secrets.read_api_key(conn, org_id=got) is None
+
+
+def test_shipped_seed_content_does_not_count_as_somebody_elses_data(db, monkeypatch):
+    """The 44 researched funders are a starting point every install gets, not the
+    pilot's work. Counting them made a brand-new deployment look occupied — its first
+    user got an empty org and the seeded funders sat orphaned beside it."""
+    monkeypatch.delenv("FUNDWORTHY_PILOT_EMAILS", raising=False)
+    with session(db) as conn:
+        assert len(repo.list_funders(conn, org_id=DEFAULT_ORG_ID)) > 40   # seeded
         assert org_for_user(conn, "uid-1", "first@example.org") == DEFAULT_ORG_ID
 
 
