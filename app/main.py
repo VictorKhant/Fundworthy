@@ -769,7 +769,21 @@ def create_app() -> FastAPI:
 
         @app.get("/{path:path}", include_in_schema=False)
         def spa(path: str):
-            """Serve the built dashboard, falling back to index.html for client routes."""
+            """Serve the built dashboard, falling back to index.html for client routes.
+
+            **Except under `/api`.** This catch-all is registered last, so a request to an
+            API route that does not exist — a typo, a removed endpoint, a client running
+            against a newer server — used to fall through here and get `200` with a page
+            of HTML. Every failure mode of that is quiet: a caller cannot tell "gone" from
+            "fine", `curl` reports success, and anyone debugging reads the dashboard's
+            markup wondering why their endpoint returns a favicon link.
+
+            It is also how a stale deployment hides. `GET /api/maintenance` answering 200
+            on a box that has never heard of that endpoint says the feature is live when
+            the code is not on the machine at all.
+            """
+            if path.startswith("api/"):
+                raise HTTPException(404, "No such endpoint.")
             candidate = (DIST / path).resolve()
             if path and candidate.is_file() and DIST.resolve() in candidate.parents:
                 return FileResponse(candidate)
