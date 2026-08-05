@@ -1,12 +1,33 @@
 # Fundworthy. The marketing pages are for finding; the app behind them is not.
 #
-# Disallowing /api is belt and braces — every route there is authenticated and a crawler
+# Disallowing /api is belt and braces — the routes there are authenticated and a crawler
 # gets a 401 — but a crawler spending its budget on endpoints it cannot read is wasted
 # either way, and a 401 in a search console log is a support question nobody needs.
+#
+# The two exceptions are not optional, and blocking them broke the home page. The app
+# fetches /api/auth/config before it can draw anything: it is how the browser learns
+# whether sign-in exists on this server. A blocked fetch is not a quiet skip — Google's
+# renderer answers it with status 499, the app turns that into "Something went wrong
+# (499)", and that error screen is what Googlebot saw at `/` instead of the landing page.
+# /api/maintenance is the banner and degrades on its own, but it is public too and there
+# is nothing gained by making the crawler retry it.
+#
+# Both are public reads with no token: /api/auth/config returns the Firebase project id
+# and web API key, which are served to every browser that loads the page, and
+# /api/maintenance returns a banner flag. Nothing here is a secret.
+#
+# /api/state stays blocked on purpose. It needs a signed-in user, so a crawler gets 401
+# whether we allow it or not — and with auth/config readable the app knows it is signed
+# out and renders the landing page rather than calling it at all.
+#
+# Google resolves a conflict by the longest matching rule, so the two Allow lines win
+# over Disallow: /api/ for exactly those two paths and nothing else.
 
 User-agent: *
 Allow: /
 Allow: /welcome
+Allow: /api/auth/config
+Allow: /api/maintenance
 Disallow: /api/
 
 Sitemap: SITE_URL/sitemap.xml
