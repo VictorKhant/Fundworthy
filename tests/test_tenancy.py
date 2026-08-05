@@ -21,6 +21,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from tests.helpers import seed_starter_funders  # noqa: E402
+
 from app import archive, repo, secrets           # noqa: E402
 from app.db import (DEFAULT_ORG_ID, ensure_org, init_db, month_key,  # noqa: E402
                     org_for_user, session)
@@ -37,6 +39,7 @@ def db(tmp_path, monkeypatch):
     monkeypatch.setenv("FUNDWORTHY_DB_PATH", str(path))
     monkeypatch.setenv("FUNDWORTHY_KEYFILE", str(tmp_path / ".fernet-key"))
     init_db(path)
+    seed_starter_funders(path)
     with session(path) as conn:
         ensure_org(conn, B, "Second Nonprofit")
     return path
@@ -563,3 +566,80 @@ def test_a_daily_cap_can_still_be_imposed_on_a_misbehaving_account(db, monkeypat
 
     with pytest.raises(RuntimeError, match="searches today"):
         runner.RunManager().start(org_id=A)
+
+
+# --- the starter directory ----------------------------------------------------
+#
+# The reported bug: one account had 52 funders and the account created five minutes
+# later had none. Nothing about that was a decision — it was an artefact of whoever
+# signed in first claiming DEFAULT_ORG_ID and its seeded rows.
+
+def test_two_new_accounts_get_the_same_thing(tmp_path, monkeypatch):
+    """Whatever a new org starts with, it must not depend on who signed in first."""
+    path = tmp_path / "rise.db"
+    monkeypatch.setenv("FUNDWORTHY_DB_PATH", str(path))
+    monkeypatch.setenv("FUNDWORTHY_KEYFILE", str(tmp_path / ".fernet-key"))
+    monkeypatch.delenv("FUNDWORTHY_PILOT_EMAILS", raising=False)
+    init_db(path)
+
+    with session(path) as conn:
+        first = org_for_user(conn, "uid-1", "me@example.org")
+        second = org_for_user(conn, "uid-2", "my.friend@example.org")
+
+        assert first != second
+        assert (len(repo.list_funders(conn, org_id=first))
+                == len(repo.list_funders(conn, org_id=second)) == 0)
+
+
+def test_a_starter_list_can_be_imported_and_is_idempotent(db):
+    from app.db import import_starter_list
+
+    with session(db) as conn:
+        conn.execute("DELETE FROM funders WHERE org_id=?", (B,))
+
+        added = import_starter_list(conn, "san-diego", B)
+        assert added > 40
+        assert len(repo.list_funders(conn, org_id=B)) == added
+
+        # Importing twice adds nothing rather than duplicating.
+        assert import_starter_list(conn, "san-diego", B) == 0
+
+
+def test_importing_does_not_resurrect_a_funder_the_org_removed(db):
+    """The remove list is the user's single exclusion lever. A re-import must not undo
+    a decision they made — that was the seed-resurrection bug, in a new costume."""
+    from app.db import import_starter_list
+
+    with session(db) as conn:
+        conn.execute("DELETE FROM funders WHERE org_id=?", (B,))
+        import_starter_list(conn, "san-diego", B)
+
+        victim = repo.list_funders(conn, org_id=B)[0]
+        repo.update_funder(conn, victim["id"], {"active": False}, org_id=B)
+
+        import_starter_list(conn, "san-diego", B)
+        after = repo.get_funder(conn, victim["id"], org_id=B)
+        assert after["active"] is False
+
+
+def test_the_federal_database_is_its_own_list(db):
+    """A Chicago nonprofit wants Grants.gov and does not want 58 San Diego foundations,
+    so those cannot be one indivisible blob."""
+    from agent.directory import get
+
+    national = get("national")
+    assert [s.adapter for s in national.sources] == ["grants_gov"]
+    assert all(s.adapter is None for s in get("san-diego").sources)
+
+
+def test_importing_is_scoped_to_your_own_org(db):
+    from app.db import import_starter_list
+
+    with session(db) as conn:
+        conn.execute("DELETE FROM funders WHERE org_id=?", (B,))
+        before_a = len(repo.list_funders(conn, org_id=A))
+
+        import_starter_list(conn, "national", B)
+
+        assert len(repo.list_funders(conn, org_id=B)) == 1
+        assert len(repo.list_funders(conn, org_id=A)) == before_a

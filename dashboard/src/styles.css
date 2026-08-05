@@ -857,3 +857,12 @@ button.text.danger { color: #B4503F; margin-left: auto; }
 .step.done .step-n { background: var(--accent-soft); color: var(--accent); }
 .step.done > div > strong { color: var(--muted); font-weight: 500; }
 .step p { margin: 3px 0 0; }
+
+/* --- the starter directory ------------------------------------------------- */
+.directory { margin-top: 10px; }
+.directory-row {
+  display: flex; align-items: flex-start; gap: 14px;
+  padding: 10px 0; border-top: 1px solid var(--line-soft);
+}
+.directory-row > div { flex: 1; }
+.directory-row p { margin: 2px 0 0; }

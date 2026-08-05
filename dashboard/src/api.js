@@ -137,6 +137,11 @@ export const api = {
     stop: () => post("/api/runs/stop"),
   },
 
+  directory: {
+    read: () => get("/api/directory"),
+    import: (key) => post(`/api/directory/${key}/import`),
+  },
+
   org: {
     read: () => get("/api/org"),
     invite: () => post("/api/org/invites"),

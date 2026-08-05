@@ -24,6 +24,8 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from tests.helpers import seed_starter_funders  # noqa: E402
+
 from app import export
 from app.db import init_db
 
@@ -138,6 +140,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("FUNDWORTHY_KEYFILE", str(tmp_path / ".fernet-key"))
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     init_db()
+    seed_starter_funders()
 
     from app.main import create_app
 

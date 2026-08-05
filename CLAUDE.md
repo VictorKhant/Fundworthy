@@ -61,19 +61,17 @@ the app enforces both:
 | | |
 |---|---|
 | **Local** (default) | Binds `127.0.0.1`, no sign-in. Nothing can reach it, so there is nobody to authenticate. `./start.sh` opens straight onto the dashboard. |
-| **Deployed** | `FIREBASE_PROJECT_ID` + one of `ALLOWED_EMAILS` (private) or `FUNDWORTHY_OPEN_SIGNUP=1` (anyone may sign up) → every `/api/*` route requires a signed-in person. See [docs/DEPLOY-ORACLE.md](docs/DEPLOY-ORACLE.md) §8. |
+| **Deployed** | `FIREBASE_PROJECT_ID` set → every `/api/*` route requires a signed-in person. Add `ALLOWED_EMAILS` to restrict who; leave it out and any nonprofit may sign up. See [docs/DEPLOY-ORACLE.md](docs/DEPLOY-ORACLE.md) §8. |
 
-There is no third state, and the deployed shape must be chosen **on purpose**: sign-in on
-with neither `ALLOWED_EMAILS` nor `FUNDWORTHY_OPEN_SIGNUP` is a **refusal to start**.
 Firebase authenticates *who* someone is and says nothing about whether they belong here,
-so the second question is answered in `app/auth.py` — and private and open are opposite
-products, so guessing between them is how an install ends up open when it meant to be
-private.
+so the second question is answered in `app/auth.py` — by `ALLOWED_EMAILS` if it is set,
+and by nothing at all if it is not. **Open is the default**, because that is what this
+product is: any nonprofit can sign up and use it.
 
-Open sign-up is safe in a way it would not have been six months ago: a new account gets
-its **own empty org with no key**, so it cannot spend anyone's money. What it can still
-do is make the server crawl on the free tier, which is what `FUNDWORTHY_MAX_RUNS_PER_DAY`
-bounds.
+That is safe in a way it would not have been before per-org keys: a new account gets its
+**own org with no key**, so it cannot spend anyone's money. What it can still do is make
+the server crawl on the free tier, which `FUNDWORTHY_MAX_RUNS_PER_DAY` can bound if one
+account ever misbehaves.
 
 **Multi-tenant storage** (schema v7). Every row has an owner. `orgs` and `users` tables;
 `org_id` on `settings`, `programs`, `funders`, `opportunities` and `runs`; and each org
@@ -116,13 +114,18 @@ must not inherit the pilot's 44 San Diego funders.
 
 ### Pilot / seed data
 
-The app ships **seeded for a first pilot org**: 44 researched San Diego / California
-funders (`agent/sd_funders.py`), a funder registry (`agent/sources.py`), seven program
-cards (`app/db.py: SEED_PROGRAMS`, three active by default), and a San Diego / Imperial
-County service-area geography filter (`agent/filters.py: SERVICE_AREA_GEOGRAPHY`). This
-is configuration, not branding — a real install edits it in the dashboard. Making it
-per-org is multi-tenant work (see FUTURE.md); until then it is the working setup the
-pilot inherits.
+The 60 researched sources in `agent/sources.py` — 58 San Diego grantmakers plus the
+California and federal grant databases — are a **directory an org imports from**
+(`agent/directory.py`), not something any org is given.
+
+They used to be seeded into `DEFAULT_ORG_ID`, which meant whichever account signed in
+first got 52 funders and the account created five minutes later got none. That was not a
+decision; it was an artefact of that org existing. Now every org starts with no funders
+and the same three lists on offer, which is also correct outside San Diego: a Chicago
+nonprofit wants Grants.gov and does not want 58 San Diego foundations.
+
+Program cards (`app/db.py: SEED_PROGRAMS`) are still seeded per org, and should probably
+stop being — they describe the pilot's programs, not anyone else's.
 
 ---
 
@@ -187,8 +190,7 @@ seat.
 | `FIREBASE_PROJECT_ID` | **Turns sign-in on.** Unset = local mode, no login |
 | `FIREBASE_WEB_API_KEY` | Firebase's public web key, served to the browser. Required when sign-in is on |
 | `FIREBASE_AUTH_DOMAIN` | Defaults to `<project>.firebaseapp.com`; override only for a custom auth domain |
-| `ALLOWED_EMAILS` | Comma-separated. Who may sign in, for a **private** install. Mutually exclusive with the next one; with neither, the app refuses to boot |
-| `FUNDWORTHY_OPEN_SIGNUP` | `1` = any nonprofit may sign up and get its own empty org. The allow-list existed because one shared key meant a stranger could spend the pilot's money; per-org keys removed that |
+| `ALLOWED_EMAILS` | Comma-separated. Restricts who may sign in. **Leave it out and anyone can sign up**, which is the default |
 | `FUNDWORTHY_PILOT_EMAILS` | Who inherits the pre-tenancy org (its funders, findings **and saved key**). Claimed by name, never by signing in first — see `app/db.py: _claims_default_org` |
 | `FUNDWORTHY_MAX_RUNS_PER_DAY` | **Off by default.** A lever for one misbehaving account, not a ration — an org spends its own key, so how often it searches is its own business |
 
@@ -300,6 +302,7 @@ Everything else (funders, programs, this month's findings) is already seeded.
 │   └── assistant.py             "paste a link → program card" (Sonnet)
 ├── agent/                       the pipeline
 │   ├── run.py                   entrypoint, orchestration, budget ceiling
+│   ├── directory.py             starter funder lists an org imports from
 │   ├── fetch.py / parse.py      polite fetch · page → candidate
 │   ├── urlguard.py              public-addresses-only check (SSRF), per redirect hop
 │   ├── filters.py               free deterministic rejects (geography reads org_location)

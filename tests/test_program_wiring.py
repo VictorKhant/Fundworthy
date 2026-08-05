@@ -24,6 +24,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from tests.helpers import seed_starter_funders  # noqa: E402
+
 from agent.apis import CA_CATEGORIES, GG_SEED_KEYWORDS, program_vocabularies
 from agent.config import Config, ProgramCard
 
@@ -140,6 +142,7 @@ def test_the_run_budget_is_customizable_end_to_end(tmp_path, monkeypatch):
     from app.repo import get_settings, update_settings
 
     init_db()
+    seed_starter_funders()
     with session() as conn:
         assert get_settings(conn, org_id=DEFAULT_ORG_ID)["run_budget_usd"] == 1.00
         update_settings(conn, {"run_budget_usd": 0.25}, org_id=DEFAULT_ORG_ID)
