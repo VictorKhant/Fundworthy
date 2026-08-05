@@ -533,37 +533,72 @@ def test_a_static_file_is_still_served_as_itself(client, tmp_path):
     assert not res.text.lstrip().startswith("<!doctype")
 
 
-def test_the_search_console_verification_file_is_served_verbatim(client):
-    """Google fetches this exact path and expects one line back. If the SPA catch-all
+def _verification_files():
+    """Every Search Console verification file in the repo.
+
+    A glob rather than a list of hashes, because there is more than one: each Google
+    account that verifies the property gets its own file, and they all have to stay.
+    Removing one un-verifies that account. Pinning them by name meant the second file
+    shipped untested, which is the failure the first of these tests exists to prevent.
+    """
+    from pathlib import Path
+
+    public = Path(__file__).resolve().parents[1] / "dashboard" / "public"
+    return sorted(public.glob("google*.html"))
+
+
+def test_the_search_console_verification_files_are_served_verbatim(client):
+    """Google fetches these exact paths and expects one line back. If the SPA catch-all
     answered instead, verification fails with "the file has the wrong content" — and the
     content it saw would be the dashboard's HTML, which is a confusing thing to be told.
 
-    It lives in dashboard/public/ rather than being uploaded to the VM by hand, because
+    They live in dashboard/public/ rather than being uploaded to the VM by hand, because
     anything not in the repo is deleted by the next `npm run build` — and a site that
     silently loses its verification weeks later is worse than one that never had it.
     """
     from app.main import DIST
 
-    probe = DIST / "google5083e4c8404182ff.html"
-    if not probe.exists():
+    if not (DIST / "index.html").exists():
         pytest.skip("the dashboard has not been built in this checkout")
 
-    res = client.get("/google5083e4c8404182ff.html")
-    assert res.status_code == 200
-    assert res.text.strip() == "google-site-verification: google5083e4c8404182ff.html"
+    for source in _verification_files():
+        assert (DIST / source.name).is_file(), (
+            f"{source.name} is in dashboard/public/ but not in the build.")
+        res = client.get(f"/{source.name}")
+        assert res.status_code == 200
+        assert res.text.strip() == f"google-site-verification: {source.name}"
 
 
-def test_the_search_console_verification_file_is_in_the_repo():
+def test_the_search_console_verification_files_are_in_the_repo():
     """The test above needs a built dashboard and skips without one. This one does not,
-    so deleting the file is a red test in every checkout rather than a silent skip.
+    so deleting a file is a red test in every checkout rather than a silent skip.
 
     Vite copies dashboard/public/ to the root of dist/ untouched, which is where Google
     looks. Anything not in the repo is erased by the next `npm run build`.
     """
-    from pathlib import Path
+    files = _verification_files()
+    assert files, "No Search Console verification file in dashboard/public/."
+    for source in files:
+        # The name is the payload — Google checks the file it asked for contains its own
+        # filename, so a copy-paste of the wrong hash reads as "wrong content" to them.
+        assert source.read_text().strip() == f"google-site-verification: {source.name}"
 
-    source = (Path(__file__).resolve().parents[1]
-              / "dashboard" / "public" / "google5083e4c8404182ff.html")
-    assert source.is_file(), "Search Console verification file is missing from the repo."
-    assert source.read_text().strip() == (
-        "google-site-verification: google5083e4c8404182ff.html")
+
+def test_the_sitemap_declares_the_namespace_google_expects(client):
+    """A sitemap in the wrong XML namespace is rejected at parse time, and the error in
+    Search Console does not say which character is wrong.
+
+    This shipped as `www.sitemap.org` — singular, one letter off the real
+    `www.sitemaps.org` — which is invisible in review and fails only at submission.
+    """
+    from xml.etree import ElementTree
+
+    from app.main import DIST
+
+    source = (DIST / "sitemap.xml") if (DIST / "sitemap.xml").exists() else None
+    if source is None:
+        from pathlib import Path
+        source = Path(__file__).resolve().parents[1] / "dashboard" / "public" / "sitemap.xml"
+
+    root = ElementTree.fromstring(source.read_text())
+    assert root.tag == "{http://www.sitemaps.org/schemas/sitemap/0.9}urlset"
