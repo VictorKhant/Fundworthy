@@ -161,15 +161,29 @@ and seven program cards that are not theirs, and nothing scores until they paste
 
 ## 5. Security and abuse — open
 
-Found during the post-deployment audit and **not yet fixed**. Roughly in priority order.
+Found during the post-deployment audit. Roughly in priority order.
 
-1. **SSRF in the program-card assistant.** `app/assistant.py:144` validates only that the
-   URL starts `http://` or `https://`. `agent/fetch.py:63` sets `follow_redirects=True`,
-   nothing blocks private address space, and an unreadable robots.txt is treated as
-   *permissive*. So any signed-in user can make the server fetch `127.0.0.1`, RFC1918
-   addresses, or Oracle's metadata endpoint at `169.254.169.254` — and the fetched content
-   is summarised into the card returned to them. Needs an allow-list check that resolves
-   the host and rejects private/loopback/link-local ranges, re-checked on every redirect.
+1. **SSRF in the fetcher** — ✅ **fixed**. `app/assistant.py` validated only that the URL
+   started `http://` or `https://`, `agent/fetch.py` set `follow_redirects=True`, and
+   nothing anywhere looked at where a hostname actually pointed. Any signed-in user could
+   aim the server at `127.0.0.1:8000` (Fundworthy itself, from inside nginx) or
+   `169.254.169.254` (cloud instance metadata, which answers unauthenticated) and read the
+   response back out of the assistant's draft card.
+
+   `agent/urlguard.py` now resolves every hostname and refuses any that answers with a
+   loopback, private, link-local, reserved, multicast or CGNAT address — including
+   IPv4-mapped IPv6 forms like `::ffff:127.0.0.1`, whose `.is_loopback` is `False`. The
+   check runs **per redirect hop**, which meant taking redirect-following away from httpx
+   and doing it in `Fetcher._send`: the redirect was the part we never inspected, so a
+   perfectly ordinary public URL could bounce us into the metadata service.
+
+   **Residual risk, deliberately left:** the guard resolves a name and httpx then resolves
+   it again to connect. A name answering public-then-private across those two lookups —
+   DNS rebinding — still gets through. Closing it means pinning the connection to the
+   validated address via a custom transport. Every direct attempt and every redirect chain
+   is blocked, which is the whole of the realistic risk; this is written down rather than
+   papered over.
+
 2. **No rate limit or cumulative spend cap.** `POST /api/runs` and `POST /api/programs/draft`
    both spend real money. `run_budget_usd` is a *per-run* ceiling that the API accepts up
    to `le=20`, and nothing bounds runs per day. Twenty clicks over an afternoon is $400.

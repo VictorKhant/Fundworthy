@@ -276,6 +276,7 @@ Everything else (funders, programs, this month's findings) is already seeded.
 ├── agent/                       the pipeline
 │   ├── run.py                   entrypoint, orchestration, budget ceiling
 │   ├── fetch.py / parse.py      polite fetch · page → candidate
+│   ├── urlguard.py              public-addresses-only check (SSRF), per redirect hop
 │   ├── filters.py               free deterministic rejects
 │   ├── score.py / verify.py     Haiku→Sonnet scoring · the accuracy gate
 │   ├── sources.py / apis.py     funder registry · CA Grants Portal + Grants.gov
