@@ -119,6 +119,12 @@ class Config:
     weekly_budget_usd: float = 1.00          # hard ceiling (§8)
     min_deadline_runway_days: int = 14       # reject inside this window (§7)
     source: str = "defaults"                 # "database" | "sheet" | "defaults"
+    # Whose run this is. Carried on the config rather than threaded through every
+    # function signature because every stage of the pipeline already receives a Config,
+    # and the org is exactly what a config *is* — one nonprofit's settings, cards,
+    # funders and key. Defaults to the single-tenant org so the CLI and the tests keep
+    # working unchanged.
+    org_id: str = "default"
 
     @property
     def programs_active(self) -> list[str]:
@@ -194,9 +200,15 @@ class ConfigUnavailable(RuntimeError):
 
 # --- the database path (the normal one) ---------------------------------------
 
-def load_from_db(db_path=None) -> Config | None:
-    """Read settings and active program cards out of SQLite. None if unavailable."""
+def load_from_db(db_path=None, *, org_id: str | None = None) -> Config | None:
+    """Read settings and active program cards out of SQLite. None if unavailable.
+
+    `org_id` decides whose settings and whose program cards this run uses. Unscoped, a
+    run read every org's active cards at once and sent them all to Anthropic in one system
+    prompt — one nonprofit's program strategy going out on another's API key.
+    """
     try:
+        from app.db import DEFAULT_ORG_ID
         from app.db import db_path as default_db_path
         from app.db import session
         from app.repo import get_settings, list_programs
@@ -204,19 +216,20 @@ def load_from_db(db_path=None) -> Config | None:
         log.debug("app package unavailable (%s)", exc)
         return None
 
+    scope = org_id or DEFAULT_ORG_ID
     target = db_path or default_db_path()
     if db_path is None and not default_db_path().exists():
         return None
 
     try:
         with session(target) as conn:
-            settings = get_settings(conn)
-            cards = list_programs(conn, active_only=True)
+            settings = get_settings(conn, org_id=scope)
+            cards = list_programs(conn, org_id=scope, active_only=True)
     except Exception as exc:  # noqa: BLE001
         log.warning("could not read the settings database (%s)", exc)
         return None
 
-    cfg = Config(source="database")
+    cfg = Config(source="database", org_id=scope)
     cfg.enabled = bool(settings["enabled"])
     cfg.min_award = int(settings["min_award"])
     cfg.max_opportunities = int(settings["max_opportunities"])
@@ -278,7 +291,8 @@ def load_from_sheet(sheet_id: str, credentials_path: str) -> Config:
 # --- the entrypoint -----------------------------------------------------------
 
 def load_config(sheet_id: str | None = None, credentials_path: str | None = None,
-                strict: bool | None = None, db_path=None) -> Config:
+                strict: bool | None = None, db_path=None,
+                org_id: str | None = None) -> Config:
     """Resolve config from the database, then the Sheet, then shipped defaults.
 
     Under `FUNDWORTHY_STRICT_CONFIG` (which the scheduled job sets), reaching the "shipped
@@ -290,7 +304,7 @@ def load_config(sheet_id: str | None = None, credentials_path: str | None = None
     if strict is None:
         strict = os.environ.get("FUNDWORTHY_STRICT_CONFIG", "").strip() in _TRUE
 
-    cfg = load_from_db(db_path)
+    cfg = load_from_db(db_path, org_id=org_id)
     if cfg is not None:
         log.info("Config: read from the settings database (%s).",
                  db_path or "data/rise.db")

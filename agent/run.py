@@ -63,7 +63,8 @@ def resolve_sources(cfg: Config, run: RunLog) -> tuple[list[Source], list[Source
     """
     from .sources import sources_from_db
 
-    from_db = sources_from_db(cfg.max_tier, cfg.sectors_active)
+    from_db = sources_from_db(cfg.max_tier, cfg.sectors_active,
+                              org_id=cfg.org_id)
     if from_db is not None:
         sources, skipped = from_db
         run.notes.append(
@@ -98,7 +99,7 @@ def _discover_extra(cfg: Config, run: RunLog) -> list[Source]:
     return found
 
 
-async def enrich_990(run: RunLog) -> dict[str, dict]:
+async def enrich_990(run: RunLog, org_id: str) -> dict[str, dict]:
     """Look up 990 filings for any funder we have not checked yet, and cache them.
 
     Runs once per funder, ever — not once per run. A funder's filings change annually,
@@ -115,7 +116,7 @@ async def enrich_990(run: RunLog) -> dict[str, dict]:
         if not db_path().exists():
             return {}
         with session() as conn:
-            pending = funders_needing_990(conn)
+            pending = funders_needing_990(conn, org_id=org_id)
     except Exception:  # noqa: BLE001
         return {}
 
@@ -129,7 +130,7 @@ async def enrich_990(run: RunLog) -> dict[str, dict]:
             found += bool(data)
             try:
                 with session() as conn:
-                    save_funder_990(conn, f["id"], data)
+                    save_funder_990(conn, f["id"], data, org_id=org_id)
             except Exception as exc:  # noqa: BLE001 — never fail a run over this
                 log.debug("could not cache 990 for %s: %s", f["name"], exc)
         run.notes.append(
@@ -139,12 +140,12 @@ async def enrich_990(run: RunLog) -> dict[str, dict]:
 
     try:
         with session() as conn:
-            return funder_990_map(conn)
+            return funder_990_map(conn, org_id=org_id)
     except Exception:  # noqa: BLE001
         return {}
 
 
-def excluded_funders() -> set[str]:
+def excluded_funders(org_id: str) -> set[str]:
     """The remove list — funders the user has taken out of the search, casefolded.
 
     Sources on it are never fetched (they are `active=0`, so `sources_from_db` does not
@@ -159,7 +160,7 @@ def excluded_funders() -> set[str]:
         if not db_path().exists():
             return set()
         with session() as conn:
-            return excluded_funder_names(conn)
+            return excluded_funder_names(conn, org_id=org_id)
     except Exception:  # noqa: BLE001 — no database is a normal state
         return set()
 
@@ -192,7 +193,7 @@ async def crawl(cfg: Config, run: RunLog,
     sources, skipped = resolve_sources(cfg, run)
     sources = sources + _discover_extra(cfg, run)
     already_seen = already_seen or set()
-    excluded = excluded_funders()
+    excluded = excluded_funders(cfg.org_id)
     if excluded:
         run.notes.append(
             f"Remove list: {len(excluded)} funder(s) excluded from this search — "
@@ -613,6 +614,7 @@ async def main_async(args: argparse.Namespace) -> int:
     # refusal to run.
     strict = os.environ.get("FUNDWORTHY_STRICT_CONFIG", "").strip().lower() in {
         "1", "true", "yes", "on"}
+    org_id = getattr(args, "org_id", None)
     if not strict and not args.no_archive:
         try:
             from app.db import init_db
@@ -622,7 +624,7 @@ async def main_async(args: argparse.Namespace) -> int:
             log.warning("Could not open the settings database (%s).", exc)
 
     try:
-        cfg = load_config()
+        cfg = load_config(org_id=org_id)
     except ConfigUnavailable as exc:
         # Strict mode: we could not confirm the kill switch is on, so we do not run.
         run.stop_reason = StopReason.ERROR
@@ -668,8 +670,8 @@ async def main_async(args: argparse.Namespace) -> int:
 
             init_db()
             with session() as conn:
-                run.purged_rows = purge_old_months(conn)
-                already_seen = seen_ids_this_month(conn)
+                run.purged_rows = purge_old_months(conn, org_id=cfg.org_id)
+                already_seen = seen_ids_this_month(conn, org_id=cfg.org_id)
             if run.purged_rows:
                 run.notes.append(
                     f"Archive: purged {run.purged_rows} row(s) from earlier months.")
@@ -685,7 +687,7 @@ async def main_async(args: argparse.Namespace) -> int:
         survivors = await crawl(cfg, run, follow_links=not args.no_follow,
                                 already_seen=already_seen)
         log.info("%d candidates survived the free filters.", len(survivors))
-        funder_990 = await enrich_990(run) if use_llm else {}
+        funder_990 = await enrich_990(run, cfg.org_id) if use_llm else {}
         opportunities = evaluate(survivors, cfg, run, budget, use_llm=use_llm,
                                  funder_990=funder_990)
     except Exception as exc:  # noqa: BLE001
@@ -718,19 +720,31 @@ async def main_async(args: argparse.Namespace) -> int:
             sheets = SheetsSink()
             sheets.ensure_config_tab()
             sinks.append(sheets)
+        elif args.sink == "web":
+            from sinks.webjson import WebJsonSink
+
+            sinks.append(WebJsonSink(out_path=args.web_out))
         elif args.sink == "jsonl":
             from sinks.jsonl import JsonlSink
 
             sinks.append(JsonlSink(out_dir=args.out))
         else:
-            # The default is both: SQLite is what the dashboard reads and what next
-            # week's dedup checks against, and run.json keeps the static export path
-            # alive for the Actions run and for anyone opening the built site directly.
+            # SQLite only. The dashboard reads the database through the API, which is
+            # behind sign-in; run.json was a second copy of the same findings as a flat
+            # file, and it used to be written into `dashboard/public/`.
+            #
+            # That directory is Vite's static-asset root: `npm run build` copies
+            # everything in it into `dashboard/dist/`, which app/main.py serves to
+            # anyone, unauthenticated, from the SPA catch-all. So the documented update
+            # procedure — pull, rebuild, restart — was one step away from publishing
+            # every org's grant pipeline at https://<host>/run.json. It was harmless
+            # when the app only listened on 127.0.0.1. It is not harmless now.
+            #
+            # The sink still exists and still works; it is opt-in via `--sink web`, and
+            # its default path is outside anything that gets served.
             from sinks.sqlite import SqliteSink
-            from sinks.webjson import WebJsonSink
 
-            sinks.append(SqliteSink(run_id=args.run_id))
-            sinks.append(WebJsonSink(out_path=args.web_out))
+            sinks.append(SqliteSink(run_id=args.run_id, org_id=cfg.org_id))
     except Exception as exc:  # noqa: BLE001
         log.error("Could not open the %s sink: %r", args.sink, exc)
         return 1
@@ -762,13 +776,19 @@ async def main_async(args: argparse.Namespace) -> int:
 def main() -> int:
     p = argparse.ArgumentParser(description="the organization funding opportunity agent")
     p.add_argument("--sink", choices=["db", "web", "jsonl", "sheets"], default="db",
-                   help="db (default) writes SQLite + run.json; sheets is now export-only")
+                   help="db (default) writes SQLite, which is what the dashboard "
+                        "reads; web writes a static JSON file; sheets is export-only")
     p.add_argument("--run-id", help="attach this run's findings to an existing run row")
+    p.add_argument("--org-id", default=None,
+                   help="whose search this is: the org whose settings, program cards, "
+                        "funders and API key the run uses, and the org its findings are "
+                        "written to. Defaults to the single-tenant org.")
     p.add_argument("--no-archive", action="store_true",
                    help="skip the monthly dedup and purge (shows repeats again)")
     p.add_argument("--out", default="out", help="output dir for the jsonl sink")
-    p.add_argument("--web-out", default="dashboard/public/run.json",
-                   help="output path for the web sink (the file the dashboard reads)")
+    p.add_argument("--web-out", default="data/run.json",
+                   help="output path for the optional static JSON export. NOT under "
+                        "dashboard/ — see --sink.")
     p.add_argument("--dry-run", action="store_true", help="crawl and report, write nothing")
     p.add_argument("--no-follow", action="store_true", help="do not follow program links")
     p.add_argument("--no-llm", action="store_true",

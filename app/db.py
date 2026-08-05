@@ -32,6 +32,7 @@ import json
 import logging
 import os
 import sqlite3
+import uuid
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -41,26 +42,62 @@ log = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path("data/rise.db")
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
+
+# The org that owns everything written before tenancy existed. A single-tenant install
+# (and every row in the pilot's live database) belongs to it, so adding org scoping is a
+# migration rather than a data loss. It is also the org a local, sign-in-off install uses,
+# which is what keeps `./start.sh` a zero-configuration experience.
+DEFAULT_ORG_ID = "default"
 
 # --- schema -------------------------------------------------------------------
 
+# Tenancy note. Two of the id columns below are DERIVED from content, not random:
+# `funders.id` is a hash of (name, url) and `opportunities.id` is stable_id(source_url,
+# title). That is deliberate and load-bearing — it is what makes "have we shown this
+# already?" an index probe costing $0.00. But it also means two orgs that look at the same
+# funder compute the SAME id, so a bare `id TEXT PRIMARY KEY` would have the second org's
+# row silently overwrite the first's. Every per-org table is therefore keyed on
+# (org_id, id), and every query carries an org_id predicate.
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS orgs (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
+-- One row per person who has ever signed in. `uid` is Firebase's `sub` claim, which is
+-- stable for the life of the account; `email` is what the allow-list matches on and what
+-- a human recognises, so both are kept. A user belongs to exactly one org. Many users
+-- may share an org — that is how two staff at the same nonprofit see the same funders —
+-- but there is no UI to arrange it yet, so today every new signer-in gets their own.
+CREATE TABLE IF NOT EXISTS users (
+    uid        TEXT PRIMARY KEY,
+    email      TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    org_id     TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    last_seen_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_users_org ON users(org_id);
+
 CREATE TABLE IF NOT EXISTS settings (
-    key        TEXT PRIMARY KEY,
+    org_id     TEXT NOT NULL DEFAULT 'default',
+    key        TEXT NOT NULL,
     value      TEXT,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (org_id, key)
 );
 
 CREATE TABLE IF NOT EXISTS programs (
+    org_id         TEXT NOT NULL DEFAULT 'default',
     id             TEXT PRIMARY KEY,
     name           TEXT NOT NULL,
-    slug           TEXT NOT NULL UNIQUE,
+    slug           TEXT NOT NULL,
     summary        TEXT NOT NULL DEFAULT '',
     what_it_funds  TEXT NOT NULL DEFAULT '',
     keywords       TEXT NOT NULL DEFAULT '[]',   -- json array
@@ -76,7 +113,8 @@ CREATE TABLE IF NOT EXISTS programs (
 );
 
 CREATE TABLE IF NOT EXISTS funders (
-    id          TEXT PRIMARY KEY,
+    org_id      TEXT NOT NULL DEFAULT 'default',
+    id          TEXT NOT NULL,
     name        TEXT NOT NULL,
     url         TEXT,
     sector      TEXT NOT NULL DEFAULT 'other',
@@ -108,11 +146,13 @@ CREATE TABLE IF NOT EXISTS funders (
     adapter     TEXT,
     notes       TEXT NOT NULL DEFAULT '',
     created_at  TEXT NOT NULL,
-    updated_at  TEXT NOT NULL
+    updated_at  TEXT NOT NULL,
+    PRIMARY KEY (org_id, id)
 );
 
 CREATE TABLE IF NOT EXISTS opportunities (
-    id                     TEXT PRIMARY KEY,   -- stable_id(source_url, title)
+    org_id                 TEXT NOT NULL DEFAULT 'default',
+    id                     TEXT NOT NULL,      -- stable_id(source_url, title)
     run_id                 TEXT,
     month_key              TEXT NOT NULL,      -- 'YYYY-MM' — the purge + dedup partition
     found_on               TEXT NOT NULL,      -- date first surfaced to the user
@@ -150,13 +190,17 @@ CREATE TABLE IF NOT EXISTS opportunities (
     form_990_year          INTEGER,
     form_990_total_revenue INTEGER,
     form_990_total_expenses INTEGER,
-    fetched_at             TEXT NOT NULL
+    fetched_at             TEXT NOT NULL,
+    PRIMARY KEY (org_id, id)
 );
-CREATE INDEX IF NOT EXISTS idx_opp_month ON opportunities(month_key);
-CREATE INDEX IF NOT EXISTS idx_opp_run   ON opportunities(run_id);
 
 CREATE TABLE IF NOT EXISTS runs (
+    org_id             TEXT NOT NULL DEFAULT 'default',
+    -- Run ids are uuids, so they do not collide across orgs the way the derived ids
+    -- above do; org_id here is for scoping reads, not for identity.
     id                 TEXT PRIMARY KEY,
+    -- Who pressed the button. Null for a scheduled run, which nobody pressed.
+    started_by         TEXT,
     started_at         TEXT NOT NULL,
     finished_at        TEXT,
     status             TEXT NOT NULL DEFAULT 'running',  -- running | done | failed | stopped
@@ -177,7 +221,21 @@ CREATE TABLE IF NOT EXISTS runs (
     source_health      TEXT NOT NULL DEFAULT '[]',
     progress           TEXT NOT NULL DEFAULT '{}'
 );
-CREATE INDEX IF NOT EXISTS idx_runs_started ON runs(started_at DESC);
+"""
+
+# Indexes live apart from the table DDL because every one of them names `org_id`, and on
+# an install that predates tenancy that column does not exist until `_migrate` has run.
+# Creating them in the same script as the tables meant a v6 database failed to open at
+# all: `CREATE TABLE IF NOT EXISTS` was a harmless no-op, and the very next CREATE INDEX
+# then referenced a column the old table did not have. Tables, then migrate, then these.
+INDEXES = """
+CREATE INDEX        IF NOT EXISTS idx_users_org         ON users(org_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_programs_org_slug ON programs(org_id, slug);
+CREATE INDEX        IF NOT EXISTS idx_programs_org      ON programs(org_id);
+CREATE INDEX        IF NOT EXISTS idx_funders_org       ON funders(org_id);
+CREATE INDEX        IF NOT EXISTS idx_opp_month         ON opportunities(org_id, month_key);
+CREATE INDEX        IF NOT EXISTS idx_opp_run           ON opportunities(run_id);
+CREATE INDEX        IF NOT EXISTS idx_runs_started      ON runs(org_id, started_at DESC);
 """
 
 
@@ -279,11 +337,37 @@ def init_db(path: Path | str | None = None, *, seed: bool = True) -> None:
     with session(path) as conn:
         conn.executescript(SCHEMA)
         _migrate(conn)
+        conn.executescript(INDEXES)
+        ensure_org(conn, DEFAULT_ORG_ID)
         if seed:
-            seed_settings(conn)
-            seed_programs(conn)
-            seed_funders(conn)
-            seed_remove_list_only(conn)
+            seed_org(conn, DEFAULT_ORG_ID)
+
+
+def seed_org(conn: sqlite3.Connection, org_id: str) -> None:
+    """Give an org its starting content — **once**, on the first boot that sees it.
+
+    This used to run on every `init_db`, which is every process start and every pipeline
+    run. The effect was that deleting a seeded funder or program card did not stick: the
+    next restart or Re-run brought all 44 funders and all seven cards back, re-activated,
+    silently undoing a deliberate choice. A `seeded_at` marker in `meta` makes it the
+    first-boot operation it was always meant to be.
+
+    Settings are exempt and still reconciled every boot: `seed_settings` is INSERT ... ON
+    CONFLICT DO NOTHING per key, so it fills in a genuinely new setting for an existing
+    org without touching a value anyone has chosen.
+    """
+    seed_settings(conn, org_id)
+
+    marker = f"seeded_at:{org_id}"
+    if conn.execute("SELECT 1 FROM meta WHERE key=?", (marker,)).fetchone():
+        return
+
+    seed_programs(conn, org_id)
+    seed_funders(conn, org_id)
+    seed_remove_list_only(conn, org_id)
+    conn.execute("INSERT INTO meta(key, value) VALUES(?,?) "
+                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                 (marker, now_iso()))
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
@@ -371,11 +455,137 @@ def _migrate(conn: sqlite3.Connection) -> None:
         # init_db calls seed_remove_list_only after seeding, for fresh and existing both.
         current = 6
 
+    if current < 7:
+        _migrate_to_org_scoped(conn)
+        current = 7
+
     conn.execute(
         "INSERT INTO meta(key, value) VALUES('schema_version', ?) "
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         (str(current),),
     )
+
+
+def _migrate_to_org_scoped(conn: sqlite3.Connection) -> None:
+    """v7 — give every row an owner.
+
+    Everything written before this migration belongs to one install and therefore to one
+    org, so it all moves to `DEFAULT_ORG_ID` and nothing is lost. The pilot org keeps its
+    funders, its program cards, its findings, and its saved API key exactly as they were.
+
+    Four of the five tables need a genuine rebuild rather than an ALTER, because their
+    PRIMARY KEY changes and SQLite cannot alter one in place. The pattern is the standard
+    rename-create-copy-drop. `runs` only gains columns, so it takes plain ALTERs.
+
+    Not wrapped in a savepoint: `executescript` commits any open transaction before it
+    runs, so a crash midway leaves the `*__pre_org` tables on disk. That is recoverable by
+    hand and visible, which is the right failure mode for a migration that moves a
+    nonprofit's only copy of its data.
+    """
+    stamp = now_iso()
+    conn.execute(
+        "INSERT INTO orgs(id, name, created_at) VALUES(?,?,?) "
+        "ON CONFLICT(id) DO NOTHING",
+        (DEFAULT_ORG_ID, "", stamp),
+    )
+
+    rebuilt = ("settings", "programs", "funders", "opportunities")
+    carried: dict[str, list[str]] = {}
+
+    for table in rebuilt:
+        cols = [r["name"] for r in conn.execute(f"PRAGMA table_info({table})")]
+        if not cols or "org_id" in cols:
+            continue                      # fresh install, or already migrated
+        carried[table] = cols
+        conn.execute(f"ALTER TABLE {table} RENAME TO {table}__pre_org")
+
+    # A renamed table keeps its indexes, under their original names — so unless these go
+    # first, the CREATE INDEX IF NOT EXISTS in `INDEXES` is a silent no-op and the rebuilt
+    # tables end up unindexed. That would not fail any test; it would just make every
+    # dashboard load slower every month, which is exactly the kind of thing nobody notices.
+    for index in ("idx_opp_month", "idx_opp_run", "idx_runs_started"):
+        conn.execute(f"DROP INDEX IF EXISTS {index}")
+
+    if carried:
+        conn.executescript(SCHEMA)        # recreates the four, now org-scoped
+
+    for table, cols in carried.items():
+        names = ", ".join(cols)
+        conn.execute(
+            f"INSERT INTO {table}(org_id, {names}) SELECT ?, {names} FROM {table}__pre_org",
+            (DEFAULT_ORG_ID,),
+        )
+        conn.execute(f"DROP TABLE {table}__pre_org")
+
+    run_cols = {r["name"] for r in conn.execute("PRAGMA table_info(runs)")}
+    if "org_id" not in run_cols:
+        conn.execute("ALTER TABLE runs ADD COLUMN org_id TEXT NOT NULL DEFAULT 'default'")
+    if "started_by" not in run_cols:
+        conn.execute("ALTER TABLE runs ADD COLUMN started_by TEXT")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_runs_started ON runs(org_id, started_at DESC)")
+
+    if carried:
+        # This install has been seeded — by definition, since it has pre-tenancy rows.
+        # Without this marker the first boot after migrating would run the seeders again
+        # and hand the pilot org back every funder and program card they had deleted.
+        conn.execute("INSERT INTO meta(key, value) VALUES(?,?) "
+                     "ON CONFLICT(key) DO NOTHING",
+                     (f"seeded_at:{DEFAULT_ORG_ID}", now_iso()))
+
+    log.info("migrated %d table(s) to org-scoped storage; existing rows belong to %r",
+             len(carried), DEFAULT_ORG_ID)
+
+
+# --- orgs and users -----------------------------------------------------------
+
+def ensure_org(conn: sqlite3.Connection, org_id: str, name: str = "") -> None:
+    conn.execute(
+        "INSERT INTO orgs(id, name, created_at) VALUES(?,?,?) "
+        "ON CONFLICT(id) DO NOTHING",
+        (org_id, name, now_iso()),
+    )
+
+
+def org_for_user(conn: sqlite3.Connection, uid: str, email: str) -> str:
+    """The org this person belongs to, creating one on their first sign-in.
+
+    This is the function that decides whether two people share data, so it is worth being
+    explicit about today's policy: **every new signer-in gets their own empty org.** Two
+    colleagues at the same nonprofit currently land in separate orgs and cannot see each
+    other's work. That is the safe direction to be wrong in — the alternative default,
+    dropping strangers into a shared org, is the bug this whole migration exists to fix —
+    but it is not the end state. Inviting a colleague into an existing org is the next
+    piece of work (FUTURE.md).
+
+    The very first person to sign in on an install that already has data adopts
+    `DEFAULT_ORG_ID`, so the pilot org's existing funders and findings stay with the
+    person who has been using them rather than being stranded behind a new empty org.
+    """
+    row = conn.execute("SELECT org_id FROM users WHERE uid=?", (uid,)).fetchone()
+    if row:
+        conn.execute("UPDATE users SET last_seen_at=?, email=? WHERE uid=?",
+                     (now_iso(), email, uid))
+        return row["org_id"]
+
+    # Same person, new Firebase uid (they deleted and remade the Google account, or the
+    # project was rebuilt). Match on the address so they keep their org rather than
+    # silently starting again with an empty dashboard.
+    row = conn.execute("SELECT uid, org_id FROM users WHERE email=?", (email,)).fetchone()
+    if row:
+        conn.execute("UPDATE users SET uid=?, last_seen_at=? WHERE email=?",
+                     (uid, now_iso(), email))
+        return row["org_id"]
+
+    unclaimed = conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"] == 0
+    org_id = DEFAULT_ORG_ID if unclaimed else f"org_{uuid.uuid4().hex[:16]}"
+    ensure_org(conn, org_id)
+    conn.execute(
+        "INSERT INTO users(uid, email, org_id, created_at, last_seen_at) VALUES(?,?,?,?,?)",
+        (uid, email, org_id, now_iso(), now_iso()),
+    )
+    log.info("first sign-in for %s — assigned to org %s", email, org_id)
+    return org_id
 
 
 # --- helpers ------------------------------------------------------------------
@@ -411,14 +621,14 @@ def row_to_dict(row: sqlite3.Row | None) -> dict | None:
 
 # --- seeds --------------------------------------------------------------------
 
-def seed_settings(conn: sqlite3.Connection) -> None:
+def seed_settings(conn: sqlite3.Connection, org_id: str = DEFAULT_ORG_ID) -> None:
     """Insert defaults for any setting not already present. Never overwrites."""
     stamp = now_iso()
     for key, value in DEFAULT_SETTINGS.items():
         conn.execute(
-            "INSERT INTO settings(key, value, updated_at) VALUES(?,?,?) "
-            "ON CONFLICT(key) DO NOTHING",
-            (key, value, stamp),
+            "INSERT INTO settings(org_id, key, value, updated_at) VALUES(?,?,?,?) "
+            "ON CONFLICT(org_id, key) DO NOTHING",
+            (org_id, key, value, stamp),
         )
 
 
@@ -513,19 +723,19 @@ SEED_PROGRAMS: list[dict] = [
 ]
 
 
-def seed_programs(conn: sqlite3.Connection) -> None:
+def seed_programs(conn: sqlite3.Connection, org_id: str = DEFAULT_ORG_ID) -> None:
     """First boot only. Never overwrites a card the user has edited."""
     stamp = now_iso()
     for p in SEED_PROGRAMS:
         conn.execute(
             """INSERT INTO programs(
-                   id, name, slug, summary, what_it_funds, keywords, funder_types,
+                   org_id, id, name, slug, summary, what_it_funds, keywords, funder_types,
                    search_queries, min_award, active, source_url, drafted_by_ai,
                    reviewed_by_human, created_at, updated_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,0,0,?,?)
-               ON CONFLICT(slug) DO NOTHING""",
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,?)
+               ON CONFLICT(org_id, slug) DO NOTHING""",
             (
-                p["slug"].lower(), p["name"], p["slug"],
+                org_id, f"{org_id}:{p['slug'].lower()}", p["name"], p["slug"],
                 p.get("summary", ""), p.get("what_it_funds", ""),
                 dumps(p.get("keywords", [])), dumps(p.get("funder_types", [])),
                 dumps(p.get("search_queries", [])), p.get("min_award"),
@@ -535,7 +745,7 @@ def seed_programs(conn: sqlite3.Connection) -> None:
         )
 
 
-def seed_funders(conn: sqlite3.Connection) -> None:
+def seed_funders(conn: sqlite3.Connection, org_id: str = DEFAULT_ORG_ID) -> None:
     """Seed the partner list from agent/sources.py on first boot.
 
     The registry stays in agent/sources.py as the shipped starting point — deleting it
@@ -552,15 +762,16 @@ def seed_funders(conn: sqlite3.Connection) -> None:
         reason = removed.get(s.funder.strip().casefold(), "")
         conn.execute(
             """INSERT INTO funders(
-                   id, name, url, sector, funder_type, warm, active, exclude_reason,
-                   tier, confidence, programs, adapter, notes, created_at, updated_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-               ON CONFLICT(id) DO UPDATE SET
+                   org_id, id, name, url, sector, funder_type, warm, active,
+                   exclude_reason, tier, confidence, programs, adapter, notes,
+                   created_at, updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(org_id, id) DO UPDATE SET
                    -- Only ever backfill the adapter. Everything else on an existing
                    -- row is the user's, and a re-seed must not overwrite their edits.
                    adapter=COALESCE(funders.adapter, excluded.adapter)""",
             (
-                _funder_id(s.funder, s.url), s.funder, s.url, sector_for(s),
+                org_id, _funder_id(s.funder, s.url), s.funder, s.url, sector_for(s),
                 _funder_type_for(s), int(s.warm), 0 if reason else 1, reason,
                 int(s.tier), int(s.confidence),
                 dumps([p.value for p in s.programs]), s.adapter, s.notes, stamp, stamp,
@@ -568,7 +779,7 @@ def seed_funders(conn: sqlite3.Connection) -> None:
         )
 
 
-def seed_remove_list_only(conn: sqlite3.Connection) -> None:
+def seed_remove_list_only(conn: sqlite3.Connection, org_id: str = DEFAULT_ORG_ID) -> None:
     """Remove-list entries that are not sources in their own right.
 
     "County of San Diego Equity Impact Grant" is a PROGRAMME, not a funder — §7 is
@@ -580,17 +791,19 @@ def seed_remove_list_only(conn: sqlite3.Connection) -> None:
     whole funder or one named programme from the same place, and see both.
     """
     stamp = now_iso()
-    existing = {r["name"].casefold() for r in conn.execute("SELECT name FROM funders")}
+    existing = {r["name"].casefold() for r in
+                conn.execute("SELECT name FROM funders WHERE org_id=?", (org_id,))}
     for name, reason in REMOVE_LIST_SEED.items():
         if name.casefold() in existing:
             continue
         conn.execute(
             """INSERT INTO funders(
-                   id, name, url, sector, funder_type, warm, active, exclude_reason,
-                   tier, confidence, programs, notes, created_at, updated_at)
-               VALUES(?,?,NULL,'other','other',0,0,?,1,0,'[]',?,?,?)
-               ON CONFLICT(id) DO NOTHING""",
-            (_funder_id(name), name, reason,
+                   org_id, id, name, url, sector, funder_type, warm, active,
+                   exclude_reason, tier, confidence, programs, notes,
+                   created_at, updated_at)
+               VALUES(?,?,?,NULL,'other','other',0,0,?,1,0,'[]',?,?,?)
+               ON CONFLICT(org_id, id) DO NOTHING""",
+            (org_id, _funder_id(name), name, reason,
              "On the remove list only — a named programme rather than a funder we crawl.",
              stamp, stamp),
         )

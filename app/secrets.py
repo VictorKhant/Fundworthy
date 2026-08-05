@@ -90,30 +90,32 @@ def mask(secret: str | None) -> str | None:
 
 # --- stored-key access --------------------------------------------------------
 
-def store_api_key(conn, secret: str) -> None:
+def store_api_key(conn, secret: str, *, org_id: str) -> None:
     from .db import now_iso
 
     conn.execute(
-        "INSERT INTO settings(key, value, updated_at) VALUES(?,?,?) "
-        "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-        (SETTING_NAME, encrypt(secret), now_iso()),
+        "INSERT INTO settings(org_id, key, value, updated_at) VALUES(?,?,?,?) "
+        "ON CONFLICT(org_id, key) DO UPDATE SET value=excluded.value, "
+        "updated_at=excluded.updated_at",
+        (org_id, SETTING_NAME, encrypt(secret), now_iso()),
     )
 
 
-def clear_api_key(conn) -> None:
+def clear_api_key(conn, *, org_id: str) -> None:
     from .db import now_iso
 
     conn.execute(
-        "INSERT INTO settings(key, value, updated_at) VALUES(?,NULL,?) "
-        "ON CONFLICT(key) DO UPDATE SET value=NULL, updated_at=excluded.updated_at",
-        (SETTING_NAME, now_iso()),
+        "INSERT INTO settings(org_id, key, value, updated_at) VALUES(?,?,NULL,?) "
+        "ON CONFLICT(org_id, key) DO UPDATE SET value=NULL, "
+        "updated_at=excluded.updated_at",
+        (org_id, SETTING_NAME, now_iso()),
     )
 
 
-def read_api_key(conn) -> str | None:
+def read_api_key(conn, *, org_id: str) -> str | None:
     """The plaintext key, for server-side use only. Never send this to a client."""
     row = conn.execute(
-        "SELECT value FROM settings WHERE key=?", (SETTING_NAME,)
+        "SELECT value FROM settings WHERE key=? AND org_id=?", (SETTING_NAME, org_id)
     ).fetchone()
     if row is None or not row["value"]:
         return None
@@ -124,12 +126,21 @@ SOURCE_SETTINGS = "settings"
 SOURCE_ENVIRONMENT = "environment"
 
 
-def resolve_api_key(conn=None) -> tuple[str | None, str | None]:
+def resolve_api_key(conn=None, *, org_id: str | None = None) -> tuple[str | None, str | None]:
     """(key, where it came from) — 'settings', 'environment', or (None, None).
 
     Settings wins over the environment: the point of the Settings page is that the org can
-    change the key without anyone touching a file. `ANTHROPIC_API_KEY` stays as the
-    fallback so the CLI, the tests, and the GitHub Actions run all keep working.
+    change the key without anyone touching a file.
+
+    **The environment fallback belongs to the default org alone, and that restriction is
+    the whole per-tenant billing boundary.** `ANTHROPIC_API_KEY` is one key, set once in
+    the VM's `.env` by whoever deployed the box. Before tenancy it was a convenience: a
+    single-tenant install could score before anyone had pasted anything. Once a second
+    nonprofit could sign in, the same line of code meant every org that had *not* saved a
+    key silently billed the deployer's — the new account looked like it was working, and
+    somebody else paid for it. So an org other than `DEFAULT_ORG_ID` gets its own saved key
+    or it gets nothing, and "nothing" surfaces as a visible prompt to add one rather than
+    as a quietly successful run on a stranger's credit card.
 
     The *source* is returned, not just the key, because the fallback is quietly
     confusing on a developer's machine: with a `.env` present the pipeline scores
@@ -137,8 +148,12 @@ def resolve_api_key(conn=None) -> tuple[str | None, str | None]:
     Settings box works when what you are actually watching is the file. Surfacing which
     one is in play costs one string and removes the ambiguity for good.
     """
+    from .db import DEFAULT_ORG_ID
+
+    org_id = org_id or DEFAULT_ORG_ID
+
     if conn is not None:
-        stored = read_api_key(conn)
+        stored = read_api_key(conn, org_id=org_id)
         if stored:
             return stored, SOURCE_SETTINGS
     else:
@@ -146,16 +161,19 @@ def resolve_api_key(conn=None) -> tuple[str | None, str | None]:
 
         try:
             with session() as c:
-                stored = read_api_key(c)
+                stored = read_api_key(c, org_id=org_id)
             if stored:
                 return stored, SOURCE_SETTINGS
         except Exception as exc:  # noqa: BLE001 — no DB yet is a normal CLI state
             log.debug("no settings database available (%s)", exc)
 
+    if org_id != DEFAULT_ORG_ID:
+        return None, None
+
     from_env = os.environ.get("ANTHROPIC_API_KEY") or None
     return (from_env, SOURCE_ENVIRONMENT) if from_env else (None, None)
 
 
-def effective_api_key(conn=None) -> str | None:
+def effective_api_key(conn=None, *, org_id: str | None = None) -> str | None:
     """The key the pipeline should use. See `resolve_api_key` for where it came from."""
-    return resolve_api_key(conn)[0]
+    return resolve_api_key(conn, org_id=org_id)[0]

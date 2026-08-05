@@ -223,7 +223,7 @@ def test_a_valid_allow_listed_token_gets_in(signed_in, token_for):
 
     me = signed_in.get("/api/auth/me", headers=auth_header(token_for())).json()
     assert me == {"signed_in": True, "auth_required": True,
-                  "email": ALLOWED, "name": "Test Admin"}
+                  "email": ALLOWED, "name": "Test Admin", "org_id": "default"}
 
 
 def test_the_allow_list_is_case_insensitive(signed_in, token_for):
@@ -403,3 +403,87 @@ def test_googles_key_endpoint_is_the_real_one():
     assert keys, "Google returned no signing keys"
     assert all(k["alg"] == "RS256" for k in keys)
     assert all("kid" in k for k in keys)
+
+
+# --- two orgs, over HTTP --------------------------------------------------------
+#
+# The repo-level isolation tests live in tests/test_tenancy.py. These check the seam that
+# actually faces the internet: that the org a request is scoped to comes from the *token*,
+# and that nothing a client can type changes it.
+
+def test_two_signed_in_people_do_not_share_data(signed_in, token_for):
+    """The reported bug, end to end: a teammate signs in at the same URL and must not
+    land in the first user's dashboard, findings, or API key."""
+    first = {"Authorization": f"Bearer {token_for()}"}
+    second = {"Authorization": "Bearer " + token_for(
+        sub="uid-999", email="someone.else@example.org", name="Someone Else")}
+
+    a_org = signed_in.get("/api/auth/me", headers=first).json()["org_id"]
+    b_org = signed_in.get("/api/auth/me", headers=second).json()["org_id"]
+    assert a_org != b_org
+
+    # A program card created by one is invisible to the other.
+    made = signed_in.post("/api/programs", headers=first,
+                          json={"name": "Confidential Strategy"})
+    assert made.status_code == 201
+    b_programs = signed_in.get("/api/programs", headers=second).json()["programs"]
+    assert "Confidential Strategy" not in [p["name"] for p in b_programs]
+
+    # A settings change by one does not move the other's floor.
+    signed_in.put("/api/settings", headers=first, json={"min_award": 99_000})
+    b_settings = signed_in.get("/api/settings", headers=second).json()["settings"]
+    assert b_settings["min_award"] == 10_000
+
+
+def test_a_saved_key_is_not_visible_to_another_org(signed_in, token_for):
+    first = {"Authorization": f"Bearer {token_for()}"}
+    second = {"Authorization": "Bearer " + token_for(
+        sub="uid-999", email="someone.else@example.org")}
+
+    saved = signed_in.post("/api/settings/api-key", headers=first,
+                           json={"api_key": "sk-ant-FIRST-USERS-KEY"})
+    assert saved.status_code == 200
+    assert saved.json()["has_api_key"] is True
+
+    theirs = signed_in.get("/api/settings", headers=second).json()
+    assert theirs["has_api_key"] is False
+    assert theirs["api_key_hint"] is None
+    assert theirs["key_available"] is False       # and no fallback to anyone else's
+
+    # The first org still has its key: saving nothing did not clear it.
+    assert signed_in.get("/api/settings", headers=first).json()["has_api_key"] is True
+
+
+def test_the_org_cannot_be_chosen_by_the_caller(signed_in, token_for):
+    """Nothing a client sends may select the tenant — no query parameter, no body field,
+    no header. The org comes from the verified token and nowhere else."""
+    first = {"Authorization": f"Bearer {token_for()}"}
+    second = {"Authorization": "Bearer " + token_for(
+        sub="uid-999", email="someone.else@example.org")}
+
+    signed_in.post("/api/programs", headers=first, json={"name": "Private Card"})
+    a_org = signed_in.get("/api/auth/me", headers=first).json()["org_id"]
+
+    # Try to borrow the other org's id every way the API exposes.
+    sneaky = signed_in.get(f"/api/programs?org_id={a_org}", headers=second).json()
+    assert "Private Card" not in [p["name"] for p in sneaky["programs"]]
+
+    posted = signed_in.post("/api/programs", headers=second,
+                            json={"name": "Injected", "org_id": a_org})
+    assert posted.status_code == 201
+    a_programs = signed_in.get("/api/programs", headers=first).json()["programs"]
+    assert "Injected" not in [p["name"] for p in a_programs]
+
+
+def test_one_org_cannot_stop_anothers_run(signed_in, token_for, monkeypatch):
+    """Stop used to terminate whatever the singleton held, with no check on who asked."""
+    from app.runner import MANAGER
+
+    second = {"Authorization": "Bearer " + token_for(
+        sub="uid-999", email="someone.else@example.org")}
+
+    monkeypatch.setattr(type(MANAGER), "is_running", property(lambda self: True))
+    monkeypatch.setattr(MANAGER, "_org_id", "org_someone_elses", raising=False)
+    monkeypatch.setattr(MANAGER, "_proc", object(), raising=False)
+
+    assert signed_in.post("/api/runs/stop", headers=second).json()["stopped"] is False

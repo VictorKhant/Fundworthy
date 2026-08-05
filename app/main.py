@@ -49,7 +49,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import archive, auth, export, repo, secrets
-from .db import SECTORS, init_db, month_key, session
+from .db import (DEFAULT_ORG_ID, SECTORS, init_db, month_key, org_for_user,
+                 session)
 from .runner import MANAGER
 
 log = logging.getLogger(__name__)
@@ -62,6 +63,27 @@ DIST = REPO_ROOT / "dashboard" / "dist"
 # can possibly be signed in, and neither of them reveals anything.
 api = APIRouter(prefix="/api")
 public = APIRouter(prefix="/api")
+
+
+# --- whose data is this? ------------------------------------------------------
+
+def current_org(user=Depends(auth.require_user)) -> str:
+    """The org whose data this request may touch. Every `/api` handler takes it.
+
+    This is the tenant boundary, and it is deliberately the *only* way a handler learns
+    an org id — none of them accept one from the client. An org id in a query parameter
+    or a request body would be an invitation to type somebody else's.
+
+    With sign-in off there is no user to ask, and a local install binds to 127.0.0.1 with
+    exactly one org, so it resolves to `DEFAULT_ORG_ID`. That keeps `./start.sh` a
+    zero-configuration experience without giving a deployed install a way to reach the
+    default org's data: on a deployed box `auth.require_user` has already raised 401
+    before this function runs.
+    """
+    if user is None:
+        return DEFAULT_ORG_ID
+    with session() as conn:
+        return org_for_user(conn, user.uid, user.email)
 
 
 # --- request bodies -----------------------------------------------------------
@@ -136,7 +158,7 @@ def _set(model: BaseModel) -> dict[str, Any]:
 
 # --- settings -----------------------------------------------------------------
 
-def _key_state(conn) -> dict:
+def _key_state(conn, org_id: str) -> dict:
     """What the browser is allowed to know about the API key.
 
     Three facts, no secret: is one saved *here*, is one reaching the pipeline at all,
@@ -144,8 +166,8 @@ def _key_state(conn) -> dict:
     on the machine makes the pipeline score whether or not Settings holds anything —
     without saying so, the page would imply a key is saved when it is not.
     """
-    stored = secrets.read_api_key(conn)
-    effective, source = secrets.resolve_api_key(conn)
+    stored = secrets.read_api_key(conn, org_id=org_id)
+    effective, source = secrets.resolve_api_key(conn, org_id=org_id)
     return {
         # A hint, never the key. There is no path that returns the secret.
         "api_key_hint": secrets.mask(stored),
@@ -157,46 +179,55 @@ def _key_state(conn) -> dict:
 
 
 @api.get("/settings")
-def read_settings() -> dict:
+def read_settings(org: str = Depends(current_org)) -> dict:
     with session() as conn:
         return {
-            "settings": repo.get_settings(conn),
+            "settings": repo.get_settings(conn, org_id=org),
             "sectors_available": list(SECTORS),
-            **_key_state(conn),
+            **_key_state(conn, org),
         }
 
 
 @api.put("/settings")
-def write_settings(body: SettingsIn) -> dict:
+def write_settings(body: SettingsIn, org: str = Depends(current_org)) -> dict:
     changes = _set(body)
     if "sectors_active" in changes:
         unknown = [s for s in changes["sectors_active"] if s not in SECTORS]
         if unknown:
             raise HTTPException(400, f"Unknown sector(s): {', '.join(unknown)}")
     with session() as conn:
-        return {"settings": repo.update_settings(conn, changes)}
+        return {"settings": repo.update_settings(conn, changes, org_id=org)}
 
 
 @api.post("/settings/api-key")
-def save_api_key(body: ApiKeyIn) -> dict:
+def save_api_key(body: ApiKeyIn, org: str = Depends(current_org),
+                 user=Depends(auth.require_user)) -> dict:
     key = body.api_key.strip()
     with session() as conn:
-        secrets.store_api_key(conn, key)
-        log.info("API key saved (%s)", secrets.mask(key))
-        return _key_state(conn)
+        secrets.store_api_key(conn, key, org_id=org)
+        # Name the actor. Replacing the key changes who pays for every subsequent run,
+        # and a log line reading only "API key saved" is unattributable the moment more
+        # than one person can sign in.
+        log.info("API key saved for org %s by %s (%s)",
+                 org, user.email if user else "local", secrets.mask(key))
+        return _key_state(conn, org)
 
 
 @api.delete("/settings/api-key")
-def delete_api_key() -> dict:
+def delete_api_key(org: str = Depends(current_org),
+                   user=Depends(auth.require_user)) -> dict:
     with session() as conn:
-        secrets.clear_api_key(conn)
+        secrets.clear_api_key(conn, org_id=org)
+        log.info("API key removed for org %s by %s",
+                 org, user.email if user else "local")
         # Reports honestly if an environment key is still in play — otherwise deleting
         # here looks like it stopped the agent scoring when it did not.
-        return _key_state(conn)
+        return _key_state(conn, org)
 
 
 @api.post("/settings/api-key/test")
-def test_api_key(body: ApiKeyTestIn | None = None) -> dict:
+def test_api_key(body: ApiKeyTestIn | None = None,
+                 org: str = Depends(current_org)) -> dict:
     """Check a key works before trusting it. One token, so effectively free.
 
     Accepts a key in the body to test before saving, or falls back to the saved one —
@@ -205,7 +236,7 @@ def test_api_key(body: ApiKeyTestIn | None = None) -> dict:
     key = (body.api_key.strip() if body and body.api_key else None)
     if not key:
         with session() as conn:
-            key = secrets.read_api_key(conn)
+            key = secrets.read_api_key(conn, org_id=org)
     if not key:
         return {"ok": False, "message": "No API key saved yet."}
 
@@ -229,44 +260,45 @@ def test_api_key(body: ApiKeyTestIn | None = None) -> dict:
 # --- programs -----------------------------------------------------------------
 
 @api.get("/programs")
-def list_programs() -> dict:
+def list_programs(org: str = Depends(current_org)) -> dict:
     with session() as conn:
-        return {"programs": repo.list_programs(conn)}
+        return {"programs": repo.list_programs(conn, org_id=org)}
 
 
 @api.post("/programs", status_code=201)
-def create_program(body: ProgramIn) -> dict:
+def create_program(body: ProgramIn, org: str = Depends(current_org)) -> dict:
     try:
         with session() as conn:
-            return {"program": repo.create_program(conn, _set(body))}
+            return {"program": repo.create_program(conn, _set(body), org_id=org)}
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
 
 @api.put("/programs/{program_id}")
-def update_program(program_id: str, body: ProgramIn) -> dict:
+def update_program(program_id: str, body: ProgramIn,
+                   org: str = Depends(current_org)) -> dict:
     with session() as conn:
-        updated = repo.update_program(conn, program_id, _set(body))
+        updated = repo.update_program(conn, program_id, _set(body), org_id=org)
     if updated is None:
         raise HTTPException(404, "No such program.")
     return {"program": updated}
 
 
 @api.delete("/programs/{program_id}")
-def delete_program(program_id: str) -> dict:
+def delete_program(program_id: str, org: str = Depends(current_org)) -> dict:
     with session() as conn:
-        if not repo.delete_program(conn, program_id):
+        if not repo.delete_program(conn, program_id, org_id=org):
             raise HTTPException(404, "No such program.")
     return {"deleted": program_id}
 
 
 @api.post("/programs/draft")
-async def draft_program(body: DraftIn) -> dict:
+async def draft_program(body: DraftIn, org: str = Depends(current_org)) -> dict:
     """The assistant. Returns a draft for the user to review — saves nothing."""
     from .assistant import AssistantError, draft_program_card
 
     with session() as conn:
-        key = secrets.effective_api_key(conn)
+        key = secrets.effective_api_key(conn, org_id=org)
     try:
         return {"draft": await draft_program_card(body.url.strip(), key)}
     except AssistantError as exc:
@@ -279,33 +311,35 @@ async def draft_program(body: DraftIn) -> dict:
 # --- funders ------------------------------------------------------------------
 
 @api.get("/funders")
-def list_funders() -> dict:
+def list_funders(org: str = Depends(current_org)) -> dict:
     with session() as conn:
-        return {"funders": repo.list_funders(conn), "sectors_available": list(SECTORS)}
+        return {"funders": repo.list_funders(conn, org_id=org),
+                "sectors_available": list(SECTORS)}
 
 
 @api.post("/funders", status_code=201)
-def create_funder(body: FunderIn) -> dict:
+def create_funder(body: FunderIn, org: str = Depends(current_org)) -> dict:
     try:
         with session() as conn:
-            return {"funder": repo.create_funder(conn, _set(body))}
+            return {"funder": repo.create_funder(conn, _set(body), org_id=org)}
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
 
 @api.put("/funders/{funder_id}")
-def update_funder(funder_id: str, body: FunderIn) -> dict:
+def update_funder(funder_id: str, body: FunderIn,
+                  org: str = Depends(current_org)) -> dict:
     with session() as conn:
-        updated = repo.update_funder(conn, funder_id, _set(body))
+        updated = repo.update_funder(conn, funder_id, _set(body), org_id=org)
     if updated is None:
         raise HTTPException(404, "No such funder.")
     return {"funder": updated}
 
 
 @api.delete("/funders/{funder_id}")
-def delete_funder(funder_id: str) -> dict:
+def delete_funder(funder_id: str, org: str = Depends(current_org)) -> dict:
     with session() as conn:
-        if not repo.delete_funder(conn, funder_id):
+        if not repo.delete_funder(conn, funder_id, org_id=org):
             raise HTTPException(404, "No such funder.")
     return {"deleted": funder_id}
 
@@ -313,9 +347,11 @@ def delete_funder(funder_id: str) -> dict:
 # --- findings -----------------------------------------------------------------
 
 @api.get("/opportunities")
-def list_opportunities(month: str | None = None, run_id: str | None = None) -> dict:
+def list_opportunities(month: str | None = None, run_id: str | None = None,
+                       org: str = Depends(current_org)) -> dict:
     with session() as conn:
-        rows = repo.list_opportunities(conn, month=month or month_key(), run_id=run_id)
+        rows = repo.list_opportunities(conn, org_id=org,
+                                       month=month or month_key(), run_id=run_id)
     return {
         "month": month or month_key(),
         "opportunities": rows,
@@ -327,7 +363,8 @@ def list_opportunities(month: str | None = None, run_id: str | None = None) -> d
 
 
 @api.get("/opportunities/export.csv")
-def export_opportunities(month: str | None = None, run_id: str | None = None):
+def export_opportunities(month: str | None = None, run_id: str | None = None,
+                         org: str = Depends(current_org)):
     """Download the brief as a spreadsheet file. (CLAUDE.md)
 
     Deliberately not the Phase 3 OAuth push into their live Sheet: this needs no Google
@@ -339,7 +376,7 @@ def export_opportunities(month: str | None = None, run_id: str | None = None):
     """
     key = month or month_key()
     with session() as conn:
-        rows = repo.list_opportunities(conn, month=key, run_id=run_id)
+        rows = repo.list_opportunities(conn, org_id=org, month=key, run_id=run_id)
     return Response(
         content=export.to_csv(rows),
         media_type="text/csv; charset=utf-8",
@@ -349,11 +386,11 @@ def export_opportunities(month: str | None = None, run_id: str | None = None):
 
 
 @api.get("/archive")
-def read_archive(month: str | None = None) -> dict:
+def read_archive(month: str | None = None, org: str = Depends(current_org)) -> dict:
     with session() as conn:
-        summary = archive.month_summary(conn)
-        rows = repo.list_opportunities(conn, month=month) if month else []
-        months = repo.available_months(conn)
+        summary = archive.month_summary(conn, org_id=org)
+        rows = repo.list_opportunities(conn, org_id=org, month=month) if month else []
+        months = repo.available_months(conn, org_id=org)
     return {**summary, "months_available": months,
             "month": month, "opportunities": rows}
 
@@ -361,58 +398,82 @@ def read_archive(month: str | None = None) -> dict:
 # --- runs ---------------------------------------------------------------------
 
 @api.get("/runs")
-def list_runs(limit: int = 20) -> dict:
+def list_runs(limit: int = 20, org: str = Depends(current_org)) -> dict:
     with session() as conn:
-        return {"runs": repo.list_runs(conn, limit=limit)}
+        return {"runs": repo.list_runs(conn, limit=limit, org_id=org)}
 
 
 @api.get("/runs/current")
-def current_run() -> dict:
+def current_run(org: str = Depends(current_org)) -> dict:
+    """This org's current run — or its last one if nothing is going.
+
+    `MANAGER` is a single process-wide slot, so "is a run happening" and "is *your* run
+    happening" are different questions. Reporting the raw `MANAGER.is_running` showed
+    every org a spinner and a live log whenever any org was crawling, which leaked the
+    funders another nonprofit searches and offered a Stop button for a run that was not
+    theirs.
+    """
+    mine = MANAGER.current_run_id_for(org)
     with session() as conn:
-        run = repo.get_run(conn, MANAGER.current_run_id()) if MANAGER.current_run_id() \
-            else repo.latest_run(conn)
-    return {"running": MANAGER.is_running, "run": run, "log": MANAGER.log_tail()}
+        run = repo.get_run(conn, mine, org_id=org) if mine \
+            else repo.latest_run(conn, org_id=org)
+    return {"running": bool(mine), "run": run,
+            "log": MANAGER.log_tail() if mine else [],
+            # A different org is using the single run slot. Say so plainly rather than
+            # letting the Re-run button fail with a bare 409.
+            "busy_elsewhere": MANAGER.is_running and not mine}
 
 
 @api.post("/runs", status_code=202)
-def start_run(body: RunIn) -> dict:
+def start_run(body: RunIn, org: str = Depends(current_org),
+              user=Depends(auth.require_user)) -> dict:
     """The "Re-run search pipeline" button."""
     with session() as conn:
-        if not repo.get_settings(conn)["enabled"]:
+        if not repo.get_settings(conn, org_id=org)["enabled"]:
             raise HTTPException(
                 409, "The agent is switched off. Turn it back on in Settings first.")
     try:
         run_id = MANAGER.start(no_llm=body.no_llm, budget=body.budget,
-                               max_opportunities=body.max_opportunities)
+                               max_opportunities=body.max_opportunities,
+                               org_id=org, started_by=user.email if user else None)
     except RuntimeError as exc:
         raise HTTPException(409, str(exc)) from exc
     return {"run_id": run_id, "running": True}
 
 
 @api.post("/runs/stop")
-def stop_run() -> dict:
-    return {"stopped": MANAGER.stop()}
+def stop_run(org: str = Depends(current_org)) -> dict:
+    """Stop **your** run.
+
+    Previously this stopped whatever the singleton was holding, with no check on who was
+    asking — so one org's staffer, seeing a spinner and a log full of funders they did not
+    recognise, could SIGTERM another nonprofit's five-minute run and destroy the money
+    already spent on it.
+    """
+    return {"stopped": MANAGER.stop(org_id=org)}
 
 
 # --- one call for the whole dashboard -----------------------------------------
 
 @api.get("/state")
-def state() -> dict:
+def state(org: str = Depends(current_org)) -> dict:
     """Everything the main page needs. One request instead of six, so the dashboard
     cannot render itself half-populated while the rest arrives."""
     with session() as conn:
-        rows = repo.list_opportunities(conn, month=month_key())
+        rows = repo.list_opportunities(conn, org_id=org, month=month_key())
         return {
-            "settings": repo.get_settings(conn),
-            **_key_state(conn),
+            "settings": repo.get_settings(conn, org_id=org),
+            **_key_state(conn, org),
             "sectors_available": list(SECTORS),
-            "programs": repo.list_programs(conn),
-            "funders": repo.list_funders(conn),
+            "programs": repo.list_programs(conn, org_id=org),
+            "funders": repo.list_funders(conn, org_id=org),
             "month": month_key(),
             "clear": [r for r in rows if not r["needs_human_check"]],
             "needs_check": [r for r in rows if r["needs_human_check"]],
-            "latest_run": repo.latest_run(conn),
-            "running": MANAGER.is_running,
+            "latest_run": repo.latest_run(conn, org_id=org),
+            "running": bool(MANAGER.current_run_id_for(org)),
+            "busy_elsewhere": MANAGER.is_running
+                              and not MANAGER.current_run_id_for(org),
         }
 
 
@@ -439,14 +500,14 @@ def auth_config() -> dict:
 
 
 @api.get("/auth/me")
-def whoami(user=Depends(auth.require_user)) -> dict:
+def whoami(user=Depends(auth.require_user), org: str = Depends(current_org)) -> dict:
     """Who the *server* thinks you are. The browser already has a Firebase user object,
     so this exists to check the two agree — a token the allow-list rejects should fail
     here rather than after the dashboard has half-rendered."""
     if user is None:
-        return {"signed_in": False, "auth_required": False}
+        return {"signed_in": False, "auth_required": False, "org_id": org}
     return {"signed_in": True, "auth_required": True,
-            "email": user.email, "name": user.name}
+            "email": user.email, "name": user.name, "org_id": org}
 
 
 # --- app ----------------------------------------------------------------------
@@ -454,6 +515,13 @@ def whoami(user=Depends(auth.require_user)) -> dict:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    # A restart is the last step of every deploy, and it kills any pipeline subprocess
+    # along with the API that launched it. Run state lives in `RunManager`, in this
+    # process's memory, so nothing survives to write those rows back — they stay at
+    # 'running' for ever and the dashboard shows a permanent spinner for a search that
+    # died days ago. Reconcile before serving.
+    with session() as conn:
+        repo.reconcile_interrupted_runs(conn)
     log.info("Fundworthy ready.")
     yield
 

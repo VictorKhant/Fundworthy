@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import secrets
-from app.db import init_db, session
+from app.db import DEFAULT_ORG_ID, init_db, session
 
 FAKE_KEY = "sk-ant-api03-THIS-IS-NOT-A-REAL-KEY-0000000000-4f2a"
 
@@ -119,7 +119,7 @@ def test_key_round_trips_for_server_side_use(client):
     """Encrypted at rest, but the pipeline still has to be able to use it."""
     client.post("/api/settings/api-key", json={"api_key": FAKE_KEY})
     with session() as conn:
-        assert secrets.read_api_key(conn) == FAKE_KEY
+        assert secrets.read_api_key(conn, org_id=DEFAULT_ORG_ID) == FAKE_KEY
 
 
 def test_deleting_the_key_clears_it(client):
@@ -127,7 +127,7 @@ def test_deleting_the_key_clears_it(client):
     body = client.delete("/api/settings/api-key").json()
     assert body["has_api_key"] is False
     with session() as conn:
-        assert secrets.read_api_key(conn) is None
+        assert secrets.read_api_key(conn, org_id=DEFAULT_ORG_ID) is None
 
 
 def test_a_corrupt_stored_key_degrades_instead_of_crashing(client, tmp_path):
@@ -369,7 +369,7 @@ def test_an_excluded_funder_is_also_dropped_from_indexed_results(client):
     target = client.get("/api/funders").json()["funders"][0]
     client.put(f"/api/funders/{target['id']}", json={"active": False})
 
-    assert target["name"].casefold() in excluded_funders()
+    assert target["name"].casefold() in excluded_funders(DEFAULT_ORG_ID)
 
 
 def test_warmth_no_longer_orders_the_funder_list(client):
@@ -389,7 +389,7 @@ def test_stopping_a_run_is_not_recorded_as_a_failure():
 
     init_db()
     with session() as conn:
-        run_id = repo.create_run(conn)
+        run_id = repo.create_run(conn, org_id=DEFAULT_ORG_ID)
 
     RunManager()._finalize(run_id, -15)          # SIGTERM
     with session() as conn:
@@ -405,7 +405,7 @@ def test_a_real_crash_is_still_recorded_as_a_failure(client):
     from app.db import session
 
     with session() as conn:
-        run_id = repo.create_run(conn)
+        run_id = repo.create_run(conn, org_id=DEFAULT_ORG_ID)
     RunManager()._finalize(run_id, 1)            # non-zero, not a signal
     with session() as conn:
         run = repo.get_run(conn, run_id)

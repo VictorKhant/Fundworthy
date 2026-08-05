@@ -68,13 +68,34 @@ There is no third state. A `FIREBASE_PROJECT_ID` with an empty `ALLOWED_EMAILS` 
 and says nothing about whether they are allowed in, so without a list any Google account
 on earth could sign in and spend the org's API key.
 
-Still single-tenant: one org, one database, one API key. Multi-tenancy is
-[FUTURE.md](FUTURE.md) §4.
+**Multi-tenant storage** (schema v7). Every row has an owner. `orgs` and `users` tables;
+`org_id` on `settings`, `programs`, `funders`, `opportunities` and `runs`; and each org
+holds **its own encrypted Anthropic key**, so one nonprofit can never spend another's.
+
+Two details worth knowing before touching the data layer:
+
+- The tables whose ids are *derived from content* — `funders.id` is a hash of (name, url),
+  `opportunities.id` is `stable_id(source_url, title)` — are keyed on **`(org_id, id)`**.
+  Two orgs looking at the same grant compute the same id, so a bare `id PRIMARY KEY` let
+  the second write silently overwrite the first.
+- `org_id` is a **required keyword argument** on every function in `app/repo.py`,
+  `app/archive.py` and `app/secrets.py`. That is deliberate: a default would make a
+  forgotten call site a silent cross-tenant read instead of a `TypeError`.
+
+The org comes from the verified ID token via `current_org` in `app/main.py` and from
+nowhere else — no query parameter, body field, or header can select a tenant. On a local
+install (no sign-in) it resolves to `DEFAULT_ORG_ID`, which is also the org every
+pre-tenancy row was migrated into, so an existing install keeps its data.
+
+Today **one user = one org**: the first person to sign in adopts the existing data, and
+everyone after gets their own empty org. Inviting a colleague into an existing org is not
+built — see [FUTURE.md](FUTURE.md) §3.
 
 **Stubbed (present but not wired to a backend):**
 
-- The **org switcher** shows this install's org name but cannot switch or add orgs —
-  there is no second database to switch to until tenant isolation exists.
+- The **org switcher** shows this install's org name but cannot switch or add orgs. Now
+  that orgs are real it actively misleads, and should become a plain label until there is
+  something to switch to.
 - The **GitHub Actions weekly cron** (`.github/workflows/weekly.yml`) and the **Google
   Sheets sink** exist but are legacy: never run in production, and superseded by the
   dashboard + on-demand runs. Scheduling for a hosted deployment should be a systemd
@@ -143,7 +164,7 @@ seat.
 
 | Var | Purpose |
 |---|---|
-| `ANTHROPIC_API_KEY` | Fallback key if none is saved in Settings |
+| `ANTHROPIC_API_KEY` | Fallback key for the **default org only**. A signed-in org that has not saved its own key gets none rather than quietly billing the deployer's — see `app/secrets.py: resolve_api_key` |
 | `FUNDWORTHY_DB_PATH` | Override the SQLite path (default `data/rise.db`) |
 | `FUNDWORTHY_KEYFILE` | Override the Fernet key path (default `data/.fernet-key`) |
 | `FUNDWORTHY_PORT` | Port for `start.sh` (default 8000) |
@@ -171,11 +192,17 @@ the UI so it can't be mistaken for a fact off the funder's page).
   named public database, and the UI shows which.
 - `needs_human_check` rows sort **last** and are shown as their own block.
 
-**Storage & dedup** (`app/db.py`): `opportunities.id = stable_id(source_url, title)` is a
-`TEXT PRIMARY KEY`, so "have we shown this already this month?" is an index probe in the
-free tier — a repeat costs $0.00. Findings are partitioned by `month_key` (`YYYY-MM`);
-at the start of every run, rows from earlier months are purged, so a grant seen in one
-month may legitimately resurface the next.
+**Storage & dedup** (`app/db.py`): `opportunities.id = stable_id(source_url, title)`, and
+the primary key is `(org_id, id)`, so "have we shown **this org** this already this
+month?" is an index probe in the free tier — a repeat costs $0.00. Findings are
+partitioned by `month_key` (`YYYY-MM`); at the start of every run, that org's rows from
+earlier months are purged, so a grant seen in one month may legitimately resurface the
+next.
+
+Both halves of that are scoped per org, and it matters in opposite directions: an
+unscoped **dedup** set hid grants from the second org to run each month (dropped free,
+never scored, no explanation), while an unscoped **purge** let any org's Re-run delete
+every other org's archive.
 
 ---
 
@@ -241,8 +268,8 @@ Everything else (funders, programs, this month's findings) is already seeded.
 ├── app/                         FastAPI backend
 │   ├── main.py                  REST API + static host for the SPA
 │   ├── auth.py                  Firebase sign-in: token verification + allow-list
-│   ├── db.py / repo.py          SQLite schema, migrations, CRUD
-│   ├── secrets.py               encrypted, write-only API-key storage
+│   ├── db.py / repo.py          SQLite schema, migrations, CRUD (all org-scoped)
+│   ├── secrets.py               encrypted, write-only API-key storage, per org
 │   ├── runner.py                the Re-run button (subprocess + live log)
 │   ├── archive.py / export.py   monthly dedup/purge · CSV export
 │   └── assistant.py             "paste a link → program card" (Sonnet)
@@ -257,8 +284,10 @@ Everything else (funders, programs, this month's findings) is already seeded.
 │   └── models.py                the Opportunity dataclass
 ├── sinks/                       sqlite (primary) · webjson · sheets · jsonl
 ├── dashboard/src/               React UI (sidebar, dashboard, archive, settings)
-├── tests/                       pytest — calibration.py is the ranking test
+├── tests/                       pytest — calibration.py is the ranking test,
+│                                 test_tenancy.py is the org-isolation test
 ├── docs/DEPLOY-ORACLE.md        putting it on an Oracle free-tier VM
+├── docs/ACCESS.md               getting into the running system (SSH · Firebase · Oracle)
 ├── CLAUDE.md                    this file — current state
 └── FUTURE.md                    the roadmap (multi-tenant, accounts, scale)
 ```

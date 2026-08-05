@@ -47,7 +47,11 @@ class WebJsonSink:
 
     name = "web"
 
-    def __init__(self, out_path: str | Path = "dashboard/public/run.json") -> None:
+    # NOT `dashboard/public/`. Vite copies that directory verbatim into `dashboard/dist/`
+    # on every build, and app/main.py serves `dist/` to unauthenticated callers through
+    # the SPA catch-all — so writing findings there meant the next `npm run build`
+    # published them at /run.json. Default somewhere nothing serves from.
+    def __init__(self, out_path: str | Path = "data/run.json") -> None:
         self.out_path = Path(out_path)
         self.out_path.parent.mkdir(parents=True, exist_ok=True)
         self._opportunities: list[Opportunity] = []

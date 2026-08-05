@@ -322,7 +322,8 @@ def unconfirmed_sources(max_tier: Tier = Tier.WARM) -> list[Source]:
 
 def sources_from_db(max_tier: Tier = Tier.WARM,
                     sectors: list[str] | None = None,
-                    db_path=None) -> tuple[list[Source], list[Source]] | None:
+                    db_path=None,
+                    org_id: str | None = None) -> tuple[list[Source], list[Source]] | None:
     """(fetchable, unconfirmed) built from the funders table, or None if unavailable.
 
     `sectors` is the set of sector tags the user ticked for this run. An empty or missing
@@ -331,10 +332,13 @@ def sources_from_db(max_tier: Tier = Tier.WARM,
     cannot afford.
     """
     try:
+        from app.db import DEFAULT_ORG_ID
         from app.db import db_path as default_db_path
         from app.db import loads, session
     except ImportError:
         return None
+
+    scope = org_id or DEFAULT_ORG_ID
 
     target = db_path or default_db_path()
     if db_path is None and not default_db_path().exists():
@@ -343,7 +347,8 @@ def sources_from_db(max_tier: Tier = Tier.WARM,
     try:
         with session(target) as conn:
             rows = [dict(r) for r in conn.execute(
-                "SELECT * FROM funders WHERE active=1 ORDER BY warm DESC, name")]
+                "SELECT * FROM funders WHERE active=1 AND org_id=? "
+                "ORDER BY warm DESC, name", (scope,))]
     except Exception:  # noqa: BLE001
         return None
 

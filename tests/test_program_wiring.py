@@ -15,6 +15,8 @@ that is the invariant that broke.
 
 from __future__ import annotations
 
+from app.db import DEFAULT_ORG_ID
+
 import sys
 from pathlib import Path
 
@@ -139,8 +141,8 @@ def test_the_run_budget_is_customizable_end_to_end(tmp_path, monkeypatch):
 
     init_db()
     with session() as conn:
-        assert get_settings(conn)["run_budget_usd"] == 1.00
-        update_settings(conn, {"run_budget_usd": 0.25})
+        assert get_settings(conn, org_id=DEFAULT_ORG_ID)["run_budget_usd"] == 1.00
+        update_settings(conn, {"run_budget_usd": 0.25}, org_id=DEFAULT_ORG_ID)
 
     cfg = load_from_db()
     assert cfg.weekly_budget_usd == 0.25
