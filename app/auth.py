@@ -21,10 +21,9 @@ not own. Everything below treats "verified" as load-bearing, not cosmetic.
 
 Firebase will happily authenticate any Google account on earth. It is an identity
 provider, not a door policy — so the second question has to be answered here, and a
-deployment must answer it **on purpose**: either `ALLOWED_EMAILS` (a private install) or
-`FUNDWORTHY_OPEN_SIGNUP=1` (any nonprofit may sign up). `configure()` refuses to start
-with neither, because the two are opposite products and guessing between them is how an
-install ends up open when it meant to be private.
+deployment answers it with `ALLOWED_EMAILS`: set it and only those addresses get in;
+leave it out and any nonprofit may sign up, which is the default because that is what
+this product is.
 
 **Why open sign-up is safe now and was not before.** The allow-list originally existed
 for one reason: the app held a single shared Anthropic key, so anyone who found the URL
@@ -129,23 +128,11 @@ def configure() -> Config | None:
         log.info("Sign-in is off (no FIREBASE_PROJECT_ID). Local, single-user mode.")
         return None
 
+    # No allow-list means anyone may sign up, and that is the default rather than an
+    # opt-in. There was a `FUNDWORTHY_OPEN_SIGNUP` flag here for one commit; it was
+    # ceremony. Fundworthy is a product any nonprofit can use, so "open" is the shape,
+    # and `ALLOWED_EMAILS` is the thing you set when you want the unusual one.
     allowed = _emails(os.getenv("ALLOWED_EMAILS", ""))
-    open_signup = os.getenv("FUNDWORTHY_OPEN_SIGNUP", "").strip().lower() in {
-        "1", "true", "yes", "on"}
-
-    if not allowed and not open_signup:
-        raise RuntimeError(
-            "FIREBASE_PROJECT_ID is set but neither ALLOWED_EMAILS nor "
-            "FUNDWORTHY_OPEN_SIGNUP is. Pick one deliberately: set ALLOWED_EMAILS to a "
-            "comma-separated list to run a private install, or FUNDWORTHY_OPEN_SIGNUP=1 "
-            "to let any nonprofit sign up. Refusing to start rather than guessing, "
-            "because the two are opposite products."
-        )
-    if allowed and open_signup:
-        log.warning(
-            "Both ALLOWED_EMAILS and FUNDWORTHY_OPEN_SIGNUP are set. Sign-up is open; "
-            "the allow-list is ignored. Unset one of them.")
-        allowed = frozenset()
 
     web_api_key = os.getenv("FIREBASE_WEB_API_KEY", "").strip()
     if not web_api_key:

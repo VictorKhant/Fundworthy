@@ -237,7 +237,7 @@ export default function App() {
         )}
 
         {state && page === "dashboard" && !untouched && (
-          <GettingStarted state={state} setPage={setPage} />
+          <GettingStarted state={state} setPage={setPage} onChange={refresh} />
         )}
 
         {state && page === "dashboard" && <Dashboard state={state} onChange={refresh} />}

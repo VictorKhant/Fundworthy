@@ -32,6 +32,8 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from tests.helpers import seed_starter_funders  # noqa: E402
+
 from app import auth
 from app.db import init_db
 
@@ -82,6 +84,7 @@ def _client(tmp_path, monkeypatch, keypair, **env):
     for k, v in env.items():
         monkeypatch.setenv(k, v)
     init_db()
+    seed_starter_funders()
 
     from app.main import create_app
 
@@ -131,13 +134,15 @@ def test_local_install_keeps_the_api_docs(local):
 
 # --- misconfiguration is a refusal to start -------------------------------------
 
-def test_a_project_without_an_allow_list_refuses_to_boot(tmp_path, monkeypatch, keypair):
-    """The dangerous middle state: sign-in on, allow-list empty. Firebase would
-    authenticate every Google account on earth and let all of them in. The app must not
-    start rather than start open."""
+def test_an_empty_allow_list_means_open_not_broken(tmp_path, monkeypatch, keypair):
+    """This used to be a refusal to start, and the reasoning was sound at the time: one
+    shared Anthropic key meant "anyone may sign in" was "anyone may spend the pilot's
+    money". Per-org keys removed that, so an empty allow-list is now simply the open
+    product rather than a dangerous middle state."""
     monkeypatch.setenv("ALLOWED_EMAILS", "")
-    with pytest.raises(RuntimeError, match="ALLOWED_EMAILS"):
-        _client(tmp_path, monkeypatch, keypair, FIREBASE_PROJECT_ID=PROJECT)
+    with _client(tmp_path, monkeypatch, keypair, FIREBASE_PROJECT_ID=PROJECT,
+                 FIREBASE_WEB_API_KEY="AIza-not-a-secret") as c:
+        assert c.get("/api/auth/config").json()["open_signup"] is True
 
 
 def test_a_project_without_a_web_key_refuses_to_boot(tmp_path, monkeypatch, keypair):
@@ -588,8 +593,7 @@ def test_security_headers_are_present(signed_in):
 def test_open_signup_lets_any_verified_google_account_in(tmp_path, monkeypatch, keypair):
     with _client(tmp_path, monkeypatch, keypair,
                  FIREBASE_PROJECT_ID=PROJECT,
-                 FIREBASE_WEB_API_KEY="AIza-not-a-secret",
-                 FUNDWORTHY_OPEN_SIGNUP="1") as c:
+                 FIREBASE_WEB_API_KEY="AIza-not-a-secret") as c:
         _, public = keypair
         token = jwt.encode(
             {"iss": f"https://securetoken.google.com/{PROJECT}", "aud": PROJECT,
@@ -610,8 +614,7 @@ def test_open_signup_still_requires_a_verified_address(tmp_path, monkeypatch, ke
     own — and then be the account a colleague's invitation gets sent to."""
     with _client(tmp_path, monkeypatch, keypair,
                  FIREBASE_PROJECT_ID=PROJECT,
-                 FIREBASE_WEB_API_KEY="AIza-not-a-secret",
-                 FUNDWORTHY_OPEN_SIGNUP="1") as c:
+                 FIREBASE_WEB_API_KEY="AIza-not-a-secret") as c:
         token = jwt.encode(
             {"iss": f"https://securetoken.google.com/{PROJECT}", "aud": PROJECT,
              "sub": "uid-x", "iat": int(time.time()), "exp": int(time.time()) + 3600,
@@ -621,21 +624,19 @@ def test_open_signup_still_requires_a_verified_address(tmp_path, monkeypatch, ke
         assert res.status_code == 403
 
 
-def test_a_deployment_must_choose_private_or_open(tmp_path, monkeypatch, keypair):
-    """Neither set is a refusal to start, not a permissive default. The two are opposite
-    products and guessing between them is how an install ends up open by accident."""
+def test_no_allow_list_means_open_sign_up(tmp_path, monkeypatch, keypair):
+    """Open is the default, not an opt-in. Fundworthy is a product any nonprofit can
+    use; the allow-list is the unusual configuration, so it is the one you set."""
     monkeypatch.delenv("ALLOWED_EMAILS", raising=False)
-    monkeypatch.delenv("FUNDWORTHY_OPEN_SIGNUP", raising=False)
-    with pytest.raises(RuntimeError, match="ALLOWED_EMAILS nor"):
-        _client(tmp_path, monkeypatch, keypair, FIREBASE_PROJECT_ID=PROJECT,
-                FIREBASE_WEB_API_KEY="AIza-not-a-secret")
+    with _client(tmp_path, monkeypatch, keypair, FIREBASE_PROJECT_ID=PROJECT,
+                 FIREBASE_WEB_API_KEY="AIza-not-a-secret") as c:
+        assert c.get("/api/auth/config").json()["open_signup"] is True
 
 
 def test_the_sign_in_page_is_told_which_mode_it_is_in(tmp_path, monkeypatch, keypair):
     with _client(tmp_path, monkeypatch, keypair,
                  FIREBASE_PROJECT_ID=PROJECT,
-                 FIREBASE_WEB_API_KEY="AIza-not-a-secret",
-                 FUNDWORTHY_OPEN_SIGNUP="1") as c:
+                 FIREBASE_WEB_API_KEY="AIza-not-a-secret") as c:
         assert c.get("/api/auth/config").json()["open_signup"] is True
 
 

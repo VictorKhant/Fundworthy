@@ -1,4 +1,5 @@
-import { usd } from "../api";
+import { useCallback, useEffect, useState } from "react";
+import { api, usd } from "../api";
 
 // The first-run checklist for an organization that has just been created.
 //
@@ -22,7 +23,59 @@ function Step({ done, n, title, children }) {
   );
 }
 
-export default function GettingStarted({ state, setPage }) {
+function Directory({ onChange }) {
+  const [lists, setLists] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const [error, setError] = useState(null);
+
+  const load = useCallback(async () => {
+    try { setLists((await api.directory.read()).lists); }
+    catch (e) { setError(e.message); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  async function add(key) {
+    setBusy(key);
+    setError(null);
+    try {
+      await api.directory.import(key);
+      await load();
+      await onChange();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (!lists) return null;
+  return (
+    <div className="directory">
+      {error && <div className="notice error">{error}</div>}
+      {lists.map((l) => (
+        <div key={l.key} className="directory-row">
+          <div>
+            <strong>{l.name}</strong>{" "}
+            <span className="muted small">
+              {l.count} {l.count === 1 ? "source" : "funders"}
+            </span>
+            <p className="muted small">{l.description}</p>
+          </div>
+          {l.imported >= l.count ? (
+            <span className="muted small">Added</span>
+          ) : (
+            <button className="secondary" onClick={() => add(l.key)}
+                    disabled={busy === l.key}>
+              {busy === l.key ? "Adding…" : l.imported ? "Add the rest" : "Add"}
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export default function GettingStarted({ state, setPage, onChange }) {
   const hasKey = Boolean(state.key_available);
   const hasFunders = (state.funders || []).length > 0;
   const hasProgram = (state.programs || []).some((p) => p.active);
@@ -64,14 +117,11 @@ export default function GettingStarted({ state, setPage }) {
           </button>
         </Step>
 
-        <Step done={hasFunders} n="3" title="Add funders to watch">
-          The foundations, agencies and funds you want checked each week. Start with the
-          handful you already know about — you can add more any time, and untick anyone
-          you already receive money from so you are not shown grants you would not apply
-          for.{" "}
-          <button className="text" onClick={() => setPage("dashboard")}>
-            Add a funder
-          </button>
+        <Step done={hasFunders} n="3" title="Choose funders to watch">
+          Start from a list we have already researched, then add your own. Untick anyone
+          you already receive money from, so you are not shown grants you would not
+          apply for.
+          <Directory onChange={onChange} />
         </Step>
       </ol>
     </section>
