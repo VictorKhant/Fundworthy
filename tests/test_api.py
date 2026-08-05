@@ -445,6 +445,38 @@ def test_the_environment_is_hermetic():
     assert "rise.db" not in os.environ.get("FUNDWORTHY_DB_PATH", "")
 
 
+def test_no_env_var_escapes_the_scrub():
+    """Every variable the app reads must be in `conftest._LEAKY_ENV`.
+
+    The list above is hand-maintained, and the failure mode when it falls behind is
+    nasty: the suite keeps passing on a laptop, where none of those variables are set,
+    and fails only on the VM, where `.env` sets them — which is to say it fails *as the
+    deploy gate*, after a merge, on a change that was fine.
+
+    That has now happened twice. `FIREBASE_PASSWORD_AUTH` was the second: a test
+    asserting the password form is off by default passed everywhere except the one box
+    that has it switched on. So rather than remember, read the source and compare.
+    """
+    import re
+    from pathlib import Path
+
+    from tests.conftest import _LEAKY_ENV
+
+    root = Path(__file__).resolve().parents[1]
+    pattern = re.compile(r'os\.(?:getenv|environ\.get)\(\s*"([A-Z][A-Z0-9_]+)"')
+
+    read: set[str] = set()
+    for package in ("app", "agent", "sinks"):
+        for source in (root / package).rglob("*.py"):
+            read |= set(pattern.findall(source.read_text()))
+
+    missed = sorted(read - set(_LEAKY_ENV))
+    assert not missed, (
+        f"{', '.join(missed)} read by the app but not scrubbed in tests/conftest.py. "
+        "Add them to _LEAKY_ENV, or the suite will pass here and fail on the VM."
+    )
+
+
 def test_sign_in_is_off_for_the_api_suite_whatever_the_box_thinks():
     from app import auth
 
