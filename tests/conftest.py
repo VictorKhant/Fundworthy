@@ -30,8 +30,16 @@ import pytest
 # `FUNDWORTHY_DB_PATH` is the one to notice: inherited from a real `.env`, a test that
 # calls `init_db()` before setting its own path would have run migrations against the
 # live database.
+#
+# Adding a variable to the app and forgetting to add it here is a trap this list has
+# already sprung twice: `FIREBASE_PASSWORD_AUTH` was missing, so a test asserting the
+# password form is off passed on a laptop and failed on the VM, where `.env` switches it
+# on — and it failed *as the deploy gate*, after the merge. `test_no_env_var_escapes_the_
+# scrub` in tests/test_api.py now fails the moment the two drift apart, so the next one
+# is caught here rather than in production.
 _LEAKY_ENV = (
     "FIREBASE_PROJECT_ID", "FIREBASE_WEB_API_KEY", "FIREBASE_AUTH_DOMAIN",
+    "FIREBASE_PASSWORD_AUTH",
     "ALLOWED_EMAILS", "FUNDWORTHY_PILOT_EMAILS",
     "ANTHROPIC_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS",
     "FUNDWORTHY_DB_PATH", "FUNDWORTHY_KEYFILE",
