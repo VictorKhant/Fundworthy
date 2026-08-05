@@ -28,9 +28,11 @@ architecture, not a detail.
 
 ## 1. Where we actually are
 
-The app is **live on the internet** at `https://fundworthy.duckdns.org` (Oracle
-Always-Free ARM VM, `129.159.34.80`), behind nginx + certbot TLS, with Google sign-in via
-Firebase and an `ALLOWED_EMAILS` allow-list. That crossing — from a localhost-only,
+The app is **live on the internet** on an Oracle Always-Free ARM VM, behind nginx +
+certbot TLS, with Google sign-in via Firebase and an `ALLOWED_EMAILS` allow-list. (The
+hostname and the box's address are in [docs/ACCESS.md](docs/ACCESS.md) rather than here —
+this repository is public, and a live box's IP in a public file invites the scanning you
+would rather not attract.) That crossing — from a localhost-only,
 single-tenant tool to a shared, public one — invalidated a set of assumptions the codebase
 was, quite legitimately, built on. This file is now mostly about closing that gap.
 
