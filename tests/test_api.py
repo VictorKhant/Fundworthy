@@ -533,6 +533,40 @@ def test_a_static_file_is_still_served_as_itself(client, tmp_path):
     assert not res.text.lstrip().startswith("<!doctype")
 
 
+def test_head_is_served_wherever_get_is(client):
+    """HEAD is GET without the body, so a 405 where GET returns 200 is a protocol
+    violation — and not a theoretical one. FastAPI does not add HEAD alongside GET the
+    way a plain Starlette route does, so `HEAD /sitemap.xml` answered `405 Method Not
+    Allowed` with `Allow: GET` on the live site, while `GET` returned the file.
+
+    The clients that use HEAD are the ones this matters to: crawlers checking a file's
+    type and size before downloading it, and uptime monitors, which read a 405 as an
+    outage.
+    """
+    from app.main import DIST
+
+    if not (DIST / "index.html").exists():
+        pytest.skip("the dashboard has not been built in this checkout")
+
+    for path in ("/", "/welcome", "/sitemap.xml", "/robots.txt"):
+        if path not in ("/", "/welcome") and not (DIST / path.lstrip("/")).exists():
+            continue
+        head, get = client.head(path), client.get(path)
+        assert head.status_code == 200, f"HEAD {path} -> {head.status_code}"
+        assert head.status_code == get.status_code
+        # Same headers as the GET, and no body: that is the whole definition of HEAD.
+        assert head.headers.get("content-length") == get.headers.get("content-length")
+        assert head.headers.get("content-type") == get.headers.get("content-type")
+        assert head.content == b""
+
+
+def test_head_on_an_unknown_api_route_is_still_a_404(client):
+    """Adding HEAD to the catch-all must not reopen the hole it was narrowed to close:
+    /api is still not the SPA's to answer, by either method."""
+    assert client.head("/api/definitely-not-a-real-route").status_code == 404
+    assert client.get("/api/definitely-not-a-real-route").status_code == 404
+
+
 def _verification_files():
     """Every Search Console verification file in the repo.
 
