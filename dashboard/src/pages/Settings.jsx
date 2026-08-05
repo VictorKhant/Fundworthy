@@ -206,14 +206,22 @@ function OrgPanel({ settings, onChange }) {
             onChange={(e) => setDraft({ ...draft, org_name: e.target.value })}
           />
         </label>
+        {/* Not a filter. It used to feed a geographic reject that ran on the words of
+            every page, which was the wrong instrument — where you can apply is decided
+            by which funders you chose to search, not by pattern-matching prose. This
+            now only picks which city's funder directory you are shown first. */}
         <label className="field">
-          <span>Where you work</span>
+          <span>Your city</span>
           <input
             type="text"
             value={draft.org_location}
-            placeholder="San Diego County, California"
+            placeholder="San Diego, California"
             onChange={(e) => setDraft({ ...draft, org_location: e.target.value })}
           />
+          <span className="muted small">
+            Only decides which funders we show you first. It never hides a grant from
+            you — that is the funder list's job, and yours.
+          </span>
         </label>
       </div>
 

@@ -35,6 +35,8 @@ class Reject(str, Enum):
     BELOW_MIN_AWARD = "below_min_award"
     DEADLINE_TOO_SOON = "deadline_too_soon"
     DEADLINE_PASSED = "deadline_passed"
+    # Retired — kept so historical run rows that recorded it still read back. Nothing
+    # produces it any more; see the note above RELIGIOUS.
     GEOGRAPHY = "geography_excludes_service_area"
     RELIGIOUS = "religious_organization"
     POLITICAL = "political_party"
@@ -60,103 +62,27 @@ class FilterResult:
 
 # --- §7 rejects ---------------------------------------------------------------
 
-# --- geography ----------------------------------------------------------------
+# --- geography: deliberately not a filter --------------------------------------
 #
-# This used to be two hardcoded regexes: one listing San Diego and California as "ours",
-# the other listing a dozen other places as "not ours". That made the `org_location`
-# setting a lie — a Chicago nonprofit could type "Chicago, Illinois", watch it save, and
-# still have every Illinois-only grant rejected for free, in the tier that never explains
-# itself. The setting was fully plumbed through the UI and API and changed nothing.
+# There used to be a geographic reject here, and it is gone rather than fixed.
 #
-# The fix splits the two halves that were tangled together. The vocabulary of *places*
-# is universal and belongs in code — the fifty states do not vary by tenant. Which of
-# those places is **yours** is configuration, and now genuinely comes from settings.
-
-_STATES = (
-    "alabama|alaska|arizona|arkansas|california|colorado|connecticut|delaware|florida|"
-    "georgia|hawaii|idaho|illinois|indiana|iowa|kansas|kentucky|louisiana|maine|"
-    "maryland|massachusetts|michigan|minnesota|mississippi|missouri|montana|nebraska|"
-    "nevada|new\\s+hampshire|new\\s+jersey|new\\s+mexico|new\\s+york|north\\s+carolina|"
-    "north\\s+dakota|ohio|oklahoma|oregon|pennsylvania|rhode\\s+island|south\\s+carolina|"
-    "south\\s+dakota|tennessee|texas|utah|vermont|virginia|washington|west\\s+virginia|"
-    "wisconsin|wyoming|district\\s+of\\s+columbia"
-)
-
-# Metros worth recognising on their own, because a page says "Chicago only" far more
-# often than "Illinois only". Each maps to its state so that an org which entered only a
-# city still matches a page that restricts itself to that city's state.
-_METRO_STATE = {
-    "san diego": "california", "los angeles": "california",
-    "san francisco": "california", "bay area": "california",
-    "sacramento": "california", "fresno": "california",
-    "orange county": "california", "riverside": "california",
-    "san bernardino": "california", "imperial county": "california",
-    "new york city": "new york", "brooklyn": "new york",
-    "chicago": "illinois", "houston": "texas", "dallas": "texas",
-    "austin": "texas", "san antonio": "texas",
-    "philadelphia": "pennsylvania", "phoenix": "arizona",
-    "seattle": "washington", "portland": "oregon", "denver": "colorado",
-    "boston": "massachusetts", "atlanta": "georgia", "miami": "florida",
-    "detroit": "michigan", "minneapolis": "minnesota",
-    "new orleans": "louisiana", "baltimore": "maryland",
-    "st. louis": "missouri", "kansas city": "missouri",
-    "las vegas": "nevada", "cleveland": "ohio", "columbus": "ohio",
-}
-
-_PLACES = "|".join([_STATES] + [re.escape(m) for m in sorted(_METRO_STATE, key=len,
-                                                             reverse=True)])
-
-# A page that restricts itself to one named place. The place is *captured* rather than
-# matched against a fixed "somewhere else" list, so the same pattern serves every org —
-# whether it is theirs is decided afterwards, against their own service area.
-GEOGRAPHY_RESTRICTION = re.compile(
-    r"(?:only|exclusively|solely|limited\s+to|restricted\s+to|must\s+be\s+(?:located|based)\s+in|"
-    r"serving\s+only|residents\s+of|open\s+only\s+to)\s+"
-    r"(?:organizations?\s+|nonprofits?\s+|applicants?\s+|agencies\s+)?"
-    r"(?:that\s+are\s+)?(?:in|within|from|serving|located\s+in|based\s+in)?\s*"
-    rf"(?:the\s+)?({_PLACES})\b",
-    re.IGNORECASE,
-)
-
-# Reach that includes everyone, whoever they are. Never a geographic reject.
-UNIVERSAL_GEOGRAPHY = re.compile(
-    r"(\bnational\b|\bnationwide\b|united\s+states|all\s+50\s+states|any\s+state|"
-    r"across\s+the\s+country)",
-    re.IGNORECASE,
-)
-
-
-def service_area_terms(location: str) -> frozenset[str]:
-    """The places that count as "ours", from what the org typed in Settings.
-
-    "San Diego County, California" → {"san diego county", "san diego", "california"}.
-    A city alone still picks up its state via `_METRO_STATE`, because a page that says
-    "Illinois organizations only" is about a Chicago nonprofit even though it never says
-    Chicago.
-
-    An empty setting returns an empty set, and an empty set means **no geographic
-    rejecting at all** — see `geography_ok`. Guessing a location for an org that has not
-    told us one is how the old hardcoded pattern silently discarded another state's
-    grants.
-    """
-    text = (location or "").strip().lower()
-    if not text:
-        return frozenset()
-
-    terms = {part.strip() for part in re.split(r"[,;/]| and ", text) if part.strip()}
-    terms.add(text)
-    for metro, state in _METRO_STATE.items():
-        if metro in text:
-            terms.add(metro)
-            terms.add(state)
-    for state in re.findall(_STATES, text, re.IGNORECASE):
-        terms.add(re.sub(r"\s+", " ", state.lower()))
-    # "San Diego County" should also answer to "San Diego".
-    for term in list(terms):
-        stripped = re.sub(r"\s+(county|counties|city|region|area|metro)$", "", term)
-        if stripped and stripped != term:
-            terms.add(stripped)
-    return frozenset(t for t in terms if len(t) > 2)
+# It began as two hardcoded regexes naming San Diego as "ours" and a dozen other places
+# as "not ours", which made the `org_location` setting a lie: a Chicago nonprofit could
+# type "Chicago, Illinois", watch it save, and still have every Illinois-only grant
+# discarded for free — in this tier, which never explains itself to anyone. Reading the
+# setting fixed the lie but kept the mistake, which is that a text filter is the wrong
+# instrument for this question at all.
+#
+# Where an org can apply is decided by **which funders it chose to search**, not by
+# pattern-matching prose on a page we already decided to fetch. An org that picks the
+# San Diego funder list is already only seeing San Diego funders; re-deriving that from
+# the words on each page adds nothing and gets it wrong in both directions — rejecting a
+# national program that happens to name a state, and passing a regional one that never
+# names its region.
+#
+# The replacement is a funder directory the org picks cities from (FUTURE.md §4a). Until
+# it exists, an unwanted funder is one un-tick on the remove list — a lever the user can
+# see and change, which a silent regex was not.
 
 RELIGIOUS = re.compile(
     r"\b(church|churches|diocese|diocesan|archdiocese|parish|ministry|ministries|"
@@ -251,10 +177,6 @@ def apply_filters(page: ParsedPage, funder: str, cfg: Config) -> FilterResult:
     title_and_url = f"{page.title} {page.url}"
     if NOT_AN_OPPORTUNITY.search(title_and_url):
         return FilterResult(True, Reject.NOT_AN_OPPORTUNITY, page.title[:120])
-
-    ok, detail = geography_ok(haystack, service_area_terms(cfg.org_location))
-    if not ok:
-        return FilterResult(True, Reject.GEOGRAPHY, detail)
 
     # --- amount. Null is a flag, never a reject (see module docstring).
     #

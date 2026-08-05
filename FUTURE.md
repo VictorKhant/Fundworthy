@@ -164,6 +164,67 @@ Also fixed alongside it:
 
 ---
 
+## 4a. ⭐ The funder directory — the next real feature
+
+Today the funder list is **44 grantmakers in San Diego that we researched by hand and
+hardcoded** (`agent/sd_funders.py`). That does not scale past the pilot: a Chicago
+nonprofit signs up, gets an empty list, and has to know the names of their own local
+foundations before the product does anything for them. Hand-researching a second city
+does not fix it either — it just moves the cliff.
+
+**The page.** A third section, between *This week* and *Past findings*: a directory of
+grantmakers **by city**. Not this week's opportunities — the standing list of who gives
+money where. An org browses it, picks the cities they can apply in, and those funders
+feed the weekly search. Selecting cities on the dashboard replaces every notion of a
+geographic filter (see the note at the top of `agent/filters.py` for why the old one is
+gone rather than fixed).
+
+**Finding more.** A button that sends a *stronger* model — Opus, not the Haiku/Sonnet
+tiering the weekly run uses — out to look for grantmakers in a city that are not in the
+list yet. It runs **on the org's own API key**, like everything else, so the cost lands
+where the value does. This is a different job from the weekly crawl and should not be
+squeezed into `agent/run.py`: the weekly run scores *opportunities* against an award
+floor; this discovers *organizations* and has to verify they exist, give money, and are
+in the right place.
+
+Non-obvious parts, roughly in the order they will bite:
+
+- **The accuracy gate applies here too.** A hallucinated foundation is worse than a
+  missing one — it sends a nonprofit chasing an organization that does not exist. Every
+  entry needs a URL that was fetched and a verbatim quote, exactly as `agent/verify.py`
+  demands of an award amount. "Found by AI, unverified" is a state the UI has to show.
+- **Cost.** Opus over an open-ended search is not a $1 run. It needs its own ceiling,
+  its own confirmation step, and an honest estimate before the user presses the button.
+- **Deduplication against the existing list**, which is a name-matching problem
+  ("The Parker Foundation" vs "Parker Foundation") the funder table does not solve today.
+- **Where results land.** Probably a per-org candidate list the org promotes into their
+  own funder list, rather than writing directly into it — a discovery run that silently
+  adds 30 funders to next week's crawl is a surprise bill.
+- **`agent/discovery.py` already exists** as a seam with a null provider. This is what
+  goes in it.
+
+### Stretch: a shared directory
+
+If a Chicago nonprofit pays Opus to find and verify the grantmakers in Chicago, every
+other Chicago nonprofit on the platform should be able to download that list instead of
+paying to rediscover the same twenty foundations. That is the network effect this product
+has available to it, and it inverts the economics: the first org in a city pays, everyone
+after inherits.
+
+Not a small feature, and worth writing down what it drags in:
+
+- **Publishing is a decision, not a default.** A funder list is not sensitive the way
+  findings are, but an org should opt in per city, not have their research taken.
+- **Trust and provenance.** A shared entry needs to say who verified it and when, and
+  a stale directory is worse than none — foundations close, programs end, URLs rot.
+- **Moderation.** Anything user-contributed and publicly visible needs an answer for
+  spam and for a wrong entry that costs someone a week.
+- **It is the first thing in this product that crosses tenant boundaries on purpose.**
+  Everything in §3 exists to keep orgs apart; this deliberately shares one narrow slice,
+  and the mechanism should make that narrowness structural rather than a promise.
+
+---
+
 ## 4. Onboarding — the BYO-key cliff
 
 BYO-key's cost is friction: the user has no AI experience, and "go to console.anthropic

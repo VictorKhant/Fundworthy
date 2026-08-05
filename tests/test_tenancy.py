@@ -523,17 +523,34 @@ def test_an_interrupted_run_is_catchable_as_an_ordinary_exception():
     assert issubclass(RunInterrupted, Exception)
 
 
-def test_an_org_cannot_crawl_all_day_even_with_no_api_key(db, monkeypatch):
-    """The monthly spend cap bounds money, which only bites an org that supplied a key.
-    A keyless org still makes the server fetch real pages from real funders' sites."""
-    from app.runner import MAX_RUNS_PER_DAY, RunManager
+def test_there_is_no_daily_run_limit_by_default(db, monkeypatch):
+    """An org runs searches on its own Anthropic key. How many it wants is its own
+    business and its own bill — rationing that would be us capping something we do not
+    pay for. The ceiling exists only as a lever for a misbehaving account."""
+    import app.runner as runner
 
+    monkeypatch.setattr(runner, "MAX_RUNS_PER_DAY", 0)
     with session(db) as conn:
-        for i in range(MAX_RUNS_PER_DAY):
+        for i in range(50):
             repo.create_run(conn, f"r{i}", org_id=A)
-        assert repo.runs_today(conn, org_id=A) == MAX_RUNS_PER_DAY
-        # ...and it is counted per org, not globally.
-        assert repo.runs_today(conn, org_id=B) == 0
+
+    # 50 runs today and the 51st is still allowed — it fails for want of a program to
+    # search for, not because we said no.
+    try:
+        runner.RunManager().start(org_id=A)
+    except RuntimeError as exc:
+        assert "searches today" not in str(exc)
+
+
+def test_a_daily_cap_can_still_be_imposed_on_a_misbehaving_account(db, monkeypatch):
+    import app.runner as runner
+
+    monkeypatch.setattr(runner, "MAX_RUNS_PER_DAY", 3)
+    with session(db) as conn:
+        for i in range(3):
+            repo.create_run(conn, f"r{i}", org_id=A)
+        assert repo.runs_today(conn, org_id=A) == 3
+        assert repo.runs_today(conn, org_id=B) == 0      # counted per org, not globally
 
     with pytest.raises(RuntimeError, match="searches today"):
-        RunManager().start(org_id=A)
+        runner.RunManager().start(org_id=A)

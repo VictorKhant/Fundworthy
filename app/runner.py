@@ -43,11 +43,20 @@ MAX_LOG_LINES = 400
 # of orgs (FUTURE.md).
 MAX_CONCURRENT_RUNS = int(os.environ.get("FUNDWORTHY_MAX_CONCURRENT_RUNS", "3"))
 
-# Searches per org per rolling day. The weekly product needs one; a handful covers
-# re-running after a settings change. This is the cap that applies to an org with **no**
-# API key, which the monthly spend cap cannot bound because such a run costs no money —
-# it still fetches real pages from real funders' sites from one server IP.
-MAX_RUNS_PER_DAY = int(os.environ.get("FUNDWORTHY_MAX_RUNS_PER_DAY", "12"))
+# Searches per org per rolling day. **Off by default (0 = unlimited)**, and that is a
+# deliberate reversal.
+#
+# It shipped at 12, which was wrong: an org runs searches on its own Anthropic key, so
+# how many it wants is its own business and its own bill. A ceiling on that is us
+# rationing something we do not pay for.
+#
+# The concern behind it was real but aimed at the wrong target — an org with *no* key can
+# still make the server fetch funders' pages for free, and the monthly spend cap cannot
+# bound a run that costs nothing. That is load on the box and traffic at funders' sites,
+# not the org's money, and it is already bounded by MAX_CONCURRENT_RUNS; the proper fix
+# is the shared fetch cache in FUTURE.md. So this stays as a lever an operator can reach
+# for if one account genuinely misbehaves, and stays out of the way otherwise.
+MAX_RUNS_PER_DAY = int(os.environ.get("FUNDWORTHY_MAX_RUNS_PER_DAY", "0"))
 
 # A deploy touches this file, waits for in-flight runs to finish, restarts, and removes
 # it. While it exists, new runs are refused — otherwise a run started thirty seconds
@@ -164,8 +173,8 @@ class RunManager:
                 # The month's ceiling, checked before anything is spent rather than
                 # after. `run_budget_usd` bounds one run; without this an org could
                 # press Re-run all afternoon and each run would pass its own check.
-                today = repo.runs_today(conn, org_id=org_id)
-                if today >= MAX_RUNS_PER_DAY:
+                today = repo.runs_today(conn, org_id=org_id) if MAX_RUNS_PER_DAY else 0
+                if MAX_RUNS_PER_DAY and today >= MAX_RUNS_PER_DAY:
                     raise RuntimeError(
                         f"Your organization has already run {today} searches today. "
                         "Fundworthy is built around one search a week — try again "

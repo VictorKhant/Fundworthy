@@ -190,7 +190,7 @@ seat.
 | `ALLOWED_EMAILS` | Comma-separated. Who may sign in, for a **private** install. Mutually exclusive with the next one; with neither, the app refuses to boot |
 | `FUNDWORTHY_OPEN_SIGNUP` | `1` = any nonprofit may sign up and get its own empty org. The allow-list existed because one shared key meant a stranger could spend the pilot's money; per-org keys removed that |
 | `FUNDWORTHY_PILOT_EMAILS` | Who inherits the pre-tenancy org (its funders, findings **and saved key**). Claimed by name, never by signing in first — see `app/db.py: _claims_default_org` |
-| `FUNDWORTHY_MAX_RUNS_PER_DAY` | Searches per org per day (default 12). Bounds a keyless org, which the monthly spend cap cannot |
+| `FUNDWORTHY_MAX_RUNS_PER_DAY` | **Off by default.** A lever for one misbehaving account, not a ration — an org spends its own key, so how often it searches is its own business |
 
 ---
 
@@ -233,9 +233,17 @@ every other org's archive.
 3. **Expensive.** Sonnet scoring + rationale on the top N, where N is the result cap.
 
 **Hard filters (free rejects), before any model call:** award below the floor
-(default **$10,000**), deadline inside the runway (default 14 days), geography outside
-the service area, funder on the **remove list**. Match-requirement is *flagged, not
-filtered*.
+(default **$10,000**), deadline inside the runway (default 14 days), funder on the
+**remove list**. Match-requirement is *flagged, not filtered*.
+
+**There is no geographic filter, on purpose.** There was one, and it is removed rather
+than fixed: where an org can apply is decided by *which funders it chose to search*, not
+by pattern-matching prose on a page we already decided to fetch. A text filter got it
+wrong in both directions — rejecting national programs that happened to name a state,
+passing regional ones that never named their region — and it did so silently, in the free
+tier, which explains nothing to anyone. `org_location` is now only a hint about which
+funders to show first. See the note at the top of `agent/filters.py`, and FUTURE.md §4a
+for the funder directory that replaces the idea properly.
 
 **The remove list** is the single exclusion lever, and it is the user's: a funder (or a
 single named program, matched on page title) that is un-ticked is never fetched, never
