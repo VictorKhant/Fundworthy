@@ -124,38 +124,71 @@ sudo systemctl restart fundworthy
 
 ---
 
-## 5 · Adding a colleague — it is **two** steps, not one
+## 5 · Choosing private or open sign-up
+
+The app now refuses to start unless you pick one. They are opposite products.
+
+```bash
+nano ~/Rise-Fund-Finder/.env
+```
+
+**Open sign-up — anyone can create an account:**
+
+```bash
+FUNDWORTHY_OPEN_SIGNUP=1
+# and remove or comment out ALLOWED_EMAILS
+FUNDWORTHY_PILOT_EMAILS=whoever@has-been-using-it.org
+```
+
+**Private — only listed people:**
+
+```bash
+ALLOWED_EMAILS=admin@your-org.org,someone@else.org
+```
+
+> **`FUNDWORTHY_PILOT_EMAILS` is not optional if you open sign-up.** The pre-tenancy
+> organization holds the existing funders, findings, **and the saved Anthropic key**.
+> Whoever lands in it can spend that key. It used to be claimed by whoever signed in
+> first — which was safe only because an allow-list meant that person was trusted. With
+> open sign-up, that rule would hand it to the first stranger who found the URL.
+>
+> Set it to the address of whoever has actually been using Fundworthy. If you leave it
+> unset, nobody inherits that org: the data stays put and one env var plus a restart
+> reunites them with it later. That is recoverable; giving it away is not.
+
+```bash
+sudo systemctl restart fundworthy
+sudo journalctl -u fundworthy -n 20 | grep -i "sign-in"
+# Sign-in is on (open sign-up). Firebase project <id> — any Google account ...
+#   ...or...
+# Sign-in is on (private). Firebase project <id>, N address(es) allowed.
+```
+
+Abuse control with sign-up open: a new org has no API key, so it cannot spend anyone's
+money — but it can still make the server crawl on the free tier.
+`FUNDWORTHY_MAX_RUNS_PER_DAY` (default 12) bounds that per org.
+
+---
+
+## 5b · Adding a colleague
 
 This is the part that will confuse you if nobody says it out loud.
 
 | | |
 |---|---|
-| **Firebase / `ALLOWED_EMAILS`** | Decides whether someone can sign in **at all**. Lives in `.env` on the VM. |
-| **An invitation code** | Decides which **organization** they land in once they are through the door. Generated in the app. |
+| **Signing in** | Open sign-up: nothing to do, they just sign in with Google. Private install: their address has to be in `ALLOWED_EMAILS`, then a restart. |
+| **An invitation code** | Which **organization** they land in. Generated in the app: **Settings → Your organization → Create an invitation code**. |
 
-They are different gates and you need both. Add someone to `ALLOWED_EMAILS` without a
-code and they sign in to their own empty organization. Send a code to someone not on
-`ALLOWED_EMAILS` and they cannot sign in to redeem it.
-
-**To add a colleague to your organization:**
-
-```bash
-# 1. Let them in the front door
-nano ~/Rise-Fund-Finder/.env          # append their address to ALLOWED_EMAILS
-sudo systemctl restart fundworthy     # only read at startup
-
-sudo journalctl -u fundworthy -n 20 | grep -i "sign-in"
-# INFO app.auth: Sign-in is on. Firebase project <id>, N address(es) allowed.  ← N went up
-```
-
-2. In the dashboard: **Settings → Your organization → Create an invitation code**, and
-   send them the code. They paste it the first time they sign in.
+Without a code, a new person signs in to their **own empty organization** — which is
+correct for a different nonprofit and wrong for a colleague. Send them a code and they
+join yours instead, with its funders, program cards and findings.
 
 Codes are single-use and expire in two weeks. Fundworthy does not send email on anyone's
 behalf, so send it however you normally talk to them.
 
-> Yes, the `.env` half should live in the database so this is one step in the UI. It is
-> written up in FUTURE.md §2. Until then, it is two.
+> On a private install this is still two steps, because the allow-list lives in `.env`
+> rather than the database. With open sign-up it is one — which is the main practical
+> reason to prefer it.
 
 ---
 

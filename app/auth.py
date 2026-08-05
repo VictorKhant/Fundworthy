@@ -12,9 +12,22 @@ endpoint) hold nothing worth having.
     Are they allowed?   ALLOWED_EMAILS. Ours, and ours alone.
 
 Firebase will happily authenticate any Google account on earth. It is an identity
-provider, not a door policy. Every deployment therefore needs an explicit allow-list, and
-an empty one is a configuration error rather than a permissive default — see
-`configure()`, which refuses to start the app rather than open it to everybody.
+provider, not a door policy — so the second question has to be answered here, and a
+deployment must answer it **on purpose**: either `ALLOWED_EMAILS` (a private install) or
+`FUNDWORTHY_OPEN_SIGNUP=1` (any nonprofit may sign up). `configure()` refuses to start
+with neither, because the two are opposite products and guessing between them is how an
+install ends up open when it meant to be private.
+
+**Why open sign-up is safe now and was not before.** The allow-list originally existed
+for one reason: the app held a single shared Anthropic key, so anyone who found the URL
+could press Re-run and spend the pilot org's money. Per-org keys removed that — a new
+sign-up gets an empty organization with no key, and cannot spend anything until it
+supplies its own. What it can still do is make the server crawl on the free tier, which
+is why `app/runner.py` caps runs per org per day.
+
+One thing open sign-up made dangerous that private did not: `DEFAULT_ORG_ID` holds the
+pilot's data and their key, and it used to be adopted by whoever signed in first. That is
+now `FUNDWORTHY_PILOT_EMAILS` — see `app/db.py: _claims_default_org`.
 
 **Why not firebase-admin.** A Firebase ID token is an ordinary RS256 JWT signed by
 Google. Verifying it needs the public keys, the issuer, the audience, and an expiry
@@ -58,7 +71,10 @@ class Config:
     project_id: str
     web_api_key: str
     auth_domain: str
+    # Empty means **open sign-up**: any Google account with a verified address may sign
+    # in. See `configure()` for why that is now a reasonable default rather than a hole.
     allowed_emails: frozenset[str]
+    open_signup: bool = False
 
     @property
     def issuer(self) -> str:
@@ -101,14 +117,22 @@ def configure() -> Config | None:
         return None
 
     allowed = _emails(os.getenv("ALLOWED_EMAILS", ""))
-    if not allowed:
+    open_signup = os.getenv("FUNDWORTHY_OPEN_SIGNUP", "").strip().lower() in {
+        "1", "true", "yes", "on"}
+
+    if not allowed and not open_signup:
         raise RuntimeError(
-            "FIREBASE_PROJECT_ID is set but ALLOWED_EMAILS is empty. Firebase decides "
-            "who someone is, not whether they are allowed in — without an allow-list "
-            "any Google account could sign in and spend this org's API key. Set "
-            "ALLOWED_EMAILS in .env (comma-separated), or unset FIREBASE_PROJECT_ID to "
-            "run without sign-in."
+            "FIREBASE_PROJECT_ID is set but neither ALLOWED_EMAILS nor "
+            "FUNDWORTHY_OPEN_SIGNUP is. Pick one deliberately: set ALLOWED_EMAILS to a "
+            "comma-separated list to run a private install, or FUNDWORTHY_OPEN_SIGNUP=1 "
+            "to let any nonprofit sign up. Refusing to start rather than guessing, "
+            "because the two are opposite products."
         )
+    if allowed and open_signup:
+        log.warning(
+            "Both ALLOWED_EMAILS and FUNDWORTHY_OPEN_SIGNUP are set. Sign-up is open; "
+            "the allow-list is ignored. Unset one of them.")
+        allowed = frozenset()
 
     web_api_key = os.getenv("FIREBASE_WEB_API_KEY", "").strip()
     if not web_api_key:
@@ -124,9 +148,15 @@ def configure() -> Config | None:
         auth_domain=os.getenv("FIREBASE_AUTH_DOMAIN", "").strip()
             or f"{project_id}.firebaseapp.com",
         allowed_emails=allowed,
+        open_signup=not allowed,
     )
-    log.info("Sign-in is on. Firebase project %s, %d address(es) allowed.",
-             project_id, len(allowed))
+    if allowed:
+        log.info("Sign-in is on (private). Firebase project %s, %d address(es) allowed.",
+                 project_id, len(allowed))
+    else:
+        log.info("Sign-in is on (open sign-up). Firebase project %s — any Google "
+                 "account with a verified address may create an organization.",
+                 project_id)
     return _config
 
 
@@ -158,6 +188,9 @@ def browser_config() -> dict:
         "project_id": _config.project_id,
         "api_key": _config.web_api_key,
         "auth_domain": _config.auth_domain,
+        # So the sign-in page can offer "create an account" rather than implying that
+        # everyone arriving already has one.
+        "open_signup": _config.open_signup,
     }
 
 
@@ -231,7 +264,9 @@ def verify(token: str) -> User:
     if not email or not claims.get("email_verified"):
         raise HTTPException(403, "That account has no verified email address.")
 
-    if email.casefold() not in cfg.allowed_emails:
+    # An empty allow-list is open sign-up, not a misconfiguration — `configure()` refuses
+    # to start unless one of the two was chosen on purpose.
+    if cfg.allowed_emails and email.casefold() not in cfg.allowed_emails:
         log.warning("Refused sign-in for %s — not on the allow-list.", email)
         raise HTTPException(
             403, f"{email} is not on this install's allow-list. Ask whoever set "

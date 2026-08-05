@@ -61,12 +61,19 @@ the app enforces both:
 | | |
 |---|---|
 | **Local** (default) | Binds `127.0.0.1`, no sign-in. Nothing can reach it, so there is nobody to authenticate. `./start.sh` opens straight onto the dashboard. |
-| **Deployed** | `FIREBASE_PROJECT_ID` + `ALLOWED_EMAILS` set → every `/api/*` route requires a signed-in, allow-listed person. See [docs/DEPLOY-ORACLE.md](docs/DEPLOY-ORACLE.md) §8. |
+| **Deployed** | `FIREBASE_PROJECT_ID` + one of `ALLOWED_EMAILS` (private) or `FUNDWORTHY_OPEN_SIGNUP=1` (anyone may sign up) → every `/api/*` route requires a signed-in person. See [docs/DEPLOY-ORACLE.md](docs/DEPLOY-ORACLE.md) §8. |
 
-There is no third state. A `FIREBASE_PROJECT_ID` with an empty `ALLOWED_EMAILS` is a
-**refusal to start**, not a permissive default — Firebase authenticates *who* someone is
-and says nothing about whether they are allowed in, so without a list any Google account
-on earth could sign in and spend the org's API key.
+There is no third state, and the deployed shape must be chosen **on purpose**: sign-in on
+with neither `ALLOWED_EMAILS` nor `FUNDWORTHY_OPEN_SIGNUP` is a **refusal to start**.
+Firebase authenticates *who* someone is and says nothing about whether they belong here,
+so the second question is answered in `app/auth.py` — and private and open are opposite
+products, so guessing between them is how an install ends up open when it meant to be
+private.
+
+Open sign-up is safe in a way it would not have been six months ago: a new account gets
+its **own empty org with no key**, so it cannot spend anyone's money. What it can still
+do is make the server crawl on the free tier, which is what `FUNDWORTHY_MAX_RUNS_PER_DAY`
+bounds.
 
 **Multi-tenant storage** (schema v7). Every row has an owner. `orgs` and `users` tables;
 `org_id` on `settings`, `programs`, `funders`, `opportunities` and `runs`; and each org
@@ -180,7 +187,10 @@ seat.
 | `FIREBASE_PROJECT_ID` | **Turns sign-in on.** Unset = local mode, no login |
 | `FIREBASE_WEB_API_KEY` | Firebase's public web key, served to the browser. Required when sign-in is on |
 | `FIREBASE_AUTH_DOMAIN` | Defaults to `<project>.firebaseapp.com`; override only for a custom auth domain |
-| `ALLOWED_EMAILS` | Comma-separated. Who may sign in. Required — an empty list with sign-in on refuses to boot |
+| `ALLOWED_EMAILS` | Comma-separated. Who may sign in, for a **private** install. Mutually exclusive with the next one; with neither, the app refuses to boot |
+| `FUNDWORTHY_OPEN_SIGNUP` | `1` = any nonprofit may sign up and get its own empty org. The allow-list existed because one shared key meant a stranger could spend the pilot's money; per-org keys removed that |
+| `FUNDWORTHY_PILOT_EMAILS` | Who inherits the pre-tenancy org (its funders, findings **and saved key**). Claimed by name, never by signing in first — see `app/db.py: _claims_default_org` |
+| `FUNDWORTHY_MAX_RUNS_PER_DAY` | Searches per org per day (default 12). Bounds a keyless org, which the monthly spend cap cannot |
 
 ---
 

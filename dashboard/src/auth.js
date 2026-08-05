@@ -67,6 +67,8 @@ export async function initAuth() {
     config = { enabled: false };
   }
 
+  _openSignup = Boolean(config.open_signup);
+
   if (!config.enabled) return config;
 
   try {
@@ -192,6 +194,12 @@ export async function signOutNow() {
 // --- chrome ------------------------------------------------------------------
 
 const titleCase = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
+// Whether this deployment lets any nonprofit sign up, or is a private install behind an
+// allow-list. Read from the server at boot with the rest of the sign-in config — the
+// client never guesses, because the server is what enforces it.
+let _openSignup = false;
+export const openSignup = () => _openSignup;
 
 export function initials(name) {
   return (name || "")

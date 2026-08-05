@@ -11,7 +11,7 @@ import hashlib
 import logging
 import re
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from .db import (DEFAULT_SETTINGS, dumps, loads, month_key, now_iso)
@@ -553,6 +553,21 @@ def spend_summary(conn, *, org_id: str, month: str | None = None) -> dict:
         "runs": row["runs"],
         "over_cap": spent >= cap,
     }
+
+
+def runs_today(conn, *, org_id: str) -> int:
+    """How many searches this org has started in the last 24 hours.
+
+    The monthly spend cap bounds money, which only bites an org that has supplied a key.
+    An org with no key still costs us: the free deterministic tier fetches real pages
+    from real funders' websites, from one server IP. With open sign-up that is the abuse
+    surface that money no longer covers.
+    """
+    since = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    return conn.execute(
+        "SELECT COUNT(*) AS n FROM runs WHERE org_id=? AND started_at >= ?",
+        (org_id, since),
+    ).fetchone()["n"]
 
 
 def reconcile_interrupted_runs(conn) -> int:

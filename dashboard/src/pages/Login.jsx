@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { authEnabled, authError, signInWithGoogle } from "../auth";
+import { authEnabled, authError, openSignup, signInWithGoogle } from "../auth";
 
 // Sign in. Google, and only Google.
 //
@@ -51,8 +51,12 @@ export default function Login({ onHome, notice }) {
       </button>
 
       <div className="authcard">
-        <h1 className="auth-h1">Welcome back</h1>
-        <p className="auth-sub">Sign in to see this week's findings.</p>
+        <h1 className="auth-h1">{openSignup() ? "Welcome" : "Welcome back"}</h1>
+        <p className="auth-sub">
+          {openSignup()
+            ? "Sign in with Google to start finding funding. It is free — you bring your own Claude key, and your searches are billed to you and visible to nobody else."
+            : "Sign in to see this week's findings."}
+        </p>
 
         {(broken || notice || error) && (
           <div className="notice error">{broken || notice || error}</div>
@@ -66,10 +70,19 @@ export default function Login({ onHome, notice }) {
                 {busy ? "Opening Google…" : "Continue with Google"}
               </button>
             </div>
-            <p className="auth-switch">
-              Sign-in is limited to the people this install was set up for. If Google lets
-              you in and Fundworthy does not, ask whoever set it up to add your address.
-            </p>
+            {openSignup() ? (
+              <p className="auth-switch">
+                No account to create — signing in with Google is signing up. If a
+                colleague already uses Fundworthy, ask them for an invitation code so you
+                join their organization instead of starting a new one.
+              </p>
+            ) : (
+              <p className="auth-switch">
+                Sign-in is limited to the people this install was set up for. If Google
+                lets you in and Fundworthy does not, ask whoever set it up to add your
+                address.
+              </p>
+            )}
           </>
         ) : broken ? (
           <p className="auth-switch">

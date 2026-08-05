@@ -577,6 +577,48 @@ def ensure_org(conn: sqlite3.Connection, org_id: str, name: str = "") -> None:
     )
 
 
+def _claims_default_org(conn: sqlite3.Connection, email: str) -> bool:
+    """May this address adopt the pre-tenancy org?
+
+    Two ways to say yes, and neither is "you got here first":
+
+      1. `FUNDWORTHY_PILOT_EMAILS` names them. This is the deployed answer — the operator
+         writes down who the existing data belongs to.
+      2. Nobody has ever signed in AND the org is empty. A genuinely fresh install has
+         nothing to steal, so its first user may as well have the default org rather than
+         accumulating an orphan beside it.
+
+    An install with existing data and no `FUNDWORTHY_PILOT_EMAILS` therefore hands that
+    data to nobody. That is deliberate: the org is still there, and one env var plus a
+    restart reunites its owner with it. There is no equivalent undo for having given a
+    stranger someone else's API key.
+    """
+    claimants = {e.strip().casefold()
+                 for e in os.environ.get("FUNDWORTHY_PILOT_EMAILS", "").split(",")
+                 if e.strip()}
+    if claimants:
+        return email.strip().casefold() in claimants
+
+    nobody_yet = conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"] == 0
+    if not nobody_yet:
+        return False
+
+    # "Empty" means no funders and no findings. Settings alone are just defaults.
+    has_data = conn.execute(
+        "SELECT (SELECT COUNT(*) FROM funders WHERE org_id=?) + "
+        "       (SELECT COUNT(*) FROM opportunities WHERE org_id=?) AS n",
+        (DEFAULT_ORG_ID, DEFAULT_ORG_ID),
+    ).fetchone()["n"] > 0
+
+    if has_data:
+        log.warning(
+            "%s is the first sign-in, but org %r already holds data and no "
+            "FUNDWORTHY_PILOT_EMAILS is set — giving them a new org instead. Set that "
+            "variable to whoever the existing data belongs to.", email, DEFAULT_ORG_ID)
+        return False
+    return True
+
+
 def org_for_user(conn: sqlite3.Connection, uid: str, email: str) -> str:
     """The org this person belongs to, creating one on their first sign-in.
 
@@ -588,9 +630,14 @@ def org_for_user(conn: sqlite3.Connection, uid: str, email: str) -> str:
     but it is not the end state. Inviting a colleague into an existing org is the next
     piece of work (FUTURE.md).
 
-    The very first person to sign in on an install that already has data adopts
-    `DEFAULT_ORG_ID`, so the pilot org's existing funders and findings stay with the
-    person who has been using them rather than being stranded behind a new empty org.
+    **`DEFAULT_ORG_ID` is claimed by name, not by arriving first.** It holds everything
+    written before tenancy existed — the pilot's funders, their findings, and their
+    encrypted API key — so whoever lands in it can spend that key. This used to be
+    "whoever signs in first", which was safe only because an allow-list meant the first
+    signer was someone we trusted. With open sign-up that rule hands the pilot org's data
+    and their Anthropic credit to the first stranger who finds the URL. So it is now an
+    explicit list of addresses in `FUNDWORTHY_PILOT_EMAILS`, and if that is unset nobody
+    adopts it — a stranded org is recoverable, a handed-over one is not.
     """
     row = conn.execute("SELECT org_id FROM users WHERE uid=?", (uid,)).fetchone()
     if row:
@@ -607,8 +654,8 @@ def org_for_user(conn: sqlite3.Connection, uid: str, email: str) -> str:
                      (uid, now_iso(), email))
         return row["org_id"]
 
-    unclaimed = conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"] == 0
-    org_id = DEFAULT_ORG_ID if unclaimed else f"org_{uuid.uuid4().hex[:16]}"
+    org_id = DEFAULT_ORG_ID if _claims_default_org(conn, email) \
+        else f"org_{uuid.uuid4().hex[:16]}"
     ensure_org(conn, org_id)
     conn.execute(
         "INSERT INTO users(uid, email, org_id, created_at, last_seen_at) VALUES(?,?,?,?,?)",

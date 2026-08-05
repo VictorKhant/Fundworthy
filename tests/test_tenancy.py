@@ -245,10 +245,36 @@ def test_runs_are_listed_per_org(db):
 
 # --- users and org assignment -------------------------------------------------
 
-def test_the_first_person_to_sign_in_adopts_the_existing_data(db):
-    """The pilot org's funders and findings predate tenancy. Stranding them behind a new
-    empty org would read as data loss to the person who has been using them."""
+def test_the_pre_tenancy_org_is_claimed_by_name_not_by_arriving_first(db, monkeypatch):
+    """`DEFAULT_ORG_ID` holds the pilot's funders, findings and encrypted API key, so
+    whoever lands in it can spend that key. Under open sign-up "whoever signs in first"
+    would hand all of it to the first stranger who finds the URL."""
+    monkeypatch.setenv("FUNDWORTHY_PILOT_EMAILS", "owner@example.org")
     with session(db) as conn:
+        assert org_for_user(conn, "uid-owner", "Owner@Example.org") == DEFAULT_ORG_ID
+
+
+def test_a_stranger_signing_in_first_does_not_inherit_the_pilots_data(db, monkeypatch):
+    """The security property, stated as a test. The fixture's default org is seeded with
+    the pilot's funders, so this is the real shape of the risk."""
+    monkeypatch.delenv("FUNDWORTHY_PILOT_EMAILS", raising=False)
+    with session(db) as conn:
+        got = org_for_user(conn, "uid-stranger", "stranger@example.com")
+        assert got != DEFAULT_ORG_ID
+        assert repo.list_funders(conn, org_id=got) == []
+        # ...and the pilot's data is still sitting there, waiting to be claimed.
+        assert len(repo.list_funders(conn, org_id=DEFAULT_ORG_ID)) > 40
+
+
+def test_a_genuinely_fresh_install_still_gives_its_first_user_the_default_org(
+        tmp_path, monkeypatch):
+    """An install with nothing in it has nothing to steal, so accumulating an orphan org
+    beside an empty default one would be pure clutter."""
+    monkeypatch.delenv("FUNDWORTHY_PILOT_EMAILS", raising=False)
+    path = tmp_path / "fresh.db"
+    monkeypatch.setenv("FUNDWORTHY_DB_PATH", str(path))
+    init_db(path, seed=False)
+    with session(path) as conn:
         assert org_for_user(conn, "uid-1", "first@example.org") == DEFAULT_ORG_ID
 
 
@@ -495,3 +521,19 @@ def test_an_interrupted_run_is_catchable_as_an_ordinary_exception():
     from agent.run import RunInterrupted
 
     assert issubclass(RunInterrupted, Exception)
+
+
+def test_an_org_cannot_crawl_all_day_even_with_no_api_key(db, monkeypatch):
+    """The monthly spend cap bounds money, which only bites an org that supplied a key.
+    A keyless org still makes the server fetch real pages from real funders' sites."""
+    from app.runner import MAX_RUNS_PER_DAY, RunManager
+
+    with session(db) as conn:
+        for i in range(MAX_RUNS_PER_DAY):
+            repo.create_run(conn, f"r{i}", org_id=A)
+        assert repo.runs_today(conn, org_id=A) == MAX_RUNS_PER_DAY
+        # ...and it is counted per org, not globally.
+        assert repo.runs_today(conn, org_id=B) == 0
+
+    with pytest.raises(RuntimeError, match="searches today"):
+        RunManager().start(org_id=A)

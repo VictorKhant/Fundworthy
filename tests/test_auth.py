@@ -222,8 +222,14 @@ def test_a_valid_allow_listed_token_gets_in(signed_in, token_for):
     assert r.json()["settings"]["min_award"] == 10_000
 
     me = signed_in.get("/api/auth/me", headers=auth_header(token_for())).json()
-    assert me == {"signed_in": True, "auth_required": True,
-                  "email": ALLOWED, "name": "Test Admin", "org_id": "default"}
+    assert me["signed_in"] is True
+    assert me["auth_required"] is True
+    assert me["email"] == ALLOWED
+    assert me["name"] == "Test Admin"
+    # An org id, but deliberately NOT `default`: that org holds the pre-tenancy data and
+    # its key, and it is claimed by name via FUNDWORTHY_PILOT_EMAILS rather than by
+    # whoever signs in first. See app/db.py: _claims_default_org.
+    assert me["org_id"] and me["org_id"] != "default"
 
 
 def test_the_allow_list_is_case_insensitive(signed_in, token_for):
@@ -557,3 +563,69 @@ def test_security_headers_are_present(signed_in):
     # HSTS belongs on nginx — sending it from the app would pin a developer's
     # http://127.0.0.1:8000 to HTTPS for a year.
     assert "Strict-Transport-Security" not in res.headers
+
+
+# --- open sign-up ---------------------------------------------------------------
+#
+# The allow-list existed for one reason: a single shared Anthropic key meant anyone who
+# found the URL could spend the pilot org's money. Per-org keys removed that, so a
+# deployment can now let any nonprofit sign up — but it has to say which product it is.
+
+def test_open_signup_lets_any_verified_google_account_in(tmp_path, monkeypatch, keypair):
+    with _client(tmp_path, monkeypatch, keypair,
+                 FIREBASE_PROJECT_ID=PROJECT,
+                 FIREBASE_WEB_API_KEY="AIza-not-a-secret",
+                 FUNDWORTHY_OPEN_SIGNUP="1") as c:
+        _, public = keypair
+        token = jwt.encode(
+            {"iss": f"https://securetoken.google.com/{PROJECT}", "aud": PROJECT,
+             "sub": "uid-stranger", "iat": int(time.time()),
+             "exp": int(time.time()) + 3600,
+             "email": "brand.new@somenonprofit.org", "email_verified": True,
+             "name": "A Stranger"},
+            keypair[0], algorithm="RS256")
+        me = c.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+        assert me.status_code == 200
+        assert me.json()["signed_in"] is True
+
+
+def test_open_signup_still_requires_a_verified_address(tmp_path, monkeypatch, keypair):
+    """Firebase's email/password provider would otherwise let anyone register any
+    address without proving they own it."""
+    with _client(tmp_path, monkeypatch, keypair,
+                 FIREBASE_PROJECT_ID=PROJECT,
+                 FIREBASE_WEB_API_KEY="AIza-not-a-secret",
+                 FUNDWORTHY_OPEN_SIGNUP="1") as c:
+        token = jwt.encode(
+            {"iss": f"https://securetoken.google.com/{PROJECT}", "aud": PROJECT,
+             "sub": "uid-x", "iat": int(time.time()), "exp": int(time.time()) + 3600,
+             "email": "unverified@example.org", "email_verified": False},
+            keypair[0], algorithm="RS256")
+        res = c.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+        assert res.status_code == 403
+
+
+def test_a_deployment_must_choose_private_or_open(tmp_path, monkeypatch, keypair):
+    """Neither set is a refusal to start, not a permissive default. The two are opposite
+    products and guessing between them is how an install ends up open by accident."""
+    monkeypatch.delenv("ALLOWED_EMAILS", raising=False)
+    monkeypatch.delenv("FUNDWORTHY_OPEN_SIGNUP", raising=False)
+    with pytest.raises(RuntimeError, match="ALLOWED_EMAILS nor"):
+        _client(tmp_path, monkeypatch, keypair, FIREBASE_PROJECT_ID=PROJECT,
+                FIREBASE_WEB_API_KEY="AIza-not-a-secret")
+
+
+def test_the_sign_in_page_is_told_which_mode_it_is_in(tmp_path, monkeypatch, keypair):
+    with _client(tmp_path, monkeypatch, keypair,
+                 FIREBASE_PROJECT_ID=PROJECT,
+                 FIREBASE_WEB_API_KEY="AIza-not-a-secret",
+                 FUNDWORTHY_OPEN_SIGNUP="1") as c:
+        assert c.get("/api/auth/config").json()["open_signup"] is True
+
+
+def test_a_private_install_is_unchanged(signed_in, token_for):
+    """The allow-list still works exactly as before when it is the chosen mode."""
+    assert signed_in.get("/api/auth/config").json()["open_signup"] is False
+    refused = signed_in.get("/api/auth/me", headers={
+        "Authorization": "Bearer " + token_for(email="nobody@example.org")})
+    assert refused.status_code == 403

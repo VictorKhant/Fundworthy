@@ -43,6 +43,12 @@ MAX_LOG_LINES = 400
 # of orgs (FUTURE.md).
 MAX_CONCURRENT_RUNS = int(os.environ.get("FUNDWORTHY_MAX_CONCURRENT_RUNS", "3"))
 
+# Searches per org per rolling day. The weekly product needs one; a handful covers
+# re-running after a settings change. This is the cap that applies to an org with **no**
+# API key, which the monthly spend cap cannot bound because such a run costs no money —
+# it still fetches real pages from real funders' sites from one server IP.
+MAX_RUNS_PER_DAY = int(os.environ.get("FUNDWORTHY_MAX_RUNS_PER_DAY", "12"))
+
 # A deploy touches this file, waits for in-flight runs to finish, restarts, and removes
 # it. While it exists, new runs are refused — otherwise a run started thirty seconds
 # before `systemctl restart` gets killed at minute seven, and the org pays for a search
@@ -158,6 +164,14 @@ class RunManager:
                 # The month's ceiling, checked before anything is spent rather than
                 # after. `run_budget_usd` bounds one run; without this an org could
                 # press Re-run all afternoon and each run would pass its own check.
+                today = repo.runs_today(conn, org_id=org_id)
+                if today >= MAX_RUNS_PER_DAY:
+                    raise RuntimeError(
+                        f"Your organization has already run {today} searches today. "
+                        "Fundworthy is built around one search a week — try again "
+                        "tomorrow, or get in touch if you genuinely need more."
+                    )
+
                 spend = repo.spend_summary(conn, org_id=org_id)
                 if spend["over_cap"]:
                     raise RuntimeError(
