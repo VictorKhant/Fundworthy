@@ -208,6 +208,117 @@ behalf, so send it however you normally talk to them.
 
 ---
 
+## 5c · Two settings that are easy to miss
+
+Both go in the same `~/Rise-Fund-Finder/.env`, and both need a restart.
+
+```bash
+nano ~/Rise-Fund-Finder/.env
+```
+
+### `VITE_SITE_URL` — so Google can index you
+
+**The host is your public address**, the one you type in a browser to reach Fundworthy:
+whatever hostname you pointed at the VM in step 7 of DEPLOY-ORACLE (a DuckDNS subdomain,
+or a real domain if you bought one). Not the IP, and not `localhost` — it goes into the
+`<link rel="canonical">` and the sitemap, and both must be a URL a search engine can
+actually fetch.
+
+```bash
+VITE_SITE_URL=https://your-host.duckdns.org
+```
+
+No trailing slash. `https`, not `http` — a canonical pointing at the plain-HTTP version
+of a site that redirects to HTTPS is a redirect loop as far as a crawler is concerned.
+
+It is read at **build** time, not at run time, so it only takes effect on the next
+`npm run build`. `scripts/deploy.sh` pulls it out of this file automatically, so a normal
+deploy is enough. To apply it without waiting for one:
+
+```bash
+cd ~/Rise-Fund-Finder/dashboard
+VITE_SITE_URL=https://your-host.duckdns.org npm run build
+sudo systemctl restart fundworthy
+```
+
+Check it took:
+
+```bash
+curl -s https://your-host.duckdns.org/robots.txt          # names your host, not SITE_URL
+curl -s https://your-host.duckdns.org/ | grep canonical
+```
+
+> Setting this does not put you on Google. It makes you *indexable*. Then: add the site
+> at [search.google.com/search-console](https://search.google.com/search-console), verify
+> ownership (the DNS TXT method works with DuckDNS), and submit
+> `https://your-host.duckdns.org/sitemap.xml`. Expect days to weeks, not hours.
+
+### `FUNDWORTHY_ADMIN_EMAILS` — who may read the platform numbers
+
+```bash
+FUNDWORTHY_ADMIN_EMAILS=you@gmail.com,your.friend@gmail.com
+```
+
+Comma-separated, and **unset means nobody**. It is deliberately its own list rather than
+reusing `ALLOWED_EMAILS`: with open sign-up that one is empty, so hanging admin off "are
+you signed in" would publish your numbers to anyone who made an account.
+
+```bash
+sudo systemctl restart fundworthy
+```
+
+---
+
+## 5d · Reading the platform stats
+
+Two ways, and the first is the one you will actually use.
+
+### On the VM — no token needed
+
+```bash
+cd ~/Rise-Fund-Finder
+.venv/bin/python -m app.stats
+```
+
+```
+  Organizations               2
+  People                      2
+  Active in last 7 days       2   ████████████████████████
+
+  With their own API key      1   ████████████············
+
+  Searches (30 days)          3
+    done                      2
+    failed                    1
+  Spent (30 days)      $    2.14   (their credit, not ours)
+```
+
+`--json` for anything scripted. Its authentication is the SSH session: anyone who can run
+it can already read `data/rise.db`, so a token here would guard nothing.
+
+**The line that matters is "with their own API key".** Everything above it is somebody
+looking; that one is somebody committing their own money. And if "needing a human check"
+climbs as a share of findings, the accuracy gate is nulling more fields than it used to —
+which usually means a funder site changed shape, and which no single org's dashboard
+would ever show you.
+
+### Over HTTP — same numbers, needs a token
+
+`GET /api/admin/stats` is authenticated like every other route, so it needs a Firebase ID
+token. Getting one means opening dev tools on the dashboard, finding any `/api/` request,
+and copying the `Authorization` header:
+
+```bash
+curl -s https://your-host.duckdns.org/api/admin/stats \
+     -H "Authorization: Bearer <paste the token>" | python3 -m json.tool
+```
+
+Tokens expire after an hour, which is why the CLI exists. A non-admin gets **404**, not
+403 — saying "you are not an admin" would confirm the endpoint exists and that being one
+is a thing to become.
+
+---
+
 ## 6 · Firebase — nothing to change, two things to check
 
 This update does not change how sign-in works, so there is no Firebase migration. Confirm

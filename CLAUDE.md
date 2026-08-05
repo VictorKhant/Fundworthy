@@ -311,6 +311,7 @@ Everything else (funders, programs, this month's findings) is already seeded.
 │   ├── runner.py                the Re-run button (subprocess + live log)
 │   ├── archive.py / export.py   monthly dedup/purge · CSV export
 │   ├── scheduler.py             the weekly run, per org, on their own day and hour
+│   ├── stats.py                 `python -m app.stats` — how the install is doing
 │   └── assistant.py             "paste a link → program card" (Sonnet)
 ├── agent/                       the pipeline
 │   ├── run.py                   entrypoint, orchestration, budget ceiling

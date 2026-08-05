@@ -118,6 +118,22 @@ echo "    $before -> $after"
 
 say "Installing"
 .venv/bin/pip install -q -r requirements.txt
+
+# The dashboard build needs VITE_SITE_URL for the canonical link and the sitemap, and it
+# lives in the same .env the systemd unit reads. That file is an EnvironmentFile, not a
+# shell script — no `export`, and `source`ing it would run anything in it — so pull out
+# the one line rather than executing the file.
+if [ -z "${VITE_SITE_URL:-}" ] && [ -f "$APP_DIR/.env" ]; then
+    VITE_SITE_URL=$(sed -n 's/^[[:space:]]*VITE_SITE_URL[[:space:]]*=[[:space:]]*//p' \
+                    "$APP_DIR/.env" | tail -n 1 | tr -d '"'"'"'\r')
+    export VITE_SITE_URL
+fi
+if [ -n "${VITE_SITE_URL:-}" ]; then
+    echo "    site URL: $VITE_SITE_URL"
+else
+    echo "    VITE_SITE_URL not set — the canonical link and sitemap will be omitted."
+    echo "    Add it to $APP_DIR/.env so search engines can index this deployment."
+fi
 # `npm ci` is the right call — it installs exactly the lockfile — but it refuses outright
 # if package.json and the lockfile have drifted, which would turn a CSS change into a
 # failed deploy. Fall back rather than stopping.
