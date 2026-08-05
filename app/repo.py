@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 PUBLIC_SETTINGS = tuple(DEFAULT_SETTINGS.keys())
 
 _INT_SETTINGS = {"min_award", "min_deadline_runway_days", "max_opportunities"}
-_FLOAT_SETTINGS = {"run_budget_usd"}
+_FLOAT_SETTINGS = {"run_budget_usd", "monthly_budget_usd"}
 _BOOL_SETTINGS = {"enabled", "search_beyond_partners"}
 _JSON_SETTINGS = {"sectors_active"}
 
@@ -524,6 +524,35 @@ def list_runs(conn, limit: int = 20, *, org_id: str) -> list[dict]:
     return [_run_out(r) for r in conn.execute(
         "SELECT * FROM runs WHERE org_id=? ORDER BY started_at DESC LIMIT ?",
         (org_id, limit))]
+
+
+def spend_summary(conn, *, org_id: str, month: str | None = None) -> dict:
+    """What this org has spent through Fundworthy this calendar month.
+
+    Deliberately *our* number, summed from the run log, rather than a reading of the
+    org's Anthropic balance — Anthropic publishes no credit-balance endpoint or header.
+    (`anthropic-ratelimit-tokens-remaining` looks like one and is not: it is tokens per
+    minute, and it refills.) So the honest thing to show a nonprofit is what this app
+    spent of their money, which is the number they can actually hold us to.
+    """
+    key = month or month_key()
+    row = conn.execute(
+        "SELECT COALESCE(SUM(usd_spent), 0.0) AS spent, COUNT(*) AS runs "
+        "FROM runs WHERE org_id=? AND started_at >= ?",
+        (org_id, f"{key}-01"),
+    ).fetchone()
+
+    settings = get_settings(conn, org_id=org_id)
+    cap = float(settings["monthly_budget_usd"])
+    spent = round(float(row["spent"]), 4)
+    return {
+        "month": key,
+        "spent_usd": spent,
+        "cap_usd": cap,
+        "remaining_usd": round(max(0.0, cap - spent), 4),
+        "runs": row["runs"],
+        "over_cap": spent >= cap,
+    }
 
 
 def reconcile_interrupted_runs(conn) -> int:

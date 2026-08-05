@@ -34,7 +34,7 @@ import os
 import sqlite3
 import uuid
 from contextlib import contextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -84,6 +84,25 @@ CREATE TABLE IF NOT EXISTS users (
     last_seen_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_users_org ON users(org_id);
+
+-- An invitation to join an existing org. The admin generates one and shares the code
+-- however they like (email, Slack, out loud); the joiner pastes it during sign-up.
+--
+-- Deliberately a code rather than an emailed link: sending mail needs a provider, a
+-- domain reputation, and a bounce story, and CLAUDE.md rules out the app sending mail
+-- on anyone's behalf. A code the admin sends through a channel they already trust does
+-- the same job with none of that.
+CREATE TABLE IF NOT EXISTS invites (
+    code       TEXT PRIMARY KEY,
+    org_id     TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    created_by TEXT,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    -- Single-use. `redeemed_by` is kept rather than deleting the row, so an admin can
+    -- see who used which invite.
+    redeemed_at TEXT,
+    redeemed_by TEXT
+);
 
 CREATE TABLE IF NOT EXISTS settings (
     org_id     TEXT NOT NULL DEFAULT 'default',
@@ -236,6 +255,7 @@ CREATE INDEX        IF NOT EXISTS idx_funders_org       ON funders(org_id);
 CREATE INDEX        IF NOT EXISTS idx_opp_month         ON opportunities(org_id, month_key);
 CREATE INDEX        IF NOT EXISTS idx_opp_run           ON opportunities(run_id);
 CREATE INDEX        IF NOT EXISTS idx_runs_started      ON runs(org_id, started_at DESC);
+CREATE INDEX        IF NOT EXISTS idx_invites_org       ON invites(org_id);
 """
 
 
@@ -250,6 +270,16 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "min_deadline_runway_days": "14",
     "max_opportunities": "12",
     "run_budget_usd": "1.00",
+    # The org's own ceiling on what Fundworthy may spend of their Anthropic credit in a
+    # calendar month, across every run. `run_budget_usd` bounds one run; this bounds the
+    # bill. Enforced in app/runner.py before a run is launched.
+    #
+    # It is deliberately *our* number rather than a reading of their Anthropic balance:
+    # Anthropic exposes no credit-balance endpoint or header (the `anthropic-ratelimit-*`
+    # headers are tokens-per-minute, which refill, not dollars). So we cap what we spend
+    # and show what we spent, and onboarding tells the org to also set a spend limit in
+    # their own Anthropic console — the only ceiling that survives a bug in this one.
+    "monthly_budget_usd": "20.00",
     "enabled": "1",
     # The taxonomy is a placeholder until the user answers FUTURE.md ("what are
     # the four sectors?"). Their answer renames labels; it does not change code.
@@ -584,8 +614,105 @@ def org_for_user(conn: sqlite3.Connection, uid: str, email: str) -> str:
         "INSERT INTO users(uid, email, org_id, created_at, last_seen_at) VALUES(?,?,?,?,?)",
         (uid, email, org_id, now_iso(), now_iso()),
     )
+    if org_id != DEFAULT_ORG_ID:
+        # Settings only — deliberately NOT the funders or the program cards.
+        #
+        # A new nonprofit signing up must not land on a dashboard pre-loaded with 44 San
+        # Diego funders and seven program cards belonging to the pilot org. That data is
+        # not theirs, it is wrong for anywhere outside California, and it makes the app
+        # look broken before they have done anything. They get working defaults and an
+        # empty funder list, and onboarding fills it in.
+        seed_settings(conn, org_id)
+        conn.execute("INSERT INTO meta(key, value) VALUES(?,?) "
+                     "ON CONFLICT(key) DO NOTHING",
+                     (f"seeded_at:{org_id}", now_iso()))
     log.info("first sign-in for %s — assigned to org %s", email, org_id)
     return org_id
+
+
+# --- invitations --------------------------------------------------------------
+
+INVITE_TTL_DAYS = 14
+
+# Unambiguous alphabet: no O/0, no I/1/L. The code gets read aloud, written on paper,
+# and retyped by someone who does not think of themselves as technical.
+_INVITE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+
+
+def create_invite(conn: sqlite3.Connection, org_id: str,
+                  created_by: str | None = None) -> dict:
+    """A single-use code that lets one more person join `org_id`."""
+    import secrets as _secrets
+
+    raw = "".join(_secrets.choice(_INVITE_ALPHABET) for _ in range(12))
+    code = f"{raw[:4]}-{raw[4:8]}-{raw[8:]}"
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(days=INVITE_TTL_DAYS)
+    conn.execute(
+        "INSERT INTO invites(code, org_id, created_by, created_at, expires_at) "
+        "VALUES(?,?,?,?,?)",
+        (code, org_id, created_by, now.isoformat(), expires.isoformat()),
+    )
+    return {"code": code, "org_id": org_id, "expires_at": expires.isoformat()}
+
+
+def list_invites(conn: sqlite3.Connection, org_id: str) -> list[dict]:
+    return [dict(r) for r in conn.execute(
+        "SELECT code, created_by, created_at, expires_at, redeemed_at, redeemed_by "
+        "FROM invites WHERE org_id=? ORDER BY created_at DESC", (org_id,))]
+
+
+def revoke_invite(conn: sqlite3.Connection, code: str, org_id: str) -> bool:
+    cur = conn.execute(
+        "DELETE FROM invites WHERE code=? AND org_id=? AND redeemed_at IS NULL",
+        (code.strip().upper(), org_id))
+    return cur.rowcount > 0
+
+
+class InviteError(ValueError):
+    """The code cannot be redeemed, with a reason safe to show the person holding it."""
+
+
+def redeem_invite(conn: sqlite3.Connection, code: str, uid: str, email: str) -> str:
+    """Move (or place) this person into the org the code belongs to. Returns the org id.
+
+    Redeeming is idempotent per person but single-use per code: the second person to try
+    the same code is told to ask for their own. The error messages deliberately do not
+    distinguish "no such code" from "already used" beyond what the holder needs to act —
+    there is nothing to enumerate here, but there is also no reason to be chatty.
+    """
+    code = code.strip().upper()
+    row = conn.execute("SELECT * FROM invites WHERE code=?", (code,)).fetchone()
+    if row is None:
+        raise InviteError("That invitation code is not valid. Check it and try again.")
+    if row["redeemed_at"]:
+        raise InviteError(
+            "That invitation has already been used. Ask for a new one.")
+    if datetime.fromisoformat(row["expires_at"]) < datetime.now(timezone.utc):
+        raise InviteError("That invitation has expired. Ask for a new one.")
+
+    org_id = row["org_id"]
+    now = now_iso()
+    conn.execute("UPDATE invites SET redeemed_at=?, redeemed_by=? WHERE code=?",
+                 (now, email, code))
+
+    existing = conn.execute("SELECT uid, org_id FROM users WHERE uid=? OR email=?",
+                            (uid, email)).fetchone()
+    if existing:
+        conn.execute("UPDATE users SET uid=?, org_id=?, last_seen_at=? WHERE uid=?",
+                     (uid, org_id, now, existing["uid"]))
+    else:
+        conn.execute(
+            "INSERT INTO users(uid, email, org_id, created_at, last_seen_at) "
+            "VALUES(?,?,?,?,?)", (uid, email, org_id, now, now))
+    log.info("%s joined org %s by invitation", email, org_id)
+    return org_id
+
+
+def org_members(conn: sqlite3.Connection, org_id: str) -> list[dict]:
+    return [dict(r) for r in conn.execute(
+        "SELECT email, created_at, last_seen_at FROM users WHERE org_id=? "
+        "ORDER BY created_at", (org_id,))]
 
 
 # --- helpers ------------------------------------------------------------------

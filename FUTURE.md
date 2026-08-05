@@ -28,18 +28,28 @@ architecture, not a detail.
 
 ## 1. Where we actually are
 
-The app is **live on the internet** at `https://fundworthy.duckdns.org` (Oracle
-Always-Free ARM VM, `129.159.34.80`), behind nginx + certbot TLS, with Google sign-in via
-Firebase and an `ALLOWED_EMAILS` allow-list. That crossing — from a localhost-only,
+The app is **live on the internet** on an Oracle Always-Free ARM VM, behind nginx +
+certbot TLS, with Google sign-in via Firebase and an `ALLOWED_EMAILS` allow-list. (The
+hostname and the box's address are in [docs/ACCESS.md](docs/ACCESS.md) rather than here —
+this repository is public, and a live box's IP in a public file invites the scanning you
+would rather not attract.) That crossing — from a localhost-only,
 single-tenant tool to a shared, public one — invalidated a set of assumptions the codebase
 was, quite legitimately, built on. This file is now mostly about closing that gap.
 
 **Shipped since going live:**
 
 - Sign-in (§2).
-- **Tenant isolation** (§3) — orgs, per-org data, per-org API keys.
+- **Tenant isolation** (§3) — orgs, per-org data, per-org API keys, colleague invites.
 - The `run.json` exposure path, the interrupted-run zombie rows, the cross-org Stop
   button, and seed resurrection (all §3).
+- **SSRF in the fetcher** (§5) — public addresses only, checked per redirect hop.
+- **Push-to-deploy** (§6) — drain, wait for in-flight runs, back up, test, restart.
+- **The geography filter reads `org_location`.** It was hardcoded to San Diego, which
+  made the setting a lie: a Chicago nonprofit could type "Chicago, Illinois", watch it
+  save, and still have every Illinois-only grant rejected for free in the tier that never
+  explains itself. The vocabulary of *places* is universal and lives in code; which of
+  them is **yours** is configuration. An org that has not said where it works now rejects
+  nothing on geography rather than inheriting somebody else's region.
 
 **The one thing to do before anything else** is not code: see §8, *Access and bus factor*.
 
@@ -120,20 +130,36 @@ Also fixed alongside it:
   the next restart — then all 44 came back, re-activated. Seeding is now first-boot-only,
   marked in `meta`.
 
+### Since shipped
+
+- **Colleague invites.** An admin generates a single-use code (`POST /api/org/invites`)
+  and shares it however they already talk to their team; the joiner redeems it
+  (`POST /api/org/join`) and lands in that org with its funders, cards and findings.
+  Deliberately a code rather than an emailed link — sending mail needs a provider, a
+  domain reputation and a bounce story, and CLAUDE.md rules out the app sending mail on
+  anyone's behalf.
+- **A new org starts clean.** Signing up no longer hands a Chicago nonprofit 44 San Diego
+  funders and seven program cards belonging to the pilot; new orgs get working settings
+  and an empty funder list.
+- **Concurrent runs across orgs**, one per org — see §9.
+- **A per-org monthly spend cap** (`monthly_budget_usd`) that refuses a run once the
+  month's ceiling is reached, and trims the month's last run to the remaining headroom
+  rather than overshooting it.
+
 ### What tenancy still does **not** give you
 
-- **One user = one org.** There is no way to invite a colleague into an existing org, so
-  two staff at the same nonprofit currently get two separate dashboards. This is the safe
-  direction to be wrong in, and it is the next piece of work here.
-- **No org names, no org admin.** `orgs.name` exists and nothing sets it.
+- **No roles.** Anyone in an org can invite a colleague, replace the API key, and delete
+  every funder. Fine for a nonprofit of three who trust each other; not fine as a product.
+- **No frontend for any of it.** The invite, member-list and spend endpoints exist and
+  have tests; nothing in `dashboard/src/` calls them yet, and there is no onboarding
+  walkthrough for a new org (§4).
+- **No org names.** `orgs.name` exists and nothing sets it.
 - **The org switcher is still a stub** (`dashboard/src/components/OrgSwitcher.jsx`). It
   renders a chevron and an "+ Add an organization" button that do nothing, which now
   actively misleads: it implies switching is possible.
-- **Per-org config is still partly pilot seed.** `SERVICE_AREA_GEOGRAPHY` in
-  `agent/filters.py` and the geography language in the scoring prompts are hardcoded to
-  San Diego / Imperial County. The `org_location` setting is fully plumbed through the UI
-  and API and **changes nothing** — a Chicago nonprofit types "Chicago, Illinois", it
-  saves, and their own state's grants are still rejected for free. Either wire it up or
+- **Per-org config is still partly pilot seed.** The geography filter now reads
+  `org_location` (see below), but the *scoring prompts* still carry San Diego language.
+  Either wire that up or
   remove the field; a setting that lies is worse than a missing one.
 
 ---
@@ -161,32 +187,103 @@ and seven program cards that are not theirs, and nothing scores until they paste
 
 ## 5. Security and abuse — open
 
-Found during the post-deployment audit and **not yet fixed**. Roughly in priority order.
+Found during the post-deployment audit. Roughly in priority order.
 
-1. **SSRF in the program-card assistant.** `app/assistant.py:144` validates only that the
-   URL starts `http://` or `https://`. `agent/fetch.py:63` sets `follow_redirects=True`,
-   nothing blocks private address space, and an unreadable robots.txt is treated as
-   *permissive*. So any signed-in user can make the server fetch `127.0.0.1`, RFC1918
-   addresses, or Oracle's metadata endpoint at `169.254.169.254` — and the fetched content
-   is summarised into the card returned to them. Needs an allow-list check that resolves
-   the host and rejects private/loopback/link-local ranges, re-checked on every redirect.
-2. **No rate limit or cumulative spend cap.** `POST /api/runs` and `POST /api/programs/draft`
-   both spend real money. `run_budget_usd` is a *per-run* ceiling that the API accepts up
-   to `le=20`, and nothing bounds runs per day. Twenty clicks over an afternoon is $400.
-   Needs a trailing-window spend guard in `RunManager.start` and a lower bound on the
-   setting. **Independently: set a spend limit on the Anthropic account itself today** —
-   that is the only ceiling that survives a bug in our own budget logic.
+1. **SSRF in the fetcher** — ✅ **fixed**. `app/assistant.py` validated only that the URL
+   started `http://` or `https://`, `agent/fetch.py` set `follow_redirects=True`, and
+   nothing anywhere looked at where a hostname actually pointed. Any signed-in user could
+   aim the server at `127.0.0.1:8000` (Fundworthy itself, from inside nginx) or
+   `169.254.169.254` (cloud instance metadata, which answers unauthenticated) and read the
+   response back out of the assistant's draft card.
+
+   `agent/urlguard.py` now resolves every hostname and refuses any that answers with a
+   loopback, private, link-local, reserved, multicast or CGNAT address — including
+   IPv4-mapped IPv6 forms like `::ffff:127.0.0.1`, whose `.is_loopback` is `False`. The
+   check runs **per redirect hop**, which meant taking redirect-following away from httpx
+   and doing it in `Fetcher._send`: the redirect was the part we never inspected, so a
+   perfectly ordinary public URL could bounce us into the metadata service.
+
+   **Residual risk, deliberately left:** the guard resolves a name and httpx then resolves
+   it again to connect. A name answering public-then-private across those two lookups —
+   DNS rebinding — still gets through. Closing it means pinning the connection to the
+   validated address via a custom transport. Every direct attempt and every redirect chain
+   is blocked, which is the whole of the realistic risk; this is written down rather than
+   papered over.
+
+2. **Rate limiting** — partly done. A per-org **monthly** cap now exists
+   (`monthly_budget_usd`, enforced in `RunManager.start`), which was the severe half:
+   before per-org keys, repeated Re-run clicks drained *somebody else's* credit. Now an
+   org can only overspend its own, and only up to its own ceiling.
+
+   Still open: no per-minute rate limit on `POST /api/runs` or `POST /api/programs/draft`,
+   so a script can still hammer the box (not the budget). And each org should be told
+   during onboarding to set a spend limit in **their own** Anthropic console — that is
+   the only ceiling that survives a bug in ours.
+
+   Worth knowing, since it comes up every time: **Anthropic publishes no credit-balance
+   endpoint or header.** The `anthropic-ratelimit-tokens-remaining` header is tokens per
+   minute and refills; it is not dollars. So "show the org how much credit is left" is
+   not buildable — `repo.spend_summary` shows what *we* spent instead, which is the
+   number they can hold us to.
 3. **No request-size limits or nginx rate limiting.** No `client_max_body_size`, no limit
    zone, and `proxy_read_timeout 900s` is a cheap way to tie up workers.
 4. **Secrets on the box.** `data/.fernet-key` sits next to `data/rise.db`, and it now
    guards *every* org's key rather than one. Anyone with read access to `data/` has both.
-5. **No security headers** (HSTS, CSP, `X-Content-Type-Options`, `Referrer-Policy`).
+5. **Security headers** — ✅ done in the app (`app/main.py` middleware: CSP,
+   `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`).
+   **HSTS is deliberately not there** — it belongs on nginx, because setting it from the
+   app would also send it to a local `http://127.0.0.1:8000` install and pin that
+   hostname to HTTPS in a developer's browser for a year. Add it to the nginx server
+   block on the VM.
 6. **npm audit reports 2 vulnerabilities** (1 moderate, 1 high) as of the Firebase merge.
    Not yet triaged; `audit fix --force` is a breaking change so it needs a real look.
 
 ---
 
-## 6. Push-to-deploy, without robbing a nonprofit mid-run
+## 6. Push-to-deploy — ✅ shipped
+
+`.github/workflows/deploy.yml` runs the suite on GitHub, then SSHes in and runs
+`scripts/deploy.sh` on the VM. Tests first, on a machine where failing is free: a
+pipeline that deploys and then tests tells you about the migration bug after it has run
+against a nonprofit's only copy of their data.
+
+The careful part is on the VM, because deciding whether it is safe to deploy needs the
+database. `scripts/deploy.sh`:
+
+1. **Touches a drain file**, so new searches are refused while the deploy runs.
+2. **Waits** for in-flight runs to finish, polling `runs WHERE status='running'` — up to
+   15 minutes, then aborts and changes nothing. It reads the DB rather than asking the
+   API, because a public "is anything running" endpoint would be an unauthenticated fact
+   about usage, and the API is about to restart anyway.
+3. **Backs up** `rise.db` (via `.backup`, not `cp` — WAL keeps writes in a side file, so
+   copying the main file can capture a torn database) **and** `.fernet-key`, without
+   which every stored API key is permanently unrecoverable.
+4. Pulls, installs, **runs the suite again on the VM**, and rolls the code back if it
+   fails rather than restarting the service.
+5. Restarts and health-checks; the drain file is removed by an `EXIT` trap whatever
+   happens, so an aborted deploy cannot leave the app permanently "being updated".
+
+And the pipeline now **survives being interrupted**: `agent/run.py` catches SIGTERM and
+raises `RunInterrupted`, an ordinary `Exception`, so it lands in the salvage block that
+already existed. Previously Python's default handling killed the process where it stood —
+the salvage never ran, and every scored opportunity plus the credit spent on it was lost.
+
+`.github/workflows/weekly.yml` is deleted. It read config from a Google Sheet the
+dashboard cannot write to and had never been switched on.
+
+### Still open
+
+- **No incremental persistence.** Results reach the sinks once `evaluate()` finishes, so
+  the salvage path is what saves an interrupted run rather than a running write. Good
+  enough now that SIGTERM is handled; worth doing when runs get longer.
+- **The weekly schedule still does not exist on the VM.** A systemd timer per org is the
+  shape, and under BYO-key it has to resolve *each org's* key from the database and run
+  per-org — a single global cron run would use whatever `ANTHROPIC_API_KEY` is in `.env`.
+- **Protect `main`** on GitHub: require a PR, no force-push.
+
+---
+
+## 6b. The original design notes (kept for reference)
 
 **The goal:** merge to `main` → the VM pulls, rebuilds, restarts → production is current,
 with no one SSHing anywhere.
@@ -296,13 +393,17 @@ The order in which things actually break — the VM's raw compute is never near 
 
 1. **Anthropic API cost** — solved by BYO-key, now genuinely per-org (§3).
 2. **Anthropic rate limits** — per-tenant under BYO-key.
-3. **The single-run lock.** `MANAGER = RunManager()` in `app/runner.py` is a per-process
-   singleton allowing **one run at a time across the whole box**, with its live log in
-   process memory. It now knows *whose* run it holds, so orgs no longer see each other's
-   logs — but org B still waits while org A crawls, and you still cannot add uvicorn
-   workers (each would get its own `MANAGER`, and two could double-spend a budget).
-   Replacing it with a real queue (Arq/RQ/Celery) and moving run state into the database
-   is the load-bearing change for real multi-tenancy.
+3. **The run manager.** `MANAGER` in `app/runner.py` now allows one run **per org**, up
+   to `FUNDWORTHY_MAX_CONCURRENT_RUNS` (default 3) at once. The old global lock was
+   correct while there was one shared key and therefore one shared budget; per-org keys
+   removed that reason, and making one nonprofit wait a week for another's crawl was
+   costing the product its whole point. What remains is the part that was always
+   per-org: a second run for the *same* org would double-spend that org's budget.
+
+   Still in-process, so it is still the load-bearing change: run state and logs live in
+   this process's memory, which means you cannot add uvicorn workers (each gets its own
+   `MANAGER`, and `/api/runs/current` only sees its own worker's runs). A real queue
+   (Arq/RQ/Celery) plus run state in the database is the fix.
 4. **Polite-crawler collisions.** N orgs crawling the same ~50 funder sites every week is
    N hits from one server IP in a burst, which the per-host politeness in `agent/fetch.py`
    cannot prevent *across* tenants. A shared URL+week fetch cache fixes it — not for cost

@@ -318,3 +318,180 @@ def test_a_run_interrupted_by_a_restart_is_not_left_running_for_ever(db):
 
         # Idempotent: a second boot has nothing left to reconcile.
         assert repo.reconcile_interrupted_runs(conn) == 0
+
+
+# --- monthly spend cap --------------------------------------------------------
+
+def test_spend_summary_counts_only_this_org(db):
+    with session(db) as conn:
+        repo.create_run(conn, "r_a", org_id=A)
+        repo.update_run(conn, "r_a", usd_spent=3.50)
+        repo.create_run(conn, "r_b", org_id=B)
+        repo.update_run(conn, "r_b", usd_spent=1.25)
+
+        assert repo.spend_summary(conn, org_id=A)["spent_usd"] == 3.50
+        assert repo.spend_summary(conn, org_id=B)["spent_usd"] == 1.25
+
+
+def test_the_monthly_cap_is_per_org_and_reports_headroom(db):
+    with session(db) as conn:
+        repo.update_settings(conn, {"monthly_budget_usd": 5.0}, org_id=B)
+        repo.create_run(conn, "r_b", org_id=B)
+        repo.update_run(conn, "r_b", usd_spent=4.0)
+
+        summary = repo.spend_summary(conn, org_id=B)
+        assert summary["cap_usd"] == 5.0
+        assert summary["remaining_usd"] == 1.0
+        assert summary["over_cap"] is False
+
+        repo.update_run(conn, "r_b", usd_spent=5.5)
+        assert repo.spend_summary(conn, org_id=B)["over_cap"] is True
+        # ...and going over does not report negative headroom to the UI.
+        assert repo.spend_summary(conn, org_id=B)["remaining_usd"] == 0.0
+
+        # The other org is untouched by B blowing its budget.
+        assert repo.spend_summary(conn, org_id=A)["over_cap"] is False
+
+
+def test_a_run_is_refused_once_the_month_is_spent(db, monkeypatch):
+    """The cap has to be checked before the run starts. `run_budget_usd` bounds one run,
+    so without this an org could press Re-run all afternoon andevery run would pass."""
+    from app.runner import RunManager
+
+    with session(db) as conn:
+        repo.update_settings(conn, {"monthly_budget_usd": 2.0}, org_id=A)
+        repo.create_run(conn, "spent", org_id=A)
+        repo.update_run(conn, "spent", usd_spent=2.5)
+
+    with pytest.raises(RuntimeError, match="monthly limit"):
+        RunManager().start(org_id=A)
+
+
+# --- invitations --------------------------------------------------------------
+
+def test_an_invite_moves_the_joiner_into_the_inviters_org(db):
+    from app.db import create_invite, redeem_invite
+
+    with session(db) as conn:
+        owner = org_for_user(conn, "uid-owner", "owner@example.org")
+        invite = create_invite(conn, owner, created_by="owner@example.org")
+
+        joined = redeem_invite(conn, invite["code"], "uid-new", "colleague@example.org")
+
+    assert joined == owner
+
+
+def test_an_invite_is_single_use(db):
+    from app.db import InviteError, create_invite, redeem_invite
+
+    with session(db) as conn:
+        owner = org_for_user(conn, "uid-owner", "owner@example.org")
+        code = create_invite(conn, owner)["code"]
+        redeem_invite(conn, code, "uid-1", "one@example.org")
+
+        with pytest.raises(InviteError, match="already been used"):
+            redeem_invite(conn, code, "uid-2", "two@example.org")
+
+
+def test_a_bad_or_expired_invite_is_refused(db):
+    from app.db import InviteError, create_invite, redeem_invite
+
+    with session(db) as conn:
+        owner = org_for_user(conn, "uid-owner", "owner@example.org")
+        with pytest.raises(InviteError, match="not valid"):
+            redeem_invite(conn, "ZZZZ-ZZZZ-ZZZZ", "uid-x", "x@example.org")
+
+        code = create_invite(conn, owner)["code"]
+        conn.execute("UPDATE invites SET expires_at='2020-01-01T00:00:00+00:00' "
+                     "WHERE code=?", (code,))
+        with pytest.raises(InviteError, match="expired"):
+            redeem_invite(conn, code, "uid-y", "y@example.org")
+
+
+def test_joining_by_invite_gives_access_to_that_orgs_data(db):
+    """The point of the whole feature: two staff at one nonprofit see one dashboard."""
+    from app.db import create_invite, redeem_invite
+
+    with session(db) as conn:
+        owner = org_for_user(conn, "uid-owner", "owner@example.org")
+        repo.create_program(conn, {"name": "Shared Program"}, org_id=owner)
+        code = create_invite(conn, owner)["code"]
+
+        joined = redeem_invite(conn, code, "uid-new", "colleague@example.org")
+        names = [p["name"] for p in repo.list_programs(conn, org_id=joined)]
+
+    assert "Shared Program" in names
+
+
+def test_a_revoked_invite_cannot_be_used(db):
+    from app.db import InviteError, create_invite, redeem_invite, revoke_invite
+
+    with session(db) as conn:
+        owner = org_for_user(conn, "uid-owner", "owner@example.org")
+        code = create_invite(conn, owner)["code"]
+        assert revoke_invite(conn, code, owner) is True
+
+        with pytest.raises(InviteError, match="not valid"):
+            redeem_invite(conn, code, "uid-2", "two@example.org")
+
+
+# --- a new org starts clean ---------------------------------------------------
+
+def test_a_new_org_does_not_inherit_the_pilots_funders_or_programs(db):
+    """A nonprofit in Chicago must not sign in to 44 San Diego funders and seven program
+    cards belonging to somebody else. It looks broken, and none of it is theirs."""
+    with session(db) as conn:
+        org_for_user(conn, "uid-1", "first@example.org")          # adopts the pilot org
+        newcomer = org_for_user(conn, "uid-2", "second@example.org")
+
+        assert repo.list_funders(conn, org_id=newcomer) == []
+        assert repo.list_programs(conn, org_id=newcomer) == []
+        # ...but they still get working defaults rather than an unconfigured app.
+        assert repo.get_settings(conn, org_id=newcomer)["min_award"] == 10_000
+        # ...and the pilot org keeps everything.
+        assert len(repo.list_funders(conn, org_id=A)) > 40
+
+
+# --- deploy safety ------------------------------------------------------------
+
+def test_a_deploy_pauses_new_searches_rather_than_killing_them(db, monkeypatch):
+    """The drain gate. A run started thirty seconds before `systemctl restart` gets cut
+    off at minute seven, and the org pays for a search it never sees."""
+    from app.runner import RunManager, draining
+
+    drain = db.parent / "draining"
+    assert draining() is False
+
+    drain.touch()
+    try:
+        assert draining() is True
+        with pytest.raises(RuntimeError, match="being updated"):
+            RunManager().start(org_id=A)
+    finally:
+        drain.unlink()
+
+    assert draining() is False
+
+
+def test_the_pipeline_salvages_what_it_scored_when_told_to_stop():
+    """SIGTERM used to kill the process where it stood: the salvage block never ran and
+    every scored result — plus the credit spent on it — was lost. It is now an ordinary
+    exception, so the existing partial-results path catches it."""
+    import signal
+
+    from agent.run import RunInterrupted, _install_stop_handler
+
+    _install_stop_handler()
+    try:
+        with pytest.raises(RunInterrupted):
+            signal.raise_signal(signal.SIGTERM)
+    finally:
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+
+
+def test_an_interrupted_run_is_catchable_as_an_ordinary_exception():
+    """The salvage block catches `Exception`. If RunInterrupted ever became a
+    BaseException subclass it would slip past it and the money would be lost again."""
+    from agent.run import RunInterrupted
+
+    assert issubclass(RunInterrupted, Exception)

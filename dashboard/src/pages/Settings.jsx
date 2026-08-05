@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import Organization from "../components/Organization";
 import { api } from "../api";
 
 // The API key page.
@@ -244,6 +245,7 @@ export default function Settings({ state, onChange }) {
 
       <KeyPanel state={state} onChange={onChange} />
       <OrgPanel settings={state.settings} onChange={onChange} />
+      <Organization spend={state.spend} onChange={onChange} />
 
       <section className="panel">
         <h2>Turning it off</h2>
@@ -258,9 +260,10 @@ export default function Settings({ state, onChange }) {
         <h2>Where your data lives</h2>
         <p className="settings-lede">
           Everything — your programs, your funder list, this month's findings, and the key
-          — is in a single file on this computer (<code>data/rise.db</code>). Nothing is
-          sent anywhere except the funder pages the researcher reads and the Claude API
-          that scores them. The app is not reachable from the internet.
+          — is in a single database on the server this app runs on. Nothing is sent
+          anywhere except the funder pages the researcher reads and the Claude API that
+          scores them, and your searches run on your own key so they are billed to you and
+          visible to nobody else.
         </p>
       </section>
     </>

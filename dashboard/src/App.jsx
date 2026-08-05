@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
 import { authEnabled, authError, currentUser, initAuth, onUserChange, signOutNow } from "./auth";
+import GettingStarted from "./components/GettingStarted";
+import JoinOrg from "./components/JoinOrg";
 import Sidebar from "./components/Sidebar";
 import Archive from "./pages/Archive";
 import Dashboard from "./pages/Dashboard";
@@ -97,6 +99,9 @@ export default function App() {
   const [open, setOpen] = useState(window.innerWidth >= 900);
   const [state, setState] = useState(null);
   const [error, setError] = useState(null);
+  // Set once the person says "I'm setting this up for the first time", so the join
+  // prompt does not come back on every refresh of a still-empty dashboard.
+  const [startedFresh, setStartedFresh] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -164,6 +169,18 @@ export default function App() {
 
   const orgName = state?.settings?.org_name;
 
+  // A brand-new org: signed in, nothing added, nothing chosen. Only then is "are you
+  // joining a colleague?" a real question — redeeming a code MOVES you into their org,
+  // so offering it to someone who has already entered their programs would be offering
+  // to throw that work away.
+  const untouched =
+    authEnabled() &&
+    !startedFresh &&
+    Boolean(state) &&
+    (state.funders || []).length === 0 &&
+    (state.programs || []).length === 0 &&
+    !state.key_available;
+
   return (
     <div className={`shell ${open ? "with-sidebar" : ""}`}>
       <Sidebar
@@ -196,6 +213,17 @@ export default function App() {
         )}
 
         {!state && !error && <p className="muted">Loading…</p>}
+
+        {state && page === "dashboard" && untouched && (
+          <JoinOrg
+            onJoined={async () => { setStartedFresh(true); await refresh(); }}
+            onSkip={() => setStartedFresh(true)}
+          />
+        )}
+
+        {state && page === "dashboard" && !untouched && (
+          <GettingStarted state={state} setPage={setPage} />
+        )}
 
         {state && page === "dashboard" && <Dashboard state={state} onChange={refresh} />}
         {state && page === "settings" && <Settings state={state} onChange={refresh} />}

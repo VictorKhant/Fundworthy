@@ -125,6 +125,11 @@ class Config:
     # funders and key. Defaults to the single-tenant org so the CLI and the tests keep
     # working unchanged.
     org_id: str = "default"
+    # Where this org works, verbatim from the Settings page. Drives the geography filter
+    # (agent/filters.py). Empty means "they have not said", which disables geographic
+    # rejecting rather than guessing — the previous behaviour hardcoded San Diego and
+    # silently discarded another state's grants for free.
+    org_location: str = ""
 
     @property
     def programs_active(self) -> list[str]:
@@ -237,6 +242,7 @@ def load_from_db(db_path=None, *, org_id: str | None = None) -> Config | None:
     cfg.min_deadline_runway_days = int(settings["min_deadline_runway_days"])
     cfg.sectors_active = list(settings["sectors_active"])
     cfg.search_beyond_partners = bool(settings["search_beyond_partners"])
+    cfg.org_location = str(settings.get("org_location") or "")
     cfg.programs = [
         ProgramCard(
             slug=c["slug"], name=c["name"], summary=c.get("summary", ""),

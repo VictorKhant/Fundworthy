@@ -126,6 +126,14 @@ async def fetch_page_text(url: str) -> tuple[str, str]:
         result = await fetcher.get(url)
 
     if not result.ok:
+        # A blocked address is a different conversation from a broken link, and the
+        # person on the other end is a nonprofit administrator, not an attacker: say
+        # plainly what the rule is instead of echoing "blocked_url: ... link-local ...".
+        if (result.error or "").startswith(("blocked_url", "blocked_redirect")):
+            raise AssistantError(
+                "That link does not point at a public website, so Fundworthy will not "
+                "open it. Paste the address of a page you can reach in your own browser."
+            )
         raise AssistantError(
             f"Could not read that page ({result.error or result.status}). "
             "Check the link and try again."

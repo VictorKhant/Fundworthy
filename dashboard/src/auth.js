@@ -203,10 +203,8 @@ export function initials(name) {
     .toUpperCase() || "?";
 }
 
-// The organisation this install is set up for, from the org_name setting. Still one:
-// per-org data scoping is multi-tenant work (FUTURE.md §4), and until that exists a
-// switcher offering a second organisation would be offering something that cannot
-// happen. It names the org, and says in a tooltip that it cannot yet switch.
-export function orgsFor(activeName) {
-  return [{ id: "active", name: titleCase(orgLabel(activeName)), active: true }];
-}
+// The organization you are signed in to, from the org_name setting. One person belongs
+// to exactly one org; colleagues join yours by invitation code rather than by switching
+// between several, so this returns a name to display and nothing to choose from.
+export { orgLabel };
+export const orgDisplayName = (activeName) => titleCase(orgLabel(activeName));
