@@ -136,7 +136,20 @@ export const api = {
     start: (opts) => post("/api/runs", opts),
     stop: () => post("/api/runs/stop"),
   },
+
+  org: {
+    read: () => get("/api/org"),
+    invite: () => post("/api/org/invites"),
+    revokeInvite: (code) => del(`/api/org/invites/${encodeURIComponent(code)}`),
+    join: (code) => post("/api/org/join", { code }),
+  },
 };
+
+// --- money ---------------------------------------------------------------------
+
+// Two decimals, always. A run that cost $0.4 must not render as "$0.4" on a page whose
+// whole job is to be trusted with somebody's budget.
+export const usd = (n) => `$${Number(n || 0).toFixed(2)}`;
 
 // --- formatting shared by every view -----------------------------------------
 

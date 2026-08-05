@@ -487,3 +487,73 @@ def test_one_org_cannot_stop_anothers_run(signed_in, token_for, monkeypatch):
     monkeypatch.setattr(MANAGER, "_proc", object(), raising=False)
 
     assert signed_in.post("/api/runs/stop", headers=second).json()["stopped"] is False
+
+
+# --- the invite flow, over HTTP -------------------------------------------------
+
+def test_a_colleague_joins_by_code_and_sees_the_same_dashboard(signed_in, token_for):
+    """The whole point of invites: two staff at one nonprofit, one set of findings."""
+    owner = {"Authorization": f"Bearer {token_for()}"}
+    joiner = {"Authorization": "Bearer " + token_for(
+        sub="uid-999", email="someone.else@example.org")}
+
+    signed_in.post("/api/programs", headers=owner, json={"name": "Shared Program"})
+    owner_org = signed_in.get("/api/auth/me", headers=owner).json()["org_id"]
+
+    # Before joining, the colleague is in their own empty org.
+    assert signed_in.get("/api/auth/me", headers=joiner).json()["org_id"] != owner_org
+    assert signed_in.get("/api/programs", headers=joiner).json()["programs"] == []
+
+    made = signed_in.post("/api/org/invites", headers=owner)
+    assert made.status_code == 201
+    code = made.json()["invite"]["code"]
+
+    joined = signed_in.post("/api/org/join", headers=joiner, json={"code": code})
+    assert joined.status_code == 200
+    assert joined.json()["org_id"] == owner_org
+
+    names = [p["name"] for p in
+             signed_in.get("/api/programs", headers=joiner).json()["programs"]]
+    assert "Shared Program" in names
+
+
+def test_a_stranger_cannot_join_with_a_guessed_code(signed_in, token_for):
+    joiner = {"Authorization": "Bearer " + token_for(
+        sub="uid-999", email="someone.else@example.org")}
+    refused = signed_in.post("/api/org/join", headers=joiner,
+                             json={"code": "ZZZZ-ZZZZ-ZZZZ"})
+    assert refused.status_code == 400
+    assert "not valid" in refused.json()["detail"]
+
+
+def test_one_org_cannot_see_or_revoke_anothers_invites(signed_in, token_for):
+    owner = {"Authorization": f"Bearer {token_for()}"}
+    other = {"Authorization": "Bearer " + token_for(
+        sub="uid-999", email="someone.else@example.org")}
+
+    code = signed_in.post("/api/org/invites", headers=owner).json()["invite"]["code"]
+
+    theirs = signed_in.get("/api/org", headers=other).json()
+    assert code not in [i["code"] for i in theirs["invites"]]
+    assert signed_in.delete(f"/api/org/invites/{code}", headers=other).status_code == 404
+
+
+def test_the_member_list_is_scoped_to_your_own_org(signed_in, token_for):
+    owner = {"Authorization": f"Bearer {token_for()}"}
+    other = {"Authorization": "Bearer " + token_for(
+        sub="uid-999", email="someone.else@example.org")}
+
+    signed_in.get("/api/auth/me", headers=other)      # provision their org
+    mine = signed_in.get("/api/org", headers=owner).json()
+
+    assert [m["email"] for m in mine["members"]] == [ALLOWED]
+
+
+def test_security_headers_are_present(signed_in):
+    res = signed_in.get("/api/health")
+    assert res.headers["X-Content-Type-Options"] == "nosniff"
+    assert res.headers["X-Frame-Options"] == "DENY"
+    assert "frame-ancestors 'none'" in res.headers["Content-Security-Policy"]
+    # HSTS belongs on nginx — sending it from the app would pin a developer's
+    # http://127.0.0.1:8000 to HTTPS for a year.
+    assert "Strict-Transport-Security" not in res.headers
