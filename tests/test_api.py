@@ -521,3 +521,23 @@ def test_a_static_file_is_still_served_as_itself(client, tmp_path):
     res = client.get("/robots.txt")
     assert res.status_code == 200
     assert not res.text.lstrip().startswith("<!doctype")
+
+
+def test_the_search_console_verification_file_is_served_verbatim(client):
+    """Google fetches this exact path and expects one line back. If the SPA catch-all
+    answered instead, verification fails with "the file has the wrong content" — and the
+    content it saw would be the dashboard's HTML, which is a confusing thing to be told.
+
+    It lives in dashboard/public/ rather than being uploaded to the VM by hand, because
+    anything not in the repo is deleted by the next `npm run build` — and a site that
+    silently loses its verification weeks later is worse than one that never had it.
+    """
+    from app.main import DIST
+
+    probe = DIST / "google5083e4c8404182ff.html"
+    if not probe.exists():
+        pytest.skip("the dashboard has not been built in this checkout")
+
+    res = client.get("/google5083e4c8404182ff.html")
+    assert res.status_code == 200
+    assert res.text.strip() == "google-site-verification: google5083e4c8404182ff.html"

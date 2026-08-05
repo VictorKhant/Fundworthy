@@ -248,10 +248,37 @@ curl -s https://your-host.duckdns.org/robots.txt          # names your host, not
 curl -s https://your-host.duckdns.org/ | grep canonical
 ```
 
-> Setting this does not put you on Google. It makes you *indexable*. Then: add the site
-> at [search.google.com/search-console](https://search.google.com/search-console), verify
-> ownership (the DNS TXT method works with DuckDNS), and submit
-> `https://your-host.duckdns.org/sitemap.xml`. Expect days to weeks, not hours.
+> Setting this does not put you on Google. It makes you *indexable*. Search Console is
+> the next step, below.
+
+#### Verifying the site in Search Console
+
+Google offers two ways to prove you own the domain. **The HTML-file method is the one
+this repo supports**, and the file has to be committed rather than uploaded:
+`npm run build` empties `dist/` every deploy, so a file dropped onto the VM by hand
+disappears the next time anyone merges — and a site that silently loses its verification
+three weeks later is worse than one that never had it.
+
+1. Search Console → Add property → **URL prefix** → your full `https://` address.
+2. Choose **HTML file**, download it. The name looks like `google<hex>.html`.
+3. Put it in `dashboard/public/` in the repo, commit, merge. Vite copies everything in
+   that directory to the root of `dist/` untouched, so it lands at
+   `https://your-host/google<hex>.html`, which is exactly where Google looks.
+4. Confirm it is really there before clicking Verify — the answer must be one line of
+   text, **not** the dashboard's HTML:
+
+   ```bash
+   curl -s https://your-host.duckdns.org/google<hex>.html
+   # google-site-verification: google<hex>.html
+   ```
+
+5. Verify, then **Sitemaps → add** `sitemap.xml`.
+
+> The DNS TXT method works too and commits nothing, but DuckDNS only exposes one TXT
+> record per subdomain — so using it here spends the slot you would need for anything
+> else later.
+
+Expect days to weeks before you appear in results, not hours.
 
 ### `FUNDWORTHY_ADMIN_EMAILS` — who may read the platform numbers
 
