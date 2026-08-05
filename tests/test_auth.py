@@ -248,12 +248,26 @@ def test_a_real_google_account_that_is_not_on_the_list_is_refused(signed_in, tok
 
 
 def test_an_unverified_email_cannot_clear_the_allow_list(signed_in, token_for):
-    """Google sign-in always verifies. If a future deployment ever switches on Firebase's
-    email/password provider, anyone could register the allow-listed address without ever
-    proving they own it."""
+    """The check that carries email/password sign-in.
+
+    Under Google-only this never fired — Google verifies before handing us anything. With
+    the password provider enabled, Firebase will create an account for any address a
+    stranger can type, so this is the only thing standing between the allow-list and
+    someone registering `admin@the-org.org` with a password of their choosing.
+    """
     r = signed_in.get("/api/state",
                       headers=auth_header(token_for(email_verified=False)))
     assert r.status_code == 403
+
+
+def test_the_unverified_refusal_says_what_to_do_about_it(signed_in, token_for):
+    """Unlike the other refusals, this one is entirely the user's to fix — so it names the
+    address and points at the inbox instead of stating a fact about the token."""
+    r = signed_in.get("/api/state",
+                      headers=auth_header(token_for(email_verified=False)))
+    detail = r.json()["detail"]
+    assert ALLOWED in detail
+    assert "inbox" in detail.lower()
 
 
 def test_a_token_for_another_firebase_project_is_refused(signed_in, token_for):
@@ -590,8 +604,10 @@ def test_open_signup_lets_any_verified_google_account_in(tmp_path, monkeypatch, 
 
 
 def test_open_signup_still_requires_a_verified_address(tmp_path, monkeypatch, keypair):
-    """Firebase's email/password provider would otherwise let anyone register any
-    address without proving they own it."""
+    """The worst case for the password provider, and the reason verification is not
+    optional: under open sign-up there is no allow-list to fall back on, so an unverified
+    address would let a stranger claim an organization keyed on an address they do not
+    own — and then be the account a colleague's invitation gets sent to."""
     with _client(tmp_path, monkeypatch, keypair,
                  FIREBASE_PROJECT_ID=PROJECT,
                  FIREBASE_WEB_API_KEY="AIza-not-a-secret",
@@ -621,6 +637,42 @@ def test_the_sign_in_page_is_told_which_mode_it_is_in(tmp_path, monkeypatch, key
                  FIREBASE_WEB_API_KEY="AIza-not-a-secret",
                  FUNDWORTHY_OPEN_SIGNUP="1") as c:
         assert c.get("/api/auth/config").json()["open_signup"] is True
+
+
+# --- which ways in to offer -------------------------------------------------------
+
+def test_the_password_form_is_off_unless_the_project_has_the_provider(signed_in):
+    """The server cannot ask Firebase which providers are enabled, so it is declared.
+    Rendering a password form against a project with the provider switched off fails with
+    `auth/operation-not-allowed`, which reads as a broken app rather than a setting
+    nobody turned on."""
+    assert signed_in.get("/api/auth/config").json()["password_auth"] is False
+
+
+def test_the_password_form_appears_when_the_deployment_says_so(tmp_path, monkeypatch, keypair):
+    with _client(tmp_path, monkeypatch, keypair,
+                 FIREBASE_PROJECT_ID=PROJECT,
+                 FIREBASE_WEB_API_KEY="AIza-not-a-secret",
+                 ALLOWED_EMAILS=ALLOWED,
+                 FIREBASE_PASSWORD_AUTH="1") as c:
+        assert c.get("/api/auth/config").json()["password_auth"] is True
+
+
+def test_turning_on_passwords_does_not_weaken_the_gate(tmp_path, monkeypatch, keypair,
+                                                       token_for):
+    """Enabling the provider changes what the sign-in page offers and nothing about who
+    gets in. Same allow-list, same verified-address requirement."""
+    with _client(tmp_path, monkeypatch, keypair,
+                 FIREBASE_PROJECT_ID=PROJECT,
+                 FIREBASE_WEB_API_KEY="AIza-not-a-secret",
+                 ALLOWED_EMAILS=ALLOWED,
+                 FIREBASE_PASSWORD_AUTH="1") as c:
+        assert c.get("/api/state").status_code == 401
+        assert c.get("/api/state", headers=auth_header(
+            token_for(email="stranger@example.org"))).status_code == 403
+        assert c.get("/api/state", headers=auth_header(
+            token_for(email_verified=False))).status_code == 403
+        assert c.get("/api/state", headers=auth_header(token_for())).status_code == 200
 
 
 def test_a_private_install_is_unchanged(signed_in, token_for):

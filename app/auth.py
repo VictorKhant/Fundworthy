@@ -8,8 +8,16 @@ endpoint) hold nothing worth having.
 
 **Two separate questions, and Firebase only answers the first.**
 
-    Who is this?        Firebase. A Google sign-in, an ID token, a verified email.
+    Who is this?        Firebase. A Google or password sign-in, an ID token, a
+                        verified email.
     Are they allowed?   ALLOWED_EMAILS. Ours, and ours alone.
+
+**A verified address is the whole basis of both answers.** Google verifies before it
+hands us anything, but Firebase's email/password provider will mint an account for any
+address a stranger can type. So `verify()` refuses an unverified token outright — without
+that, registering someone else's address with a password of your choosing walks through
+the allow-list, and under open sign-up claims an organization keyed on an address you do
+not own. Everything below treats "verified" as load-bearing, not cosmetic.
 
 Firebase will happily authenticate any Google account on earth. It is an identity
 provider, not a door policy — so the second question has to be answered here, and a
@@ -75,6 +83,11 @@ class Config:
     # in. See `configure()` for why that is now a reasonable default rather than a hole.
     allowed_emails: frozenset[str]
     open_signup: bool = False
+    # Whether Firebase's email/password provider is switched on for this project. The
+    # server cannot detect it, so it is declared — showing a password form against a
+    # project that has the provider disabled fails with `auth/operation-not-allowed`,
+    # which reads as a broken app rather than a deployment that made a choice.
+    password_auth: bool = False
 
     @property
     def issuer(self) -> str:
@@ -149,6 +162,8 @@ def configure() -> Config | None:
             or f"{project_id}.firebaseapp.com",
         allowed_emails=allowed,
         open_signup=not allowed,
+        password_auth=os.getenv("FIREBASE_PASSWORD_AUTH", "").strip().lower() in {
+            "1", "true", "yes", "on"},
     )
     if allowed:
         log.info("Sign-in is on (private). Firebase project %s, %d address(es) allowed.",
@@ -191,6 +206,9 @@ def browser_config() -> dict:
         # So the sign-in page can offer "create an account" rather than implying that
         # everyone arriving already has one.
         "open_signup": _config.open_signup,
+        # Which ways in to offer. The page renders what the project actually has enabled
+        # rather than a fixed set, so it can never show a form that Firebase will refuse.
+        "password_auth": _config.password_auth,
     }
 
 
@@ -258,11 +276,26 @@ def verify(token: str) -> User:
 
     email = (claims.get("email") or "").strip()
 
-    # An unverified email must not clear the allow-list. Google sign-in always sets this,
-    # but if a future deployment enables Firebase's email/password provider, anyone could
-    # register the allow-listed address and never prove they own it.
-    if not email or not claims.get("email_verified"):
-        raise HTTPException(403, "That account has no verified email address.")
+    if not email:
+        raise HTTPException(403, "That account has no email address.")
+
+    # **The load-bearing check for password sign-in.** Google always verifies the address
+    # it hands us, so under Google-only this never fired. With the email/password provider
+    # enabled it fires constantly and on purpose: Firebase will create an account for any
+    # address anyone can type, so without this, registering `admin@the-org.org` with a
+    # password of your choosing would walk you straight through the allow-list — and under
+    # open sign-up, into an org keyed on an address you do not own.
+    #
+    # Clicking the link in the email is what closes that gap. So the message names the
+    # address and says what to do, because unlike the refusals below this one is entirely
+    # the user's to fix, and "no verified email address" told them nothing.
+    if not claims.get("email_verified"):
+        log.info("Refused sign-in for %s — address not verified yet.", email)
+        raise HTTPException(
+            403,
+            f"Check your inbox — {email} has not been verified yet. Open the link in "
+            "the email from Fundworthy, then sign in again.",
+        )
 
     # An empty allow-list is open sign-up, not a misconfiguration — `configure()` refuses
     # to start unless one of the two was chosen on purpose.
