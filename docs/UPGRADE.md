@@ -110,7 +110,7 @@ git reset --hard origin/main
 
 # Offline — no key, no network, nothing spent. Run it BEFORE restarting, so a problem is
 # something you read about rather than something your users discover.
-.venv/bin/python -m pytest tests/ -q      # expect 253 passed, 1 skipped
+.venv/bin/python -m pytest tests/ -q      # expect 255 passed, 1 skipped
 
 sudo systemctl restart fundworthy
 ```

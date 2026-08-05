@@ -10,6 +10,8 @@ after it has been shared.
 
 from __future__ import annotations
 
+import os
+
 import sys
 from pathlib import Path
 
@@ -411,3 +413,35 @@ def test_a_real_crash_is_still_recorded_as_a_failure(client):
         run = repo.get_run(conn, run_id)
     assert run["status"] == "failed"
     assert run["stop_reason"] == "exit_1"
+
+
+# --- the suite must not inherit the machine it runs on --------------------------
+
+def test_the_environment_is_hermetic():
+    """A regression guard with a real deploy behind it.
+
+    `agent/__init__.py` calls `load_dotenv()` at import time, so importing anything from
+    `agent` pulls the box's own `.env` into `os.environ`. On the deployed VM that file
+    sets FIREBASE_PROJECT_ID and ALLOWED_EMAILS — so sign-in switched on mid-test-run and
+    37 API tests failed with 401s that had nothing to do with the code under test. The
+    suite passed where it was written and failed where it mattered, which is the one
+    thing a deploy gate must never do.
+
+    `FUNDWORTHY_DB_PATH` is the sharp one: inherited from a real `.env`, a test calling
+    `init_db()` before setting its own path would have migrated the live database.
+    """
+    import agent  # noqa: F401 — the import is the thing being tested
+
+    for name in ("FIREBASE_PROJECT_ID", "FIREBASE_WEB_API_KEY", "ALLOWED_EMAILS",
+                 "FUNDWORTHY_OPEN_SIGNUP", "ANTHROPIC_API_KEY"):
+        assert os.environ.get(name) is None, (
+            f"{name} leaked in from the environment — see tests/conftest.py")
+
+    # Pointed somewhere disposable, never at whatever `data/rise.db` resolves to.
+    assert "rise.db" not in os.environ.get("FUNDWORTHY_DB_PATH", "")
+
+
+def test_sign_in_is_off_for_the_api_suite_whatever_the_box_thinks():
+    from app import auth
+
+    assert auth.enabled() is False

@@ -12,7 +12,51 @@ default and runs on request:
     .venv/bin/python -m pytest tests/ -m network    # just the network check
 """
 
+import os
+
 import pytest
+
+# Every variable that changes how the app behaves. Cleared before each test, so the suite
+# gives the same answer on a laptop, in CI, and on the deployed VM.
+#
+# This is not hypothetical tidiness. `agent/__init__.py` calls `load_dotenv()` at import
+# time, so importing anything from `agent` pulls the box's own `.env` into `os.environ`.
+# On the VM that file sets FIREBASE_PROJECT_ID and ALLOWED_EMAILS — so `auth.configure()`
+# switched sign-in ON during the test run and 37 API tests failed with 401s that had
+# nothing to do with the code being tested. The suite passed on the machine it was
+# written on and failed on the machine that mattered, which makes it worthless as the
+# gate in front of a deploy.
+#
+# `FUNDWORTHY_DB_PATH` is the one to notice: inherited from a real `.env`, a test that
+# calls `init_db()` before setting its own path would have run migrations against the
+# live database.
+_LEAKY_ENV = (
+    "FIREBASE_PROJECT_ID", "FIREBASE_WEB_API_KEY", "FIREBASE_AUTH_DOMAIN",
+    "ALLOWED_EMAILS", "FUNDWORTHY_OPEN_SIGNUP", "FUNDWORTHY_PILOT_EMAILS",
+    "ANTHROPIC_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS",
+    "FUNDWORTHY_DB_PATH", "FUNDWORTHY_KEYFILE",
+    "FUNDWORTHY_STRICT_CONFIG", "FUNDWORTHY_SHEET_ID",
+    "FUNDWORTHY_MAX_RUNS_PER_DAY", "FUNDWORTHY_MAX_CONCURRENT_RUNS",
+)
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_environment(monkeypatch, tmp_path):
+    """No test inherits the deployment it happens to be running on."""
+    for name in _LEAKY_ENV:
+        monkeypatch.delenv(name, raising=False)
+
+    # Somewhere harmless by default. A test that wants a real database sets its own path;
+    # this only stops one that forgets from touching whatever `data/rise.db` resolves to
+    # in the working directory.
+    monkeypatch.setenv("FUNDWORTHY_DB_PATH", str(tmp_path / "default.db"))
+    monkeypatch.setenv("FUNDWORTHY_KEYFILE", str(tmp_path / ".default-fernet-key"))
+
+    # `auth.configure()` caches into a module global, so a test that switched sign-in on
+    # would otherwise leave it on for everything that ran after it.
+    from app import auth
+    monkeypatch.setattr(auth, "_config", None, raising=False)
+    monkeypatch.setattr(auth, "_jwks_client", None, raising=False)
 
 
 def pytest_configure(config):
