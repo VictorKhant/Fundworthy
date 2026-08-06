@@ -65,6 +65,10 @@ design constraint:
 - Spend **moves while a search runs**. It used to be written only at the end.
 - One themed confirm dialog (`components/Confirm.jsx`) instead of `window.confirm` —
   every destructive path says what will happen rather than asking "are you sure?".
+- **Responsive on two breakpoints and only two**, 900 and 620. Below 900 the sidebar
+  stops holding a column open and anything in two or more columns drops to one; below
+  620 every tap target reaches 44px. Wide content scrolls inside its own container and
+  the page body never scrolls sideways.
 - Settings page storing the Anthropic API key **encrypted at rest, write-only** (no
   endpoint ever returns it).
 - CSV export of the week's findings, named after the org that downloaded it — it was

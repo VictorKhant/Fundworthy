@@ -229,7 +229,8 @@ button.brandmark:hover:not(:disabled) .brand-dot { background: var(--clay-deep);
 @media (min-width: 900px) { .scrim { display: none; } }
 
 .page { max-width: 980px; margin: 0 auto; padding: 36px 40px 60px; }
-@media (max-width: 700px) { .page { padding-left: 20px; padding-right: 20px; } }
+/* Breakpoints are 900 and 620 everywhere — see the R11 block at the foot of this
+   file for why, and for what the redesign added. */
 
 /* The menu button is fixed at the top-left and only renders while the sidebar is shut,
    so that is exactly when the page needs room for it — otherwise it sits on top of the
@@ -241,7 +242,10 @@ button.brandmark:hover:not(:disabled) .brand-dot { background: var(--clay-deep);
    decided once, from window width at mount — so a window resized down from wide keeps
    the sidebar open, and without this the page sat 236px off the right edge. Overlaying
    is also the correct behaviour for a drawer: the scrim is already there to close it. */
-@media (max-width: 880px) {
+@media (max-width: 900px) {
+  /* 880 before, which left a 20px dead zone: `App.jsx` opens the sidebar at
+     `innerWidth >= 900` and `.scrim` hides at `min-width: 900`, so between 881 and 899
+     opening it pushed the page across *and* overlaid it. */
   .shell.with-sidebar .page { margin-left: 0; }
 }
 
@@ -306,8 +310,8 @@ input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px;
   display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px 16px;
   margin-bottom: 4px;
 }
-@media (max-width: 760px) { .knobs { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 420px) { .knobs { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .knobs { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 620px) { .knobs { grid-template-columns: 1fr; } }
 .checks { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 4px 0; }
 .check { display: flex; align-items: center; gap: 7px; font-size: 13.5px; cursor: pointer; }
 
@@ -557,7 +561,7 @@ button.text:hover:not(:disabled) { color: var(--accent-deep); }
                font-weight: 500; font-size: 14px; }
 .funder-sector { white-space: nowrap; font-size: 12px; }
 .clamp { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
-@media (max-width: 760px) {
+@media (max-width: 620px) {
   .funder-row { grid-template-columns: auto 1fr; }
   .funder-sector { grid-column: 2; }
 }
@@ -862,7 +866,7 @@ footer {
 }
 .lp-footmark { font-family: var(--display); font-size: 17px; color: var(--body); }
 
-@media (max-width: 880px) {
+@media (max-width: 900px) {
   .lp-hero, .lp-band-inner { grid-template-columns: 1fr; gap: 36px; }
   .lp-three { grid-template-columns: 1fr; }
   .lp-h1 { font-size: 38px; }
@@ -1508,4 +1512,99 @@ button.iconbtn.danger:hover:not(:disabled) { background: var(--clay-soft); color
 @media (max-width: 620px) {
   /* 44px targets on touch. */
   button.iconbtn { width: 44px; height: 44px; }
+}
+
+/* --- responsive (R11) -------------------------------------------------------- */
+/*
+   Two breakpoints, and only two: **900** and **620**. The file had six — 420, 620, 700,
+   760, 880, 900 — which is not a design, it is six separate afternoons. The 880 one was
+   an actual defect: `App.jsx` opens the sidebar at `innerWidth >= 900` and `.scrim`
+   hides at `min-width: 900`, so between 881 and 899 opening the sidebar both overlaid
+   the page and pushed it sideways.
+
+     900  the sidebar stops holding a column open, and anything in two or more columns
+          drops to one
+     620  phone. Single column throughout, and every tap target reaches 44px
+
+   The rule for the whole file: wide content scrolls inside its own container, and the
+   page body never scrolls sideways.
+*/
+
+@media (max-width: 900px) {
+  .page { padding: 18px; padding-top: 64px; }
+
+  /* The three stage boxes stack. There are no connector arrows between them to hide —
+     the R11 note anticipated some, and the boxes read as a sequence from their "Step 1
+     / 2 / 3" labels and their cost order, which survives stacking. Rotating an arrow
+     would have been decoration that only works in one orientation. */
+  .stages { grid-template-columns: 1fr; }
+
+  /* Title over buttons, and the two actions share the width rather than one of them
+     wrapping alone onto a second line. */
+  .page-head { align-items: stretch; flex-direction: column; gap: 12px; }
+  .page-head > .row { width: 100%; }
+  .page-head > .row > button,
+  .page-head > .row > a.button { flex: 1 1 0; justify-content: center; }
+}
+
+@media (max-width: 620px) {
+  .page { padding: 14px; padding-top: 60px; }
+
+  /* The strip wraps, but the spend figure and its bar stay together: split across two
+     lines, "$0.4210 of $1.00" and the bar underneath read as two unrelated facts, and
+     this is the one number §8 asks to be trusted with. */
+  .statusstrip { row-gap: 8px; }
+  .statusstrip .status-sep { display: none; }
+  .status-item { flex: 0 0 auto; white-space: nowrap; }
+  .status-actions { margin-left: 0; flex-basis: 100%; }
+
+  /* Every tap target to 44px, stated once over everything clickable rather than as a
+     list of selectors — the list version missed eight controls (the menu button, the
+     nav links, both theme buttons, the marketplace tabs, and every primary button at
+     40px), which is what a list of selectors does.
+
+     `min-height` and not `height`, so a control whose content is already taller keeps
+     its own size and nothing gets clipped. */
+  button, a.button, [role="button"],
+  .sidebar-link, .sidebar-toggle, .funder-tick, .check,
+  .progchip-tick, .progchip-edit {
+    min-height: 44px;
+  }
+  /* Labels wrapping a checkbox are the real target — the box itself is ~13px and always
+     will be. Centred, so the row does not grow a lopsided gap. */
+  .funder-tick, .check { display: flex; align-items: center; }
+  .pager-num { min-width: 44px; }
+  /* A segmented control's halves are each a target, so each half gets the 44 and the
+     control ends up taller than one button. Padding stays, or the pill hugs the halves
+     and the selected one has no visible inset.
+
+     The one exception: an inline text button inside a sentence. Giving those 44px turns
+     a link in the middle of a paragraph into a block and breaks the line it sits in. */
+  .segmented button { min-height: 44px; }
+  p button.text, .small button.text, .settings-lede button.text { min-height: 0; }
+
+  /* The findings row already wraps; keep the fit numeral and the funder on one line. */
+  .opp-row { row-gap: 8px; }
+
+  .stage-count { font-size: 22px; }
+  .segmented { width: 100%; }
+  .segmented button { flex: 1; }
+}
+
+/* Dialogs, at every width. `max-height: 86vh` and the internal scroll were already on
+   `.dialog`; what was missing is that the header scrolled away with the content, so a
+   long reject list left somebody scrolling a panel with no title on it. */
+.dialog { display: flex; flex-direction: column; }
+.dialog > h2 {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--card); margin: -22px -24px 8px; padding: 22px 24px 10px;
+}
+.dialog.clay > h2 { background: var(--card); }
+
+@media (max-width: 620px) {
+  .dialog-scrim { padding: 20px 12px; align-items: flex-start; }
+  .dialog { max-height: calc(100vh - 40px); }
+  .dialog > h2 { margin: -18px -16px 8px; padding: 18px 16px 10px; }
+  .stage-figures { gap: 4px 14px; font-size: 13px; }
+  .modelopt-cost { margin-left: 0; }
 }
