@@ -170,22 +170,17 @@ export default function SearchSettings({
           </div>
         )}
 
-        {/* The kill switch, kept and kept separate. It is the one control that stops
-            *everything*, including the button, so it is not something to reach for when
-            you only meant "don't search on Wednesdays" — which is exactly what the single
-            combined checkbox made people do. Deliberately the quieter of the two. */}
-        <label className="check pause">
-          <input
-            type="checkbox"
-            checked={!draft.enabled}
-            onChange={(e) => set("enabled", !e.target.checked)}
-          />
-          Pause Fundworthy entirely
-          <small className="muted">
-            {" "}— nothing runs and nothing is spent, by hand or on a schedule, until you
-            untick this.
-          </small>
-        </label>
+        {/* There is deliberately no "pause everything" control here.
+
+            `enabled` still exists and still stops every search — it is the §8 kill switch
+            and the CLI and `FUNDWORTHY_STRICT_CONFIG` depend on it. It just is not a
+            thing to offer somebody next to the schedule, because the two read as
+            alternatives and they are not: one means "don't search on Wednesdays" and the
+            other means "this app does nothing now". Pausing is what the automation
+            checkbox above is for; not searching is what not pressing the button is for.
+
+            Nobody can get stranded by its absence: if `enabled` is ever false the
+            dashboard says so and offers a button to undo it. */}
 
         <div className="row">
           {dirty && (

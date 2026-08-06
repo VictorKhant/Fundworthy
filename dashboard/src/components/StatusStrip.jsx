@@ -55,24 +55,32 @@ export default function StatusStrip({
   return (
     <>
       <section className="statusstrip">
-        <span className={`status-state ${enabled ? "" : "off"}`}>
+        {/* The automation, and nothing else.
+
+            This slot used to read "Fundworthy is on", which was true of every account
+            that had ever existed and so told nobody anything — it reported `enabled`, a
+            switch that is on unless an operator turns it off. The fact worth a permanent
+            line is whether a search happens *without you*: "no search happened this week"
+            and "no search is scheduled" are the same empty page and completely different
+            situations.
+
+            Paused still shows, because if it is ever true it is the only thing on this
+            strip that matters. There is no longer a control for it here — see the
+            recovery button on the dashboard's notice. */}
+        {/* Three states, three weights, and the middle one is the point. `off` is the
+            clay "something is wrong" treatment and belongs to Paused alone. Automatic
+            search being off is the *default* — most accounts will never turn it on — so
+            colouring it like a fault would put a warning on every new dashboard for a
+            setting working exactly as intended. It reads as neutral information. */}
+        <span className={`status-state ${
+          !enabled ? "off" : schedule?.enabled ? "" : "idle"}`}>
           <span className="status-dot" aria-hidden="true" />
-          {enabled ? "Fundworthy is on" : "Paused"}
-        </span>
-
-        <span className="status-sep" aria-hidden="true">|</span>
-
-        {/* Whether anything runs without them. Worth a permanent line now that it is off
-            unless asked for: "no search happened this week" and "no search is scheduled"
-            are the same empty page and completely different facts. */}
-        <span className="status-item">
-          Weekly search:{" "}
-          <strong>
-            {schedule?.enabled
-              ? `${DAY_LABEL(schedule.day)}${
-                  schedule.hour != null ? ` at ${formatHour(schedule.hour)}` : ""}`
-              : "off"}
-          </strong>
+          {!enabled
+            ? "Paused"
+            : schedule?.enabled
+              ? `Searches ${DAY_LABEL(schedule.day)}`
+                + (schedule.hour != null ? ` at ${formatHour(schedule.hour)}` : "")
+              : "Automatic search is off"}
         </span>
 
         <span className="status-sep" aria-hidden="true">|</span>

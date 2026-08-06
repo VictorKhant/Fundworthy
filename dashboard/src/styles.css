@@ -340,6 +340,11 @@ button.text:hover:not(:disabled) { color: var(--accent-deep); }
 }
 .status-state.off { color: var(--clay-deep); }
 .status-state.off .status-dot { background: var(--clay); }
+/* Off by choice, not by fault. Automatic search is off for every account that has not
+   asked for it, so it gets the neutral weight — clay here would put a warning colour on
+   a brand-new dashboard for a setting behaving exactly as designed. */
+.status-state.idle { color: var(--muted); }
+.status-state.idle .status-dot { background: var(--dash); }
 .status-sep { color: var(--line); }
 .status-item { display: inline-flex; align-items: center; gap: 8px; }
 .status-actions { margin-left: auto; }

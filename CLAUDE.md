@@ -328,6 +328,17 @@ twice:
 The manual button is gated by the kill switch and by `runner.preflight`, never by the
 schedule.
 
+**`enabled` has no control in the settings panel, on purpose.** Offering "pause
+everything" next to the schedule made them read as alternatives when they are nothing of
+the sort: one means "don't search on Wednesdays", the other means "this app does nothing
+now". Pausing is what the automation checkbox is for; not searching is what not pressing
+the button is for. The setting still exists for the CLI, an operator, and
+`FUNDWORTHY_STRICT_CONFIG` — and if it is ever false the dashboard says so and offers a
+**Turn it back on** button, so its absence cannot strand anybody behind a greyed button
+with no way to ungrey it. The status strip's first item reports the automation, which is
+the fact that actually varies between accounts; "Fundworthy is on" was true of every
+account that ever existed.
+
 Never send a full HTML page to a model.
 
 ---
