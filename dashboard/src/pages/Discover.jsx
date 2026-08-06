@@ -95,10 +95,9 @@ function StarterLists({ onChange }) {
 // Everything here is somebody else's suggestion and the page says so plainly, twice: in
 // the heading and on every row. There is no tick, no "verified" badge, no score. What we
 // can honestly say is that the page opened on a particular date and mentions grants —
-// that sentence comes from the server as `evidence` and is printed verbatim — plus the
-// 990 if the funder has one on file. Whether it is worth an application is a judgement
-// nobody here can make for them, and dressing a reachability check up as approval is
-// exactly the accuracy shortcut §8 forbids.
+// that sentence comes from the server as `evidence` and is printed verbatim. Whether it
+// is worth an application is a judgement nobody here can make for them, and dressing a
+// reachability check up as approval is exactly the accuracy shortcut §8 forbids.
 function SharedFunders({ onChange }) {
   const [shared, setShared] = useState(null);
   const [busy, setBusy] = useState(null);
@@ -189,9 +188,6 @@ function SharedFunders({ onChange }) {
               <p className="muted small">
                 {f.evidence}
                 {f.checked_at && ` Checked ${f.checked_at.slice(0, 10)}.`}
-                {f.form_990_year
-                  ? ` IRS 990 on file for ${f.form_990_year}.`
-                  : " No IRS 990 found, which is normal for a public agency."}
               </p>
             </div>
             <span className="row">

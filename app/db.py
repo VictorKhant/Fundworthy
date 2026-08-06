@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path("data/rise.db")
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 # The org that owns everything written before tenancy existed. A single-tenant install
 # (and every row in the pilot's live database) belongs to it, so adding org scoping is a
@@ -179,14 +179,6 @@ CREATE TABLE IF NOT EXISTS funders (
     -- after scoring would have already spent the tokens.
     active      INTEGER NOT NULL DEFAULT 1,
     exclude_reason TEXT NOT NULL DEFAULT '',  -- why they took it off the list
-    -- 990 lookup, cached here rather than repeated per run: a funder's filings change
-    -- once a year, so this is ~40 requests once and effectively never again.
-    ein                    TEXT,
-    form_990_url           TEXT,
-    form_990_year          INTEGER,
-    form_990_total_revenue INTEGER,
-    form_990_total_expenses INTEGER,
-    form_990_checked_at    TEXT,
     -- How this funder got onto the list: 'starter' if it came from a shipped researched
     -- list, 'user' if somebody typed it in. Nothing recorded this before, and the two
     -- paths were indistinguishable afterwards — which matters now that hand-added ones
@@ -235,7 +227,6 @@ CREATE TABLE IF NOT EXISTS opportunities (
     funder_type            TEXT NOT NULL DEFAULT 'unknown',
     service_areas          TEXT NOT NULL DEFAULT '[]',
     geography              TEXT,
-    form_990_available     INTEGER,            -- null = unknown
     confidence_pct         INTEGER,
     contact_note           TEXT,
     verified               INTEGER NOT NULL DEFAULT 0,
@@ -249,11 +240,6 @@ CREATE TABLE IF NOT EXISTS opportunities (
     -- submitting to money in the bank.
     application_lead_time_days INTEGER,
     time_to_funds_days     INTEGER,
-    ein                    TEXT,
-    form_990_url           TEXT,
-    form_990_year          INTEGER,
-    form_990_total_revenue INTEGER,
-    form_990_total_expenses INTEGER,
     fetched_at             TEXT NOT NULL,
     PRIMARY KEY (org_id, id)
 );
@@ -551,17 +537,15 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
     if current < 5:
         # v5 lands the COO's answer to the forced-rank (§11 Q5): the two time criteria
-        # on opportunities, and cached 990 facts on both tables.
+        # on opportunities.
+        #
+        # It also added the cached 990 columns on both tables. Those are gone (v12), and
+        # they are removed from here too rather than added-then-dropped: a database that
+        # never reached v5 has no reason to grow six columns on the way to losing them.
+        # An install that already ran the old v5 still has them, which is what v12 is for.
         for table, cols in (
-            ("funders", [
-                ("ein", "TEXT"), ("form_990_url", "TEXT"),
-                ("form_990_year", "INTEGER"), ("form_990_total_revenue", "INTEGER"),
-                ("form_990_total_expenses", "INTEGER"), ("form_990_checked_at", "TEXT"),
-            ]),
             ("opportunities", [
                 ("application_lead_time_days", "INTEGER"), ("time_to_funds_days", "INTEGER"),
-                ("ein", "TEXT"), ("form_990_url", "TEXT"), ("form_990_year", "INTEGER"),
-                ("form_990_total_revenue", "INTEGER"), ("form_990_total_expenses", "INTEGER"),
             ]),
         ):
             have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
@@ -720,6 +704,43 @@ def _migrate(conn: sqlite3.Connection) -> None:
             log.info("v11: %d funder(s) will be checked again under the new rule", cleared)
         current = 11
 
+    if current < 12:
+        # v12 removes the cached IRS 990 data and the lookup behind it.
+        #
+        # It was a third-party dependency (ProPublica's Nonprofit Explorer) bought for
+        # two things, and it was the wrong price for both. It put one line — the funder's
+        # revenue and expenses — into the Sonnet prompt, under an instruction to judge
+        # PROGRAM FIT from the funder's "past grants", which the lookup never returns and
+        # the model therefore never saw. And it did so for only about half the list: a
+        # county agency, a state arts council and a fund inside a community foundation
+        # file no 990 at all, so two near-identical grants could score differently for a
+        # reason that had nothing to do with either grant.
+        #
+        # Dropped rather than left dead, so the next person reading `funders` does not
+        # find six columns nothing writes. `DROP COLUMN` needs SQLite 3.35 (2021); where
+        # it is older the values are nulled instead, which reaches the same place — no
+        # 990 data, nothing reading it — with a wider schema. Neither outcome is worth
+        # failing a boot over, so the whole thing is best-effort.
+        for table, cols in (
+            ("funders", ("ein", "form_990_url", "form_990_year",
+                         "form_990_total_revenue", "form_990_total_expenses",
+                         "form_990_checked_at")),
+            ("opportunities", ("ein", "form_990_url", "form_990_year",
+                               "form_990_total_revenue", "form_990_total_expenses",
+                               "form_990_available")),
+        ):
+            have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+            for col in cols:
+                if col not in have:
+                    continue
+                try:
+                    conn.execute(f"ALTER TABLE {table} DROP COLUMN {col}")
+                except sqlite3.OperationalError as exc:
+                    log.info("v12: leaving %s.%s in place (%s) — nothing reads it",
+                             table, col, exc)
+                    conn.execute(f"UPDATE {table} SET {col}=NULL")
+        current = 12
+
     conn.execute(
         "INSERT INTO meta(key, value) VALUES('schema_version', ?) "
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -771,7 +792,13 @@ def _migrate_to_org_scoped(conn: sqlite3.Connection) -> None:
         conn.executescript(SCHEMA)        # recreates the four, now org-scoped
 
     for table, cols in carried.items():
-        names = ", ".join(cols)
+        # Only carry across columns the *current* schema still has. A column that has
+        # since been removed (the 990 cache, v12) is still sitting in a database that
+        # stopped at v5, and naming it here would make the INSERT fail with "no such
+        # column" — an upgrade that dies halfway rather than a column quietly dropped.
+        # Intersecting keeps this migration correct as the schema keeps moving.
+        live = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        names = ", ".join(c for c in cols if c in live)
         conn.execute(
             f"INSERT INTO {table}(org_id, {names}) SELECT ?, {names} FROM {table}__pre_org",
             (DEFAULT_ORG_ID,),

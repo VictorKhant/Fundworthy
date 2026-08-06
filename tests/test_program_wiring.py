@@ -215,56 +215,6 @@ def test_absurd_day_counts_are_discarded_rather_than_shown():
     assert _bounded("not a number", 400) is None
 
 
-# --- the 990 lookup -----------------------------------------------------------
-
-def test_government_and_tribal_bodies_are_never_looked_up():
-    """They file no 990 at all, so a 'no result' is correct rather than a failure —
-    and asking anyway would burn a request a week on every one of them."""
-    from agent.irs990 import files_a_990
-
-    for name in ("County of San Diego — Community Enhancement Program",
-                 "City of San Diego — CDBG",
-                 "California Department of Social Services",
-                 "Viejas Band of Kumeyaay Indians",
-                 "Port of San Diego — Tidelands Activation Program",
-                 "National Endowment for the Arts"):
-        assert files_a_990(name) is False, name
-
-    for name in ("The Parker Foundation", "Rosenberg Foundation", "Las Patronas"):
-        assert files_a_990(name) is True, name
-
-
-def test_program_suffixes_are_stripped_before_searching():
-    """The registry name carries the programme; the IRS indexes the legal name."""
-    from agent.irs990 import search_name
-
-    assert search_name("The Kresge Foundation (Health Program)") == "Kresge Foundation"
-    assert search_name("Doris Duke Foundation — Performing Arts") == "Doris Duke Foundation"
-    assert search_name("W.K. Kellogg Foundation") == "W K Kellogg Foundation"
-    assert search_name("The Parker Foundation") == "Parker Foundation"
-
-
-def test_an_ambiguous_990_match_returns_nothing():
-    """Attaching one charity's finances to another charity's name is exactly the
-    confident-wrong-answer §6 exists to prevent."""
-    from agent.irs990 import _best_match
-
-    two_states = [{"name": "Parker Foundation", "state": "PA", "ein": 1},
-                  {"name": "Parker Foundation", "state": "NY", "ein": 2}]
-    assert _best_match("Parker Foundation", two_states) is None
-
-    # ...unless California breaks the tie, which this registry is entitled to assume.
-    with_ca = two_states + [{"name": "Parker Foundation", "state": "CA", "ein": 3}]
-    assert _best_match("Parker Foundation", with_ca)["ein"] == 3
-
-
-def test_a_near_miss_is_not_a_match():
-    from agent.irs990 import _best_match
-
-    orgs = [{"name": "The Jack B Parker Foundation", "state": "GA", "ein": 9},
-            {"name": "The James Parker Charitable Foundation", "state": "MA", "ein": 8}]
-    assert _best_match("Parker Foundation", orgs) is None
-
 # --- effort estimate is mandatory --------------------------------------------
 #
 # CLAUDE.md weights effort against a hard 10-hour cap, and §1 is explicit that the

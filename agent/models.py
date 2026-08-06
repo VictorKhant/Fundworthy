@@ -155,15 +155,11 @@ class Opportunity:
     #   INFERRED  funder_type, service_areas, confidence_pct — these are the model's
     #             read, not quotes off a page, and the UI marks them as such. A wrong
     #             "Private Foundation" label is a shrug; a wrong deadline is fatal.
-    #
-    # form_990_available is neither: it is a deterministic property of the funder, and
-    # is left None until something has actually checked.
     award_typical: int | None = None          # what they actually tend to give
     deadline_type: DeadlineType = DeadlineType.UNKNOWN
     funder_type: FunderType = FunderType.UNKNOWN
     service_areas: list[str] = field(default_factory=list)
     geography: str | None = None
-    form_990_available: bool | None = None
     confidence_pct: int | None = None         # AI judgement, labelled as one
     contact_note: str | None = None
     found_on: date = field(default_factory=date.today)
@@ -183,14 +179,6 @@ class Opportunity:
     # labelled as such in the UI.
     application_lead_time_days: int | None = None
     time_to_funds_days: int | None = None
-
-    # 990 filing data, shown as context rather than scored. Populated by a lookup
-    # against the funder, not read off the opportunity page.
-    ein: str | None = None
-    form_990_url: str | None = None
-    form_990_year: int | None = None
-    form_990_total_revenue: int | None = None
-    form_990_total_expenses: int | None = None
 
     # provenance — defaulted so existing construction sites stay valid
     source_kind: SourceKind = SourceKind.FUNDER_PAGE
@@ -244,12 +232,6 @@ class Opportunity:
             "funder_type": _enum_value(self.funder_type),
             "service_areas": list(self.service_areas),
             "geography": self.geography,
-            "form_990_available": self.form_990_available,
-            "ein": self.ein,
-            "form_990_url": self.form_990_url,
-            "form_990_year": self.form_990_year,
-            "form_990_total_revenue": self.form_990_total_revenue,
-            "form_990_total_expenses": self.form_990_total_expenses,
             "application_lead_time_days": self.application_lead_time_days,
             "time_to_funds_days": self.time_to_funds_days,
             "confidence_pct": self.confidence_pct,

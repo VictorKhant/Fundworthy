@@ -178,7 +178,7 @@ gap between the two is where the harm would live:
 |---|---|
 | Is the URL a real, reachable, public page? | yes — `urlguard` + the polite fetcher |
 | Does it look like a grants page? | roughly — `agent/parse.py`, amounts and deadlines |
-| Is this a real registered organisation? | partly — a cached IRS 990, absent for public agencies |
+| Is this a real registered organisation? | **no** — see the IRS 990 note in §5 |
 | Is it worth applying to? | **no**, and nothing here may imply otherwise |
 
 So Discover shows the sentence and the date (*"The page opened and names an award amount.
@@ -246,7 +246,6 @@ unhelpful but wrong. A new org writes its own, with the assistant drafting from 
                                         │  (one run at a time; Stop terminates it)
                                         │
                                         ├─ crawl()     fetch + parse + free filters   $0
-                                        ├─ enrich_990() one-time IRS 990 lookup/funder
                                         ├─ evaluate()  Haiku triage → Sonnet score  ≤ $1
                                         └─ sinks: sqlite (primary) + webjson (run.json)
 ```
@@ -361,8 +360,27 @@ that money and doesn't want to reapply, so a relationship is a reason to *exclud
 to rank higher. The model is never told whether the org knows a funder.
 
 **Score (0–100)** = program fit **40** + award size vs the floor **35** + can-the-app-be
--finished-before-the-deadline **25**. Funder warmth is not a factor. The 990 is shown as
-data, never scored.
+-finished-before-the-deadline **25**. Funder warmth is not a factor.
+
+**Nothing about the funder's finances is, either — the IRS 990 lookup is gone** (schema
+v12). It called ProPublica's Nonprofit Explorer once per funder and put one line into the
+Sonnet prompt: the funder's revenue and expenses. Two things were wrong with that, and
+they compound:
+
+- The prompt told the model to judge **program fit** from the funder's *past grants*.
+  The lookup never returned past grants — that is Schedule I / 990-PF Part XV, which the
+  API does not expose cheaply — so the model was asked to reason about giving history
+  and handed a balance sheet.
+- It resolved for roughly **half** the list. A state arts council, a county initiative and
+  a fund inside a community foundation file no 990 at all, and a short name like
+  "MacArthur Foundation" matches nine organisations, so the lookup correctly refuses
+  rather than attaching Roderick MacArthur's finances to somebody else's name. Two
+  near-identical grants could therefore score differently because of an attribute of the
+  funder's legal filing status, which is not a fact about either grant.
+
+Removing it does not move the average score; it removes an input that was inconsistent
+across funders and irrelevant to fit. **Whether a funder is worth applying to is decided
+from their grants page and the org's program cards, and from nothing else.**
 
 **Budget & stop conditions.** Default ceiling **$1.00/run**; the run aborts and logs
 `stop_reason: budget` if exceeded. A run ends on the first of: `target_met` (cap
@@ -461,7 +479,6 @@ Everything else (funders, programs, this month's findings) is already seeded.
 │   ├── score.py / verify.py     Haiku→Sonnet scoring · the accuracy gate
 │   ├── sources.py / apis.py     funder registry · CA Grants Portal + Grants.gov
 │   ├── sd_funders.py            44 researched pilot funders (seed data)
-│   ├── irs990.py                one-time IRS 990 lookup, cached
 │   └── models.py                the Opportunity dataclass
 ├── sinks/                       sqlite (primary) · webjson · sheets · jsonl
 ├── dashboard/src/               React UI (sidebar, dashboard, archive,

@@ -45,7 +45,6 @@ HEADERS = [
     "Days to prepare",
     "Months to funds",
     "Fit %",                 # the AI's own confidence — inferred, labelled in the UI
-    "Their 990",             # shown as data, never scored — their call
     "Programs",
     "Needs a human check",
     "Link",
@@ -130,7 +129,6 @@ def _row(opp: Opportunity) -> list:
         opp.application_lead_time_days if opp.application_lead_time_days is not None else "",
         round(opp.time_to_funds_days / 30) if opp.time_to_funds_days else "",
         opp.confidence_pct if opp.confidence_pct is not None else "",
-        opp.form_990_url or "",
         ", ".join(_enum_value(p) for p in opp.program_match),
         "YES" if opp.needs_human_check else "",
         opp.source_url,
