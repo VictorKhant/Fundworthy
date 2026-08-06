@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path("data/rise.db")
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 # The org that owns everything written before tenancy existed. A single-tenant install
 # (and every row in the pilot's live database) belongs to it, so adding org scoping is a
@@ -193,6 +193,16 @@ CREATE TABLE IF NOT EXISTS funders (
     check_ok    INTEGER,
     check_note  TEXT NOT NULL DEFAULT '',
     checked_at  TEXT,
+    -- Blocked, which is a third thing and not a stronger `active=0`.
+    --
+    --   active=0  paused. Stays on the list, greyed, not fetched. One click back.
+    --   blocked   never fetched, AND never offered again — suppressed in the starter
+    --             lists and in the shared directory, which `active` does not touch.
+    --   deleted   the row is gone.
+    --
+    -- Pausing and blocking used to be the same flag, so an org that blocked a funder
+    -- got it re-offered by every researched list it imported afterwards.
+    blocked     INTEGER NOT NULL DEFAULT 0,
     tier        INTEGER NOT NULL DEFAULT 1,
     confidence  INTEGER NOT NULL DEFAULT 1,   -- agent.sources.Confidence
     programs    TEXT NOT NULL DEFAULT '[]',   -- json array of program slugs
@@ -773,6 +783,17 @@ def _migrate(conn: sqlite3.Connection) -> None:
             if col not in run_cols:
                 conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {decl}")
         current = 13
+
+    if current < 14:
+        # v14 separates blocking from pausing. Nothing is migrated INTO it: every
+        # existing `active=0` row is a pause, because pausing is all the UI could
+        # express, and promoting them to blocks would silently stop researched lists
+        # offering funders that people had only set aside for the season.
+        funder_cols = {r["name"] for r in conn.execute("PRAGMA table_info(funders)")}
+        if "blocked" not in funder_cols:
+            conn.execute("ALTER TABLE funders ADD COLUMN blocked "
+                         "INTEGER NOT NULL DEFAULT 0")
+        current = 14
 
     conn.execute(
         "INSERT INTO meta(key, value) VALUES('schema_version', ?) "
@@ -1385,9 +1406,18 @@ def import_starter_list(conn: sqlite3.Connection, key: str, org_id: str) -> int:
     if lst is None:
         raise ValueError(f"no starter list called {key!r}")
 
+    # A blocked funder is never re-offered. `ON CONFLICT DO NOTHING` already protects a
+    # row that exists, but blocking is supposed to mean "and stop suggesting this" — and
+    # deleting a blocked row then importing the list would put it straight back.
+    blocked = {r["id"] for r in
+               conn.execute("SELECT id FROM funders WHERE blocked=1 AND org_id=?",
+                            (org_id,))}
+
     stamp = now_iso()
     added = 0
     for s in lst.sources:
+        if _funder_id(s.funder, s.url) in blocked:
+            continue
         cold = replace(s, warm=False)
         cur = conn.execute(
             """INSERT INTO funders(

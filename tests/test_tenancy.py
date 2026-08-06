@@ -1182,3 +1182,108 @@ def test_closing_an_org_keeps_what_it_contributed_and_drops_the_copies(db):
         # And it is still on offer to everybody else, which is the reason to keep it.
         assert [x["name"] for x in repo.shared_funders(conn, org_id=A)] == \
             ["Their Own Research"]
+
+
+# --- pause vs block vs delete ---------------------------------------------------
+#
+# Three actions, and the middle one did not exist. Unticking set `active=0` and "Remove"
+# deleted the row, which reads backwards: the reversible thing was hidden in a checkbox
+# and the permanent one was a button on every row.
+
+def test_pausing_a_funder_leaves_it_offerable_but_unsearched(db):
+    """A pause is seasonal. It must not stop the researched lists mentioning the funder,
+    because the org has not said they never want to hear about it."""
+    with session(db) as conn:
+        org_for_user(conn, "uid-1", "first@example.org")
+        org = org_for_user(conn, "uid-2", "second@example.org")
+        f = repo.create_funder(conn, {"name": "Parker", "url": "https://p.example/g"},
+                               org_id=org)
+        repo.update_funder(conn, f["id"], {"active": False}, org_id=org)
+
+        assert repo.list_funders(conn, org_id=org, active_only=True) == []
+        still_there = repo.list_funders(conn, org_id=org)
+        assert len(still_there) == 1 and still_there[0]["blocked"] is False
+
+
+def test_a_blocked_funder_is_never_searched(db):
+    from agent.sources import sources_from_db
+
+    with session(db) as conn:
+        org_for_user(conn, "uid-1", "first@example.org")
+        org = org_for_user(conn, "uid-2", "second@example.org")
+        f = repo.create_funder(conn, {"name": "Parker", "url": "https://p.example/g"},
+                               org_id=org)
+        repo.update_funder(conn, f["id"], {"blocked": True}, org_id=org)
+
+        assert repo.list_funders(conn, org_id=org, active_only=True) == [], \
+            "blocked has to mean unsearched even though `active` is still 1"
+
+    sources, _skipped = sources_from_db(3, [], org_id=org)
+    assert [s.funder for s in sources] == [], "the crawl would still have fetched it"
+
+
+def test_a_blocked_funder_is_not_offered_by_a_researched_list(db):
+    """The reason blocking cannot just be `active=0`. Importing a starter list used to
+    re-offer anything the org had taken off, every time."""
+    from agent.directory import STARTER_LISTS
+    from app.db import import_starter_list
+
+    key = STARTER_LISTS[0].key
+    with session(db) as conn:
+        org_for_user(conn, "uid-1", "first@example.org")
+        org = org_for_user(conn, "uid-2", "second@example.org")
+
+        import_starter_list(conn, key, org)
+        imported = repo.list_funders(conn, org_id=org)
+        assert imported, "the fixture list is empty"
+
+        victim = imported[0]
+        repo.update_funder(conn, victim["id"], {"blocked": True}, org_id=org)
+
+        before = len(repo.list_funders(conn, org_id=org))
+        import_starter_list(conn, key, org)          # import it again
+        after = repo.list_funders(conn, org_id=org)
+
+    assert len(after) == before, "a second import added rows"
+    blocked_row = next(f for f in after if f["id"] == victim["id"])
+    assert blocked_row["blocked"] is True, "the import un-blocked it"
+
+
+def test_a_blocked_funder_is_not_offered_by_another_nonprofit(db):
+    """The other place a funder gets suggested. Blocking is 'stop suggesting this', so
+    it has to reach the screen whose whole job is suggesting things."""
+    with session(db) as conn:
+        org_for_user(conn, "uid-1", "first@example.org")
+        sharer = org_for_user(conn, "uid-share", "share@example.org")
+        me = org_for_user(conn, "uid-me", "me@example.org")
+
+        repo.update_settings(conn, {"share_funders": True}, org_id=sharer)
+        theirs = repo.create_funder(
+            conn, {"name": "Shared Foundation", "url": "https://shared.example/grants"},
+            org_id=sharer)
+        conn.execute("UPDATE funders SET check_ok=1, check_note='ok' WHERE id=? AND org_id=?",
+                     (theirs["id"], sharer))
+
+        assert [f["name"] for f in repo.shared_funders(conn, org_id=me)] \
+            == ["Shared Foundation"], "the precondition: it is on offer"
+
+        mine = repo.create_funder(
+            conn, {"name": "Shared Foundation", "url": "https://shared.example/grants"},
+            org_id=me)
+        repo.update_funder(conn, mine["id"], {"blocked": True}, org_id=me)
+
+        assert repo.shared_funders(conn, org_id=me) == [], \
+            "a funder this org blocked came back as somebody else's suggestion"
+
+
+def test_blocking_reaches_the_indexed_databases_too(db):
+    """Same second door the remove list already has: a blocked funder's grants can
+    arrive through Grants.gov even though we never fetched their own page."""
+    with session(db) as conn:
+        org_for_user(conn, "uid-1", "first@example.org")
+        org = org_for_user(conn, "uid-2", "second@example.org")
+        f = repo.create_funder(conn, {"name": "Parker", "url": "https://p.example/g"},
+                               org_id=org)
+        repo.update_funder(conn, f["id"], {"blocked": True}, org_id=org)
+
+        assert "parker" in repo.excluded_funder_names(conn, org_id=org)

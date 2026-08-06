@@ -231,7 +231,8 @@ def delete_program(conn, program_id: str, *, org_id: str) -> bool:
 # --- funders ------------------------------------------------------------------
 
 _FUNDER_FIELDS = ("name", "url", "sector", "funder_type", "warm", "active",
-                  "tier", "confidence", "programs", "notes", "exclude_reason")
+                  "blocked", "tier", "confidence", "programs", "notes",
+                  "exclude_reason")
 
 
 def _funder_out(row) -> dict:
@@ -249,13 +250,18 @@ def _funder_out(row) -> dict:
     # with a type that was assumed rather than checked.
     if d.get("check_ok") is not None:
         d["check_ok"] = bool(d["check_ok"])
+    d["blocked"] = bool(d.get("blocked"))
     return d
 
 
-def list_funders(conn, *, org_id: str, active_only: bool = False) -> list[dict]:
+def list_funders(conn, *, org_id: str, active_only: bool = False,
+                 include_blocked: bool = True) -> list[dict]:
     sql = "SELECT * FROM funders WHERE org_id=?"
     if active_only:
-        sql += " AND active=1"
+        # A blocked funder is never searched, so "active" has to mean both.
+        sql += " AND active=1 AND blocked=0"
+    elif not include_blocked:
+        sql += " AND blocked=0"
     # Alphabetical, case-insensitively. It used to be `warm DESC, name` — partners
     # first — which is exactly the priority the stakeholder asked us to drop. NOCASE
     # because SQLite's default is byte order, which puts every capitalised name above
@@ -276,8 +282,27 @@ def excluded_funder_names(conn, *, org_id: str) -> set[str]:
     return {
         str(r["name"]).strip().casefold()
         for r in conn.execute(
-            "SELECT name FROM funders WHERE active=0 AND org_id=?", (org_id,))
+            "SELECT name FROM funders WHERE (active=0 OR blocked=1) AND org_id=?",
+            (org_id,))
     }
+
+
+def blocked_funder_keys(conn, *, org_id: str) -> set[str]:
+    """Blocked funders, by casefolded name and by casefolded URL.
+
+    Both, because the three places that offer a funder identify it differently: a
+    researched list matches on the derived id, the shared directory dedupes on URL, and
+    a person types a name. Matching on one of those lets the other two put a blocked
+    funder back in front of somebody who explicitly took it away.
+    """
+    keys: set[str] = set()
+    for r in conn.execute("SELECT name, url FROM funders WHERE blocked=1 AND org_id=?",
+                          (org_id,)):
+        keys.add(str(r["name"] or "").strip().casefold())
+        url = str(r["url"] or "").strip().rstrip("/").casefold()
+        if url:
+            keys.add(url)
+    return keys
 
 
 def get_funder(conn, funder_id: str, *, org_id: str) -> dict | None:
@@ -325,7 +350,12 @@ def update_funder(conn, funder_id: str, changes: dict, *, org_id: str) -> dict |
         value = changes[field]
         if field == "programs":
             value = dumps(value if isinstance(value, list) else [])
-        elif field in {"warm", "active"}:
+        elif field in {"warm", "active", "blocked"}:
+            # `blocked` belongs here and not in the `str(value)` fallback below, which
+            # would store the literal "True" in an INTEGER column — so `blocked=1` never
+            # matches and a funder somebody blocked keeps being searched and re-offered.
+            # Same family as `share_funders` stored as "True": a value crossing a
+            # boundary with a type that was assumed rather than checked.
             value = 1 if value else 0
         elif field in {"tier", "confidence"}:
             value = int(value or 1)
@@ -682,6 +712,10 @@ def shared_funders(conn, *, org_id: str, limit: int = 60) -> list[dict]:
     """
     mine = {(r["url"] or "").strip().rstrip("/").casefold()
             for r in conn.execute("SELECT url FROM funders WHERE org_id=?", (org_id,))}
+    # Blocking means "stop suggesting this", so it has to reach the one screen whose
+    # whole job is suggesting things. Matched on name as well as URL, because another
+    # org may well have typed the same funder with a different address.
+    blocked = blocked_funder_keys(conn, org_id=org_id)
 
     rows = conn.execute(
         """SELECT f.id, f.org_id, f.name, f.url, f.sector, f.funder_type, f.notes,
@@ -703,7 +737,9 @@ def shared_funders(conn, *, org_id: str, limit: int = 60) -> list[dict]:
     out: dict[str, dict] = {}
     for r in rows:
         key = (r["url"] or "").strip().rstrip("/").casefold()
-        if key in mine:
+        if key in mine or key in blocked:
+            continue
+        if str(r["name"] or "").strip().casefold() in blocked:
             continue
         if key in out:
             out[key]["added_by_count"] += 1

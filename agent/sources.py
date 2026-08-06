@@ -347,7 +347,7 @@ def sources_from_db(max_tier: Tier = Tier.WARM,
     try:
         with session(target) as conn:
             rows = [dict(r) for r in conn.execute(
-                "SELECT * FROM funders WHERE active=1 AND org_id=? "
+                "SELECT * FROM funders WHERE active=1 AND blocked=0 AND org_id=? "
                 "ORDER BY warm DESC, name", (scope,))]
     except Exception:  # noqa: BLE001
         return None

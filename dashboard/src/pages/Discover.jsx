@@ -21,7 +21,7 @@ import Spinner, { Busy } from "../components/Spinner";
 // because a button that appears the week it works is a feature nobody was waiting for —
 // and because the shape of this page is the argument for building it. See FUTURE.md §4a.
 
-function StarterLists({ onChange }) {
+function StarterLists({ onChange, embedded }) {
   const [lists, setLists] = useState(null);
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
@@ -50,12 +50,13 @@ function StarterLists({ onChange }) {
     }
   }
 
+  const Wrap = embedded ? "div" : "section";
   return (
-    <section className="card">
-      <h2>Researched lists</h2>
-      <p className="muted">
+    <Wrap className={embedded ? "" : "card"}>
+      {!embedded && <h2>Researched lists</h2>}
+      <p className="muted small">
         Funders we have already looked up and checked. Adding a list never removes
-        anything you have changed — a funder you took off your list stays off.
+        anything you have changed — a funder you paused or blocked stays that way.
       </p>
 
       {error && <div className="notice error">{error}</div>}
@@ -87,7 +88,7 @@ function StarterLists({ onChange }) {
           </div>
         ))}
       </div>
-    </section>
+    </Wrap>
   );
 }
 
@@ -99,7 +100,7 @@ function StarterLists({ onChange }) {
 // that sentence comes from the server as `evidence` and is printed verbatim. Whether it
 // is worth an application is a judgement nobody here can make for them, and dressing a
 // reachability check up as approval is exactly the accuracy shortcut §8 forbids.
-function SharedFunders({ onChange }) {
+function SharedFunders({ onChange, embedded, settings = {} }) {
   const [dialog, ask] = useConfirm();
   const [shared, setShared] = useState(null);
   const [busy, setBusy] = useState(null);
@@ -160,17 +161,42 @@ function SharedFunders({ onChange }) {
     }
   }
 
-  if (shared !== null && shared.length === 0) return null;
+  // Embedded, this is a tab somebody chose — so an empty one has to say it is empty
+  // rather than silently rendering nothing behind a tab they just clicked.
+  if (!embedded && shared !== null && shared.length === 0) return null;
 
+  const Wrap = embedded ? "div" : "section";
   return (
-    <section className="card">
+    <Wrap className={embedded ? "" : "card"}>
       {dialog}
-      <h2>Suggested by other nonprofits</h2>
-      <p className="muted">
+      {!embedded && <h2>Suggested by other nonprofits</h2>}
+      <p className="muted small">
         Funders other organizations added by hand and chose to share. <strong>We have
         not researched these</strong> — we have only checked that the page opens and
         looks like it is about grants. Open the link before you rely on any of it.
       </p>
+
+      {/* The contribute strip. Wired to the same `share_funders` setting the Settings
+          page owns, and put here because this is the page where the value of other
+          people having ticked it is visible. */}
+      {embedded && (
+        <label className="contribute">
+          <input
+            type="checkbox"
+            checked={Boolean(settings.share_funders)}
+            onChange={async (e) => {
+              await api.settings.save({ share_funders: e.target.checked });
+              await onChange();
+              load();
+            }}
+          />
+          <span>
+            <strong>Share the funders I add.</strong> Only ones you typed in yourself, and
+            only the name, address, sector and your note — never your findings, your
+            programs or your spending.
+          </span>
+        </label>
+      )}
 
       {error && <div className="notice error">{error}</div>}
       {!shared && (
@@ -222,7 +248,14 @@ function SharedFunders({ onChange }) {
           </div>
         ))}
       </div>
-    </section>
+
+      {embedded && shared !== null && shared.length === 0 && (
+        <p className="muted small">
+          Nothing shared yet. Funders other nonprofits add by hand and choose to share
+          will appear here.
+        </p>
+      )}
+    </Wrap>
   );
 }
 
@@ -249,6 +282,34 @@ function FindMore() {
   );
 }
 
+// The two ways to find a funder you do not have yet, as one section with a tab — first
+// on the page, because "who should I be watching?" comes before "here is who I watch".
+//
+// They were two stacked cards of full-width rows, which put the shared suggestions below
+// the fold on any list longer than a few. Both are the same shape of thing (somebody
+// else's list of funders, one click to add), so they are the same control.
+function Marketplace({ state, onChange }) {
+  const [tab, setTab] = useState("near");
+
+  return (
+    <section className="card marketplace">
+      <div className="market-head">
+        <h2>Find funders</h2>
+        <div className="segmented" role="tablist" aria-label="Where to look">
+          <button role="tab" aria-selected={tab === "near"}
+                  onClick={() => setTab("near")}>Near you</button>
+          <button role="tab" aria-selected={tab === "shared"}
+                  onClick={() => setTab("shared")}>Shared</button>
+        </div>
+      </div>
+
+      {tab === "near"
+        ? <StarterLists onChange={onChange} embedded />
+        : <SharedFunders onChange={onChange} embedded settings={state.settings} />}
+    </section>
+  );
+}
+
 export default function Discover({ state, onChange }) {
   return (
     <>
@@ -261,8 +322,7 @@ export default function Discover({ state, onChange }) {
         </p>
       </header>
 
-      <StarterLists onChange={onChange} />
-      <SharedFunders onChange={onChange} />
+      <Marketplace state={state} onChange={onChange} />
       <FindMore />
       <Funders
         funders={state.funders}
