@@ -80,6 +80,21 @@ def _names_in_scope(source: str) -> set[str]:
     return names
 
 
+def _without_comments(source: str) -> str:
+    """Strip `/* … */` and `// …` before looking for rendered tags.
+
+    Comments in this codebase are prose, and prose about components names them the way
+    you would say them out loud — "forwardRef because <Confirm> needs focus". Scanning
+    the raw text turns every one of those into a phantom missing import, which is the
+    kind of false alarm that gets a test deleted rather than fixed.
+
+    Blank lines are kept so the file's shape is unchanged; nothing here depends on line
+    numbers today, but a future check reporting one should not be lied to.
+    """
+    source = re.sub(r"/\*.*?\*/", lambda m: "\n" * m.group(0).count("\n"), source, flags=re.S)
+    return re.sub(r"(?<![:/])//[^\n]*", "", source)
+
+
 def _sources() -> list[Path]:
     return sorted(p for p in SRC.rglob("*.jsx"))
 
@@ -87,6 +102,31 @@ def _sources() -> list[Path]:
 def test_there_are_jsx_files_to_check():
     """A path typo here would make every check below vacuously pass."""
     assert len(_sources()) > 10, f"expected the dashboard's components under {SRC}"
+
+
+# `useThing(` — hooks are the other identifier that is used bare, throws at render when
+# it is missing, and builds perfectly happily without an import.
+_HOOK_CALL = re.compile(r"\b(use[A-Z][A-Za-z0-9_]*)\s*\(")
+
+
+@pytest.mark.parametrize("path", _sources(), ids=lambda p: p.name)
+def test_every_hook_a_file_calls_is_actually_in_scope(path: Path):
+    """The same white-page failure as below, one identifier shape over.
+
+    Caught in the wild: `Settings.jsx` gained `const [dialog, ask] = useConfirm()` while
+    its import line still read `import Confirm from "../components/Confirm"`. The build
+    was clean and the JSX-tag check above saw nothing wrong, because `useConfirm` is a
+    call and not a tag — the page would simply have thrown on open.
+    """
+    source = _without_comments(path.read_text(encoding="utf-8"))
+    in_scope = _names_in_scope(path.read_text(encoding="utf-8"))
+    # A hook defined in this file is declared here too, so _DECLARED already has it.
+    missing = sorted({h for h in _HOOK_CALL.findall(source)} - in_scope)
+    assert not missing, (
+        f"{path.relative_to(SRC.parent.parent)} calls {', '.join(missing)} but nothing "
+        "imports or defines it. React hooks fail the same way a missing component does: "
+        "clean build, ReferenceError on render, blank page."
+    )
 
 
 @pytest.mark.parametrize("path", _sources(), ids=lambda p: p.name)
@@ -98,7 +138,9 @@ def test_every_component_a_file_renders_is_actually_in_scope(path: Path):
     """
     source = path.read_text(encoding="utf-8")
     in_scope = _names_in_scope(source)
-    used = {tag.split(".")[0] for tag in _JSX_TAG.findall(source)}
+    # Imports are read from the whole file; tags only from the code, since a component
+    # mentioned in a comment is not rendered.
+    used = {tag.split(".")[0] for tag in _JSX_TAG.findall(_without_comments(source))}
 
     missing = sorted(used - in_scope)
     assert not missing, (

@@ -14,9 +14,20 @@
      .opp.flagged      the needs-a-human block. Clay border, listed last, never hidden.
      .costbar          spend against the ceiling. §8 only works if she can see it.
 
-   Dark mode: deliberately dropped in this pass. The old cool-grey dark palette would
-   have clashed with the warm light one, and shipping a half-converted dark theme is
-   worse than shipping none. See FUTURE.md. */
+   Dark mode: `body[data-fw-theme="dark"]` near the bottom of this file. It was dropped
+   once before, and the reason is worth keeping: the old palette was cool grey against a
+   warm light theme, so the two read as different products. The block below is derived
+   from the light palette rather than picked fresh — same hues, moved down in lightness
+   and desaturated a little, which is why the darks are brown and never blue.
+
+   Two things it must get right, because they are the correctness rules above and not a
+   matter of taste:
+
+     - `.chip.inferred` (dashed, unfilled, muted) has to stay obviously different from
+       `.chip.strong` (solid sage fill) in BOTH themes. On dark that means --dash is
+       lifted well clear of --line, or a dashed border on a dark card reads as no border.
+     - `--accent` gets LIGHTER in dark mode, so white text on it stops working. That is
+       what --on-accent is for; anything sitting on sage must use it. */
 
 :root {
   --bg: #F7F5F1;          /* warm paper */
@@ -24,7 +35,20 @@
   --card: #FFFFFF;
   --fg: #33312C;          /* ink */
   --body: #55524A;        /* secondary text */
-  --muted: #8A8578;
+  /* #8A8578 until R11. That failed WCAG AA on all three surfaces it sits on — 3.68 on
+     a card, 3.56 on a panel, 3.38 on the page — and it is the third most-used text
+     colour in the app: 43 rules here and 86 elements in the JSX, most of them the
+     helper line under a field.
+
+     Darkened 8% in lightness with the hue and saturation untouched, so it is the same
+     warm grey and still clearly a step below --body (7.80). The page background is the
+     binding surface, not the card: stopping at the first value that cleared white
+     (#7B766A) still failed on --panel and --bg, which is where most muted text
+     actually sits.
+
+     This is the one place the light palette departs from the design handoff, which
+     asks for it pixel-perfect. Contrast was evidently not part of that pass. */
+  --muted: #747065;
   --line: #E5E1D8;
   --line-soft: #F1EFEA;
   --accent: #4C7A5E;      /* sage — primary actions, sourced-good */
@@ -36,8 +60,40 @@
   --clay-soft: #F5E9E0;   /* urgent-deadline chip bg */
   --clay-line: #E8D9C8;
   --dash: #C9C4B6;        /* dashed borders on AI-inferred marks */
+  --dash-soft: #D9D4C8;   /* the archive note — a dashed panel, not an AI mark */
   --nav-active: #EDEAE2;
   --shadow: 0 18px 40px rgba(51, 49, 44, .06);
+  --scrim: rgba(51, 49, 44, .28);
+
+  /* Three pairs that do double duty, and are the reason a naive dark mode inverts
+     wrongly. Each names the RELATIONSHIP rather than the colour, so the dark block can
+     flip them without any rule below needing to know. */
+  --invert: var(--fg);          /* button.dark — ink block, paper text */
+  --on-invert: var(--bg);
+  --invert-hover: #4A473F;
+  --on-accent: #F7F5F1;         /* text/glyphs sitting ON --accent. Paper rather than
+                                   pure white, which is the design's "sage bg, paper
+                                   text". Light-mode sage is dark enough to carry it;
+                                   dark-mode sage is not, so the dark block flips this
+                                   to a near-black green. Written literally rather than
+                                   as var(--bg) so it cannot drift if --bg is retuned. */
+
+  --track: #E9E5DC;       /* the unfilled part of a bar, and the avatar disc */
+  --danger: #B4503F;      /* over-budget, and destructive text buttons */
+  --meter-warn: #C08A3E;
+
+  /* The amber "you need to do something" family — .blocker and .maintenance. */
+  --notice-bg: #FBF3E4;
+  --notice-line: #E8D9B8;
+  --notice-fg: #6B5326;
+  --notice-btn-line: #E0CFA9;
+  --notice-btn-line-hover: #C9B27E;
+
+  /* Brand-neutral OAuth marks. Deliberately not any provider's real logo. */
+  --oauth-1: #B4826A;
+  --oauth-2: #7FA98D;
+  --oauth-3: #8B9DB8;
+  --oauth-4: #C9B36A;
 
   /* Older selectors still name these. Kept as aliases rather than chased through the
      JSX, so a component written against the previous palette cannot render an
@@ -126,7 +182,10 @@ button.brandmark:hover:not(:disabled) .brand-dot { background: var(--clay-deep);
 .sidebar-link:hover { background: var(--nav-active); }
 .sidebar-link.current { background: var(--nav-active); font-weight: 600; }
 .sidebar-icon { width: 16px; text-align: center; opacity: .7; font-size: 13px; }
-.sidebar-foot { margin-top: auto; padding: 14px 10px 4px; border-top: 1px solid var(--line); }
+/* No `margin-top: auto` here any more — .themetoggle above it carries it. Two auto
+   margins in one flex column SPLIT the free space rather than stacking, which left the
+   toggle stranded halfway up the sidebar with a gap beneath it. */
+.sidebar-foot { padding: 14px 10px 4px; border-top: 1px solid var(--line); }
 
 /* --- org switcher + user chip (both behind VITE_SHOW_AUTH) ----------------- */
 
@@ -167,7 +226,7 @@ button.brandmark:hover:not(:disabled) .brand-dot { background: var(--clay-deep);
 .userchip { display: flex; align-items: center; gap: 10px; }
 .avatar {
   width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
-  background: #E9E5DC; color: var(--body);
+  background: var(--track); color: var(--body);
   display: inline-flex; align-items: center; justify-content: center;
   font-weight: 600; font-size: 12.5px;
 }
@@ -179,11 +238,12 @@ button.brandmark:hover:not(:disabled) .brand-dot { background: var(--clay-deep);
 .userchip-out { font-size: 12px; color: var(--muted); }
 .userchip-out:hover:not(:disabled) { color: var(--fg); }
 
-.scrim { position: fixed; inset: 0; z-index: 20; background: rgba(51, 49, 44, .28); }
+.scrim { position: fixed; inset: 0; z-index: 20; background: var(--scrim); }
 @media (min-width: 900px) { .scrim { display: none; } }
 
 .page { max-width: 980px; margin: 0 auto; padding: 36px 40px 60px; }
-@media (max-width: 700px) { .page { padding-left: 20px; padding-right: 20px; } }
+/* Breakpoints are 900 and 620 everywhere — see the R11 block at the foot of this
+   file for why, and for what the redesign added. */
 
 /* The menu button is fixed at the top-left and only renders while the sidebar is shut,
    so that is exactly when the page needs room for it — otherwise it sits on top of the
@@ -195,7 +255,10 @@ button.brandmark:hover:not(:disabled) .brand-dot { background: var(--clay-deep);
    decided once, from window width at mount — so a window resized down from wide keeps
    the sidebar open, and without this the page sat 236px off the right edge. Overlaying
    is also the correct behaviour for a drawer: the scrim is already there to close it. */
-@media (max-width: 880px) {
+@media (max-width: 900px) {
+  /* 880 before, which left a 20px dead zone: `App.jsx` opens the sidebar at
+     `innerWidth >= 900` and `.scrim` hides at `min-width: 900`, so between 881 and 899
+     opening it pushed the page across *and* overlaid it. */
   .shell.with-sidebar .page { margin-left: 0; }
 }
 
@@ -252,7 +315,16 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 textarea { resize: vertical; line-height: 1.5; }
 input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; }
 
-.knobs { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 4px 20px; }
+/* Four numeric fields on one row where there is room. They were a wrapping grid of
+   200px columns with a line of hint prose under each, which made the panel about three
+   times taller than the controls in it — sitting over the findings it decides the shape
+   of. The hints are `title` tooltips now (see Knob in SearchSettings.jsx). */
+.knobs {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px 16px;
+  margin-bottom: 4px;
+}
+@media (max-width: 900px) { .knobs { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 620px) { .knobs { grid-template-columns: 1fr; } }
 .checks { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 4px 0; }
 .check { display: flex; align-items: center; gap: 7px; font-size: 13.5px; cursor: pointer; }
 
@@ -272,14 +344,14 @@ button:hover:not(:disabled), a.button:hover { border-color: var(--dash); color: 
 button:disabled { opacity: .5; cursor: not-allowed; }
 
 button.primary {
-  background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 500;
+  background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 500;
 }
 button.primary:hover:not(:disabled) { background: var(--accent-deep); border-color: var(--accent-deep); }
 
 /* The dark variant. Used where a second filled button would fight the sage one —
    "Save settings" inside the search panel, the selected month in the archive. */
-button.dark { background: var(--fg); border-color: var(--fg); color: var(--bg); font-weight: 500; }
-button.dark:hover:not(:disabled) { background: #4a473f; border-color: #4a473f; }
+button.dark { background: var(--invert); border-color: var(--invert); color: var(--on-invert); font-weight: 500; }
+button.dark:hover:not(:disabled) { background: var(--invert-hover); border-color: var(--invert-hover); }
 
 button.danger { background: none; border-color: var(--line); color: var(--clay-deep); }
 button.danger:hover:not(:disabled) { border-color: var(--clay-line); }
@@ -375,7 +447,7 @@ button.text:hover:not(:disabled) { color: var(--accent-deep); }
 .run-outcome.attention .run-outcome-dot { background: var(--clay-deep); }
 
 .minibar {
-  width: 64px; height: 5px; border-radius: 999px; background: #E9E5DC;
+  width: 64px; height: 5px; border-radius: 999px; background: var(--track);
   display: inline-block; overflow: hidden; margin-bottom: 0; flex-shrink: 0;
 }
 .minibar-fill { display: block; height: 100%; background: var(--accent); }
@@ -383,50 +455,96 @@ button.text:hover:not(:disabled) { color: var(--accent-deep); }
 /* Pulled up under the strip so the two read as one control, not two stacked panels. */
 .searchpanel {
   background: var(--card); border: 1px solid var(--line); border-radius: 14px;
-  padding: 20px 22px; margin: -14px 0 26px;
+  padding: 16px 18px; margin: -14px 0 22px;
 }
 .searchpanel-foot {
   display: flex; align-items: center; justify-content: space-between; gap: 14px;
-  margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line-soft);
+  margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line-soft);
   flex-wrap: wrap;
 }
+/* The two switches and Save on one line, with the schedule row dropping underneath only
+   when the automation switch is on. */
+.searchpanel-foot.compact { align-items: center; row-gap: 10px; }
+.searchpanel-foot.compact > .row { margin-left: auto; }
 
-/* Programs and funders, side by side at the bottom of the page. */
-.paircols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
-@media (max-width: 880px) { .paircols { grid-template-columns: 1fr; } }
+/* --- the program chip row (R3) --------------------------------------------- */
+/*
+   Which programs this week's search is for, at the top of This week. It was a column of
+   full-width rows at the FOOT of the page, under the findings whose shape it decides.
 
-/* --- program rows ---------------------------------------------------------- */
+   Each chip is two sibling buttons with a hairline between them, never a button nested
+   in a label: nesting made clicking the pencil toggle the tick as well, so you pressed
+   Edit and silently changed what next week searched for.
+*/
 
-.proglist { display: flex; flex-direction: column; gap: 8px; }
-.progrow {
-  display: flex; align-items: flex-start; gap: 10px;
-  background: var(--card); border: 1px solid var(--line);
-  border-radius: 11px; padding: 11px 13px;
+.progbar { margin-bottom: 18px; }
+.progbar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.progbar-label {
+  font-size: 13px; color: var(--body); font-weight: 500;
+  margin-right: 2px; flex-shrink: 0;
 }
-.progrow.active { border-color: var(--accent-line); }
-.progrow-tick { display: flex; align-items: flex-start; gap: 10px; flex: 1;
-                min-width: 0; cursor: pointer; }
-.progrow-tick > input { margin-top: 3px; flex-shrink: 0; }
-.progrow-main { min-width: 0; }
-.progrow-title {
-  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-  font-weight: 600; font-size: 14px; overflow-wrap: anywhere;
+.progbar-add { font-size: 13px; }
+.progbar-note { margin: 8px 0 0; }
+
+.progchip {
+  display: inline-flex; align-items: stretch;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: var(--card); overflow: hidden;
+  max-width: 100%;
 }
-/* Clamped to two lines. A filled-in card's summary is a paragraph, and at full height
-   one program pushed the rest of the list off the screen. The full text is in the
-   title attribute and in the editor. */
-.progrow-sub {
-  font-size: 12.5px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-  overflow: hidden;
+.progchip.on { border-color: var(--accent-line); background: var(--accent-soft); }
+
+/* An empty card is not neutral: until it is filled in there is nothing for the
+   researcher to match against, and ticking it is refused by the server. Dashed and clay,
+   so it reads as unfinished rather than as another option. */
+.progchip.unfilled { border-style: dashed; border-color: var(--dash); background: var(--card); }
+
+.progchip-tick,
+.progchip-edit {
+  border: 0; background: none; border-radius: 0; cursor: pointer;
+  font: inherit; color: var(--fg); padding: 7px 12px;
+  display: inline-flex; align-items: center; gap: 7px; min-width: 0;
 }
-.progrow-meta { display: block; font-size: 12.5px; color: var(--muted); margin-top: 3px; }
-/* An empty card is not neutral — until it is filled in, the researcher has to guess
-   what the programme needs. Clay, so it reads as unfinished rather than as a caption.
-   Named "unfilled" rather than "empty" because .empty is the page-level no-results
-   block, and the two composed into a 40px dashed box inside every program row. */
-.progrow-sub.unfilled { color: var(--clay); }
-.progrow-actions { display: flex; gap: 10px; flex-shrink: 0; padding-top: 2px; }
+.progchip-tick { font-size: 13.5px; }
+.progchip.on .progchip-tick { font-weight: 600; color: var(--accent-deep); }
+.progchip-tick:hover:not(:disabled),
+.progchip-edit:hover:not(:disabled) { background: var(--line-soft); border-color: transparent; }
+
+.progchip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Fixed width so chips line up whether or not they carry a tick. */
+.progchip-mark {
+  width: 13px; flex-shrink: 0; text-align: center;
+  font-size: 12px; color: var(--accent);
+}
+.progchip.unfilled .progchip-mark { color: var(--clay); }
+
+.progchip-tag {
+  font-size: 11.5px; color: var(--clay-deep); white-space: nowrap; flex-shrink: 0;
+}
+.progchip.unfilled .progchip-tag { color: var(--clay); }
+
+/* The hairline. A border-left on the pencil rather than a separate element, so there is
+   nothing to keep in step with the chip's rounded ends. */
+.progchip-edit {
+  border-left: 1px solid var(--line); color: var(--muted);
+  padding-left: 9px; padding-right: 10px; flex-shrink: 0;
+}
+.progchip.on .progchip-edit { border-left-color: var(--accent-line); }
+.progchip.unfilled .progchip-edit { border-left-style: dashed; border-left-color: var(--dash); }
+.progchip-edit:hover { color: var(--fg); }
+
+/* Removing sits bottom-left in the editor, away from Save and Cancel — it is rare and
+   permanent, and next to a tick you press weekly it is a control somebody eventually
+   hits by accident. */
+.editor-foot { flex-wrap: wrap; }
+.editor-remove { margin-right: auto; }
+
+@media (max-width: 620px) {
+  /* A 44px target on touch, including the pencil. */
+  .progchip-tick, .progchip-edit { padding-top: 11px; padding-bottom: 11px; }
+  .progchip-name { max-width: 52vw; }
+}
 
 /* --- program cards --------------------------------------------------------- */
 
@@ -456,7 +574,7 @@ button.text:hover:not(:disabled) { color: var(--accent-deep); }
                font-weight: 500; font-size: 14px; }
 .funder-sector { white-space: nowrap; font-size: 12px; }
 .clamp { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
-@media (max-width: 760px) {
+@media (max-width: 620px) {
   .funder-row { grid-template-columns: auto 1fr; }
   .funder-sector { grid-column: 2; }
 }
@@ -501,7 +619,7 @@ tbody tr:last-child td { border-bottom: none; }
 
 .runbar { margin-top: 14px; }
 .costbar {
-  height: 5px; border-radius: 999px; background: #E9E5DC;
+  height: 5px; border-radius: 999px; background: var(--track);
   overflow: hidden; margin-bottom: 6px;
 }
 .costbar-fill { height: 100%; background: var(--accent); }
@@ -641,7 +759,7 @@ footer {
 /* Dashed, because it explains a deletion. A solid panel would read as another section
    of results; this is a note about why some are missing. */
 .archive-note {
-  background: var(--panel); border: 1px dashed #D9D4C8; border-radius: 14px;
+  background: var(--panel); border: 1px dashed var(--dash-soft); border-radius: 14px;
   padding: 16px 20px; margin-bottom: 18px;
   font-size: 13.5px; color: var(--muted); max-width: 74ch;
 }
@@ -761,7 +879,7 @@ footer {
 }
 .lp-footmark { font-family: var(--display); font-size: 17px; color: var(--body); }
 
-@media (max-width: 880px) {
+@media (max-width: 900px) {
   .lp-hero, .lp-band-inner { grid-template-columns: 1fr; gap: 36px; }
   .lp-three { grid-template-columns: 1fr; }
   .lp-h1 { font-size: 38px; }
@@ -806,10 +924,10 @@ button.authbrand:hover { border-color: transparent; }
 .oauth-mark.grid {
   display: inline-grid; grid-template-columns: 7px 7px; grid-template-rows: 7px 7px; gap: 1.5px;
 }
-.oauth-mark.grid > span:nth-child(1) { background: #B4826A; }
-.oauth-mark.grid > span:nth-child(2) { background: #7FA98D; }
-.oauth-mark.grid > span:nth-child(3) { background: #8B9DB8; }
-.oauth-mark.grid > span:nth-child(4) { background: #C9B36A; }
+.oauth-mark.grid > span:nth-child(1) { background: var(--oauth-1); }
+.oauth-mark.grid > span:nth-child(2) { background: var(--oauth-2); }
+.oauth-mark.grid > span:nth-child(3) { background: var(--oauth-3); }
+.oauth-mark.grid > span:nth-child(4) { background: var(--oauth-4); }
 
 .auth-divider { display: flex; align-items: center; gap: 12px; margin: 20px 0; }
 .auth-divider > span:first-child, .auth-divider > span:last-child { flex: 1; height: 1px; background: var(--line); }
@@ -846,8 +964,8 @@ button.authbrand:hover { border-color: transparent; }
   overflow: hidden; margin-bottom: 7px;
 }
 .meter > span { display: block; height: 100%; border-radius: 99px; background: var(--accent); }
-.meter.warn > span { background: #C08A3E; }
-.meter.over > span { background: #B4503F; }
+.meter.warn > span { background: var(--meter-warn); }
+.meter.over > span { background: var(--danger); }
 
 .sub { font-size: 14px; margin: 20px 0 8px; }
 ul.plain { list-style: none; padding: 0; margin: 0 0 12px; }
@@ -866,7 +984,7 @@ ul.plain { list-style: none; padding: 0; margin: 0 0 12px; }
   padding: 5px 9px; background: var(--accent-soft); color: var(--accent-deep);
   border-radius: 8px;
 }
-button.text.danger { color: #B4503F; margin-left: auto; }
+button.text.danger { color: var(--danger); margin-left: auto; }
 
 .welcome { max-width: 560px; }
 .join { display: flex; flex-wrap: wrap; gap: 9px; align-items: flex-end; margin: 14px 0 6px; }
@@ -940,7 +1058,7 @@ button.text.danger { color: #B4503F; margin-left: auto; }
 .maintenance {
   display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline;
   padding: 11px 14px; margin-bottom: 18px; border-radius: 12px;
-  background: #FBF3E4; border: 1px solid #E8D9B8; color: #6B5326;
+  background: var(--notice-bg); border: 1px solid var(--notice-line); color: var(--notice-fg);
 }
 .maintenance strong { white-space: nowrap; }
 
@@ -1009,12 +1127,12 @@ button[aria-busy="true"] { display: inline-flex; align-items: center; gap: 8px; 
 .blockers { margin: 0 0 18px; display: grid; gap: 10px; }
 .blocker {
   display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap;
-  border: 1px solid #E8D9B8; background: #FBF3E4; color: #6B5326;
+  border: 1px solid var(--notice-line); background: var(--notice-bg); color: var(--notice-fg);
   border-radius: 12px; padding: 12px 15px; font-size: 13.5px;
 }
 .blocker p { margin: 0; flex: 1 1 320px; }
-.blocker button { flex-shrink: 0; background: var(--card); border-color: #E0CFA9; }
-.blocker button:hover:not(:disabled) { border-color: #C9B27E; }
+.blocker button { flex-shrink: 0; background: var(--card); border-color: var(--notice-btn-line); }
+.blocker button:hover:not(:disabled) { border-color: var(--notice-btn-line-hover); }
 
 .runlog-head { display: flex; align-items: center; gap: 8px; }
 
@@ -1032,3 +1150,474 @@ button[aria-busy="true"] { display: inline-flex; align-items: center; gap: 8px; 
 .member { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .member > span:first-child { display: inline-flex; align-items: center; gap: 8px; }
 .member .row { margin-left: auto; gap: 4px; }
+
+/* --- dark ------------------------------------------------------------------- */
+/*
+   Derived from the light palette, not picked fresh. Every hue is the same one moved
+   down in lightness, so the sage stays sage and the paper stays warm — the failure this
+   theme has to avoid is a cool-grey dark mode bolted onto a warm light one, which is
+   what got dark mode dropped the first time.
+
+   Set by the Light/Dark control at the bottom of the sidebar, which writes
+   `data-fw-theme` onto <body> and remembers it in localStorage. Deliberately NOT
+   `prefers-color-scheme`: the light theme is the researched one, so it stays the
+   default until somebody chooses otherwise.
+*/
+body[data-fw-theme="dark"] {
+  --bg: #1A1815;          /* warm near-black — brown-tinted, never blue */
+  --panel: #211E1A;
+  --card: #262320;        /* cards sit above the panel, not below it */
+  --fg: #F2EFE8;          /* warm off-white */
+  --body: #C9C3B6;
+  --muted: #968F81;       /* still ≥4.5:1 on --card */
+  --line: #383430;
+  --line-soft: #2C2925;
+
+  /* Sage and clay both LIGHTEN here. "deep" keeps meaning "the emphatic one", which on
+     a dark ground means brighter rather than darker — hover has to advance, not recede. */
+  --accent: #7FB08F;
+  --accent-deep: #9AC4A7;
+  --accent-soft: #22302A;
+  --accent-line: #3A5145;
+  --clay: #C98F6E;
+  --clay-deep: #DBA483;
+  --clay-soft: #33251D;
+  --clay-line: #4A3527;
+
+  /* Lifted clear of --line. A dashed border at --line's value is invisible on a dark
+     card, which would quietly erase the sourced-vs-inferred distinction. */
+  --dash: #6E6759;
+  --dash-soft: #423C33;
+
+  --nav-active: #2E2A25;
+  --shadow: 0 18px 40px rgba(0, 0, 0, .45);
+  --scrim: rgba(0, 0, 0, .55);
+
+  /* The three that flip. */
+  --invert: #F2EFE8;
+  --on-invert: #1A1815;
+  --invert-hover: #DFDACE;
+  --on-accent: #12211A;   /* dark-mode sage is light, so what sits on it must be dark */
+
+  --track: #332F2A;
+  --danger: #E08573;      /* lightened to carry on a dark ground */
+  --meter-warn: #D9A354;
+
+  --notice-bg: #2B2418;
+  --notice-line: #4A3E24;
+  --notice-fg: #E3CE9A;
+  --notice-btn-line: #5A4B2C;
+  --notice-btn-line-hover: #7A6739;
+}
+
+/* --- the theme control ------------------------------------------------------ */
+
+/* `margin-top: auto` moves from .sidebar-foot to here. In a flex column the FIRST auto
+   margin eats the free space, so the toggle is what gets pushed to the bottom and the
+   foot then sits directly beneath it. Leaving it on .sidebar-foot instead would strand
+   the toggle up under the nav links. */
+.themetoggle {
+  display: flex; gap: 2px; padding: 3px; margin: auto 14px 10px;
+  background: var(--line-soft); border-radius: 999px;
+}
+.themetoggle button {
+  flex: 1; padding: 6px 10px; border: none; background: none; border-radius: 999px;
+  font-size: 12.5px; font-weight: 500; color: var(--muted);
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+}
+.themetoggle button:hover:not(:disabled) { color: var(--fg); background: none; }
+.themetoggle button[aria-pressed="true"] {
+  background: var(--card); color: var(--fg); box-shadow: 0 1px 2px rgba(0, 0, 0, .10);
+}
+.themetoggle svg { width: 14px; height: 14px; flex-shrink: 0; }
+
+/* --- the confirm dialog ----------------------------------------------------- */
+/*
+   Replaces window.confirm and window.prompt everywhere (components/Confirm.jsx).
+   `.dialog-points` is the reason it exists: the browser can only ask "are you sure?",
+   and this can say what will actually happen before somebody decides.
+*/
+
+.dialog-scrim {
+  position: fixed; inset: 0; z-index: 40;
+  background: var(--scrim);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+
+.dialog {
+  background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: var(--shadow);
+  padding: 22px 24px; width: 100%; max-width: 460px;
+  max-height: 86vh; overflow-y: auto;
+}
+.dialog.clay { border-color: var(--clay-line); }
+
+.dialog h2 {
+  font-family: var(--display); font-size: 20px; font-weight: 500;
+  letter-spacing: -.01em; margin: 0 0 8px;
+}
+.dialog.clay h2 { color: var(--clay-deep); }
+
+.dialog-body { margin: 0 0 12px; color: var(--body); font-size: 14px; }
+
+/* What will happen, in plain sentences. Not a warning list — a description. */
+.dialog-points {
+  margin: 0 0 16px; padding: 12px 14px 12px 30px;
+  background: var(--panel); border-radius: 10px;
+  font-size: 13.5px; color: var(--body);
+}
+.dialog.clay .dialog-points { background: var(--clay-soft); }
+.dialog-points li { margin-bottom: 6px; }
+.dialog-points li:last-child { margin-bottom: 0; }
+
+.dialog-field { display: block; font-size: 13.5px; color: var(--body); margin-bottom: 16px; }
+.dialog-field input { width: 100%; margin-top: 6px; }
+
+.dialog-actions {
+  display: flex; align-items: center; justify-content: flex-end; gap: 10px;
+  margin-top: 4px;
+}
+
+@media (max-width: 620px) {
+  .dialog { max-width: none; padding: 18px 16px; }
+  .dialog-actions { flex-direction: column-reverse; align-items: stretch; }
+  .dialog-actions button { width: 100%; }
+}
+
+/* The "already using Fundworthy?" prompt at the top of walkthrough step 1. Set apart
+   from the key copy below it, because it is a different question — not a sub-step of
+   adding a key, but the alternative to doing any of this. */
+.tut-join {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 12px 14px; margin-bottom: 18px;
+}
+.tut-join p { margin: 0; color: var(--body); }
+.tut-join .join { margin: 10px 0 6px; }
+
+/* --- the three stage boxes (R4) --------------------------------------------- */
+/*
+   What the search did, one box per tier of CLAUDE.md §5, left to right in cost order:
+   free, cheap, expensive. They are visually distinct on purpose — the point being made
+   is that the three steps are not equivalent, and a row of three identical cards says
+   they are.
+
+   This replaced the streaming log as the primary account of a run. The log is still
+   there, behind a disclosure, and is still the only thing that explains a run that died
+   halfway.
+*/
+
+.stages {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+  margin-bottom: 18px;
+}
+
+.stage {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  text-align: left; width: 100%; cursor: pointer;
+  border-radius: 14px; padding: 14px 16px;
+  font: inherit; color: var(--fg);
+  border: 1px solid var(--line); background: var(--card);
+}
+.stage:hover { border-color: var(--dash); }
+
+/* Dashed paper for the free tier, sage for triage, white-with-clay for scoring. */
+.stage-free  { border-style: dashed; background: var(--panel); }
+.stage-triage { background: var(--accent-soft); border-color: var(--accent-line); }
+.stage-score { background: var(--card); border-color: var(--clay-line); }
+
+.stage-n { font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.stage-title { font-size: 14.5px; font-weight: 600; }
+.stage-count {
+  font-family: var(--display); font-size: 26px; line-height: 1.2; margin-top: 6px;
+}
+.stage-count .muted { font-size: 15px; }
+.stage-foot { font-size: 12.5px; color: var(--muted); }
+
+.stage-engine {
+  display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap;
+  margin-top: 10px; padding-top: 9px; width: 100%;
+  border-top: 1px solid var(--line); font-size: 12.5px;
+}
+.stage-triage .stage-engine { border-top-color: var(--accent-line); }
+.stage-score .stage-engine { border-top-color: var(--clay-line); }
+.stage-cost { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--body); }
+
+/* --- one stage, opened ------------------------------------------------------ */
+
+.stagedetail { max-width: 620px; }
+
+.stage-figures {
+  display: flex; flex-wrap: wrap; gap: 6px 20px; margin-bottom: 14px;
+  font-size: 13.5px; color: var(--body);
+}
+.stage-figures strong { font-family: var(--display); font-size: 17px; font-weight: 500; }
+
+.reasonlist { list-style: none; margin: 0 0 8px; padding: 0; }
+.reason { border-top: 1px solid var(--line-soft); }
+.reason:last-child { border-bottom: 1px solid var(--line-soft); }
+
+.reason-head {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  border: 0; background: none; border-radius: 0; cursor: pointer;
+  font: inherit; font-size: 13.5px; color: var(--fg);
+  padding: 10px 2px; text-align: left;
+}
+.reason-head:hover { background: var(--line-soft); border-color: transparent; }
+.reason-caret { color: var(--muted); font-size: 11px; width: 10px; flex-shrink: 0; }
+.reason-name { flex: 1; min-width: 0; }
+.reason-count {
+  font-variant-numeric: tabular-nums; color: var(--body); font-weight: 600;
+  flex-shrink: 0;
+}
+.reason-none { margin: 0 0 10px 21px; }
+
+/* The rows that make a reason checkable rather than just countable. */
+.rejectlist { list-style: none; margin: 0 0 8px; padding: 0 0 0 21px; }
+.rejectlist li {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
+  padding: 5px 0; font-size: 13px; border-top: 1px dotted var(--line-soft);
+}
+.rejectlist li:first-child { border-top: 0; }
+.reject-funder { color: var(--muted); font-size: 12px; flex-basis: 100%; }
+.reject-detail { color: var(--clay-deep); font-size: 12.5px; margin-left: auto; }
+
+/* --- the technical log, now a disclosure ------------------------------------ */
+
+.runlog-details { margin-bottom: 18px; }
+.runlog-details > summary {
+  cursor: pointer; font-size: 13px; color: var(--muted);
+  padding: 6px 0; list-style-position: inside;
+}
+.runlog-details > summary:hover { color: var(--fg); }
+
+@media (max-width: 900px) {
+  /* Stacked, and the connector idea does not survive the rotation — so there is none. */
+  .stages { grid-template-columns: 1fr; }
+}
+
+/* --- picking a model per step (R5) ------------------------------------------ */
+
+.stage-model { font-size: 12.5px; }
+.stage-model:hover:not(:disabled) { text-decoration: underline; }
+
+.modelpicker { max-width: 520px; }
+.modellist { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 8px; }
+
+.modelopt {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+  width: 100%; text-align: left; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--card);
+  padding: 11px 13px; font: inherit; color: var(--fg);
+}
+.modelopt:hover:not(:disabled) { border-color: var(--dash); background: var(--card); }
+.modelopt.on { border-color: var(--accent-line); background: var(--accent-soft); }
+
+.modelopt-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; width: 100%; }
+.modelopt-name { font-weight: 600; font-size: 14px; }
+.modelopt-note { font-size: 12.5px; color: var(--muted); }
+/* The number that stops somebody picking Opus and then wondering why the search
+   stopped halfway down their funder list. */
+.modelopt-cost {
+  margin-left: auto; font-variant-numeric: tabular-nums;
+  font-size: 12.5px; color: var(--clay-deep);
+}
+
+/* --- funder list: search, paging, the blacklist (R7) ------------------------- */
+
+.funder-search { width: 100%; margin: 4px 0 12px; }
+
+.funder-row.blocked { opacity: .72; }
+.funder-row.blocked .funder-name { text-decoration: line-through; text-decoration-color: var(--clay-line); }
+
+.pager {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  flex-wrap: wrap; margin-top: 12px; font-size: 13px;
+}
+.pager-nums { display: flex; gap: 3px; flex-wrap: wrap; }
+.pager-num {
+  min-width: 28px; padding: 4px 7px; border-radius: 8px;
+  border: 1px solid transparent; background: none; color: var(--body);
+  font: inherit; font-size: 13px; cursor: pointer;
+}
+.pager-num:hover:not(:disabled) { background: var(--line-soft); border-color: transparent; }
+.pager-num.on { background: var(--accent-soft); color: var(--accent-deep); font-weight: 600; }
+
+.blocklist { margin-top: 16px; border-top: 1px solid var(--line-soft); padding-top: 10px; }
+.blocklist-head { font-size: 13px; }
+
+/* --- the funder marketplace (R7a) ------------------------------------------- */
+
+.marketplace { margin-bottom: 18px; }
+.market-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  flex-wrap: wrap; margin-bottom: 6px;
+}
+.market-head h2 { margin: 0; }
+
+.segmented {
+  display: inline-flex; gap: 2px; padding: 3px;
+  background: var(--line-soft); border-radius: 999px;
+}
+.segmented button {
+  border: 0; background: none; border-radius: 999px;
+  padding: 5px 14px; font: inherit; font-size: 13px; color: var(--muted);
+  cursor: pointer;
+}
+.segmented button:hover:not(:disabled) { color: var(--fg); background: none; }
+.segmented button[aria-selected="true"] {
+  background: var(--card); color: var(--fg); font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .08);
+}
+
+/* Small cards in a grid, not stacked full-width rows. */
+.marketplace .directory {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px;
+}
+.marketplace .directory-row {
+  flex-direction: column; align-items: flex-start; gap: 8px;
+  border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px;
+  background: var(--panel);
+}
+
+.contribute {
+  display: flex; gap: 10px; align-items: flex-start;
+  margin: 10px 0 14px; padding: 10px 12px;
+  background: var(--accent-soft); border: 1px solid var(--accent-line);
+  border-radius: 12px; font-size: 13px; color: var(--body);
+}
+.contribute input { margin-top: 3px; flex-shrink: 0; }
+
+@media (max-width: 620px) {
+  .marketplace .directory { grid-template-columns: 1fr; }
+}
+
+/* --- member actions and the spending cap (R9) -------------------------------- */
+/*
+   "Make admin" and "Remove" used to sit in a `.row` at `gap: 4px`. Four pixels between
+   handing somebody your organisation and cutting them off from it.
+*/
+.member-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.member-divider {
+  width: 1px; height: 18px; background: var(--line); flex-shrink: 0; margin: 0 4px;
+}
+
+button.pill {
+  padding: 4px 12px; font-size: 12.5px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--card); color: var(--body);
+}
+button.pill:hover:not(:disabled) { border-color: var(--dash); color: var(--fg); }
+button.pill.on { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent-deep); }
+
+/* Icon-only, so it needs its own hit area and its label lives in aria-label. */
+button.iconbtn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; padding: 0; border-radius: 9px;
+  border: 1px solid transparent; background: none; color: var(--muted);
+}
+button.iconbtn:hover:not(:disabled) { background: var(--line-soft); color: var(--fg); border-color: transparent; }
+button.iconbtn.danger { color: var(--clay); }
+button.iconbtn.danger:hover:not(:disabled) { background: var(--clay-soft); color: var(--danger); }
+
+.capedit { display: grid; gap: 8px; margin-top: 10px; }
+.capedit .field.inline { gap: 7px; margin: 0; }
+
+@media (max-width: 620px) {
+  /* 44px targets on touch. */
+  button.iconbtn { width: 44px; height: 44px; }
+}
+
+/* --- responsive (R11) -------------------------------------------------------- */
+/*
+   Two breakpoints, and only two: **900** and **620**. The file had six — 420, 620, 700,
+   760, 880, 900 — which is not a design, it is six separate afternoons. The 880 one was
+   an actual defect: `App.jsx` opens the sidebar at `innerWidth >= 900` and `.scrim`
+   hides at `min-width: 900`, so between 881 and 899 opening the sidebar both overlaid
+   the page and pushed it sideways.
+
+     900  the sidebar stops holding a column open, and anything in two or more columns
+          drops to one
+     620  phone. Single column throughout, and every tap target reaches 44px
+
+   The rule for the whole file: wide content scrolls inside its own container, and the
+   page body never scrolls sideways.
+*/
+
+@media (max-width: 900px) {
+  .page { padding: 18px; padding-top: 64px; }
+
+  /* The three stage boxes stack. There are no connector arrows between them to hide —
+     the R11 note anticipated some, and the boxes read as a sequence from their "Step 1
+     / 2 / 3" labels and their cost order, which survives stacking. Rotating an arrow
+     would have been decoration that only works in one orientation. */
+  .stages { grid-template-columns: 1fr; }
+
+  /* Title over buttons, and the two actions share the width rather than one of them
+     wrapping alone onto a second line. */
+  .page-head { align-items: stretch; flex-direction: column; gap: 12px; }
+  .page-head > .row { width: 100%; }
+  .page-head > .row > button,
+  .page-head > .row > a.button { flex: 1 1 0; justify-content: center; }
+}
+
+@media (max-width: 620px) {
+  .page { padding: 14px; padding-top: 60px; }
+
+  /* The strip wraps, but the spend figure and its bar stay together: split across two
+     lines, "$0.4210 of $1.00" and the bar underneath read as two unrelated facts, and
+     this is the one number §8 asks to be trusted with. */
+  .statusstrip { row-gap: 8px; }
+  .statusstrip .status-sep { display: none; }
+  .status-item { flex: 0 0 auto; white-space: nowrap; }
+  .status-actions { margin-left: 0; flex-basis: 100%; }
+
+  /* Every tap target to 44px, stated once over everything clickable rather than as a
+     list of selectors — the list version missed eight controls (the menu button, the
+     nav links, both theme buttons, the marketplace tabs, and every primary button at
+     40px), which is what a list of selectors does.
+
+     `min-height` and not `height`, so a control whose content is already taller keeps
+     its own size and nothing gets clipped. */
+  button, a.button, [role="button"],
+  .sidebar-link, .sidebar-toggle, .funder-tick, .check,
+  .progchip-tick, .progchip-edit {
+    min-height: 44px;
+  }
+  /* Labels wrapping a checkbox are the real target — the box itself is ~13px and always
+     will be. Centred, so the row does not grow a lopsided gap. */
+  .funder-tick, .check { display: flex; align-items: center; }
+  .pager-num { min-width: 44px; }
+  /* A segmented control's halves are each a target, so each half gets the 44 and the
+     control ends up taller than one button. Padding stays, or the pill hugs the halves
+     and the selected one has no visible inset.
+
+     The one exception: an inline text button inside a sentence. Giving those 44px turns
+     a link in the middle of a paragraph into a block and breaks the line it sits in. */
+  .segmented button { min-height: 44px; }
+  p button.text, .small button.text, .settings-lede button.text { min-height: 0; }
+
+  /* The findings row already wraps; keep the fit numeral and the funder on one line. */
+  .opp-row { row-gap: 8px; }
+
+  .stage-count { font-size: 22px; }
+  .segmented { width: 100%; }
+  .segmented button { flex: 1; }
+}
+
+/* Dialogs, at every width. `max-height: 86vh` and the internal scroll were already on
+   `.dialog`; what was missing is that the header scrolled away with the content, so a
+   long reject list left somebody scrolling a panel with no title on it. */
+.dialog { display: flex; flex-direction: column; }
+.dialog > h2 {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--card); margin: -22px -24px 8px; padding: 22px 24px 10px;
+}
+.dialog.clay > h2 { background: var(--card); }
+
+@media (max-width: 620px) {
+  .dialog-scrim { padding: 20px 12px; align-items: flex-start; }
+  .dialog { max-height: calc(100vh - 40px); }
+  .dialog > h2 { margin: -18px -16px 8px; padding: 18px 16px 10px; }
+  .stage-figures { gap: 4px 14px; font-size: 13px; }
+  .modelopt-cost { margin-left: 0; }
+}

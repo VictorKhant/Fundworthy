@@ -1,4 +1,3 @@
-import { SECTOR_LABELS } from "../api";
 import { Busy } from "./Spinner";
 
 // The weekly knobs. Folded away behind "Adjust search settings" in the status strip,
@@ -8,26 +7,21 @@ import { Busy } from "./Spinner";
 // spreadsheet cell cannot express "search these three programs, at this floor, this
 // week", which is why the dashboard exists at all.
 
+// The hint moves to `title` rather than a line of prose under every field. Four hints
+// under four fields was about a third of the panel's height, restating labels that
+// already say the same thing — and this panel sits over the findings it decides.
 function Knob({ label, hint, children }) {
   return (
-    <label className="field">
+    <label className="field" title={hint || undefined}>
       <span>{label}</span>
       {children}
-      {hint && <small className="muted">{hint}</small>}
     </label>
   );
 }
 
 export default function SearchSettings({
-  draft, set, sectors, dirty, saving, onSave, onUndo,
+  draft, set, dirty, saving, onSave, onUndo,
 }) {
-  const toggleSector = (s) => {
-    const active = draft.sectors_active.includes(s)
-      ? draft.sectors_active.filter((x) => x !== s)
-      : [...draft.sectors_active, s];
-    set("sectors_active", active);
-  };
-
   return (
     <section className="searchpanel">
       <div className="knobs">
@@ -69,25 +63,17 @@ export default function SearchSettings({
         </Knob>
       </div>
 
-      <div className="field">
-        <span>Where to look</span>
-        <div className="checks">
-          {sectors.map((s) => (
-            <label key={s} className="check">
-              <input
-                type="checkbox"
-                checked={draft.sectors_active.includes(s)}
-                onChange={() => toggleSector(s)}
-              />
-              {SECTOR_LABELS[s] || s}
-            </label>
-          ))}
-        </div>
-        <small className="muted">
-          These are our best guess at the categories. Tell us the four you actually care
-          about and we will rename them.
-        </small>
-      </div>
+      {/* "Where to look" — four sector checkboxes — used to sit here, and it is gone
+          rather than restyled (R8).
+
+          The copy under it admitted the problem: "These are our best guess at the
+          categories." A funder's bucket came from the shipped registry or defaulted to
+          "foundation" for anything typed in, so unticking a box excluded funders on a
+          label nobody at the nonprofit had chosen — silently, in the free tier, where
+          nothing explains itself. `sources_from_db` no longer narrows by it either.
+
+          `sectors_active` stays in the schema and the API so old rows still read back.
+          Which funders get searched is the funder list: pause, block, delete. */}
 
       <label className="field inline">
         <input
@@ -101,7 +87,7 @@ export default function SearchSettings({
         </span>
       </label>
 
-      <div className="searchpanel-foot">
+      <div className="searchpanel-foot compact">
         {/* Two switches, and separating them was the point.
 
             One checkbox used to be both the §8 kill switch and "does a search happen on

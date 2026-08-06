@@ -2,30 +2,49 @@ import { useState } from "react";
 import { api } from "../api";
 import { Busy } from "./Spinner";
 
-// "Are you joining a colleague, or starting fresh?" — asked once, right after a first
-// sign-in, before the person has invested anything in an empty dashboard.
+// The invitation-code form, in the two places it belongs.
 //
-// The order matters. Ask afterwards and the answer is worthless: they have already been
-// given an organization, possibly typed their programs into it, and "join my colleague"
-// now means merging two sets of data rather than picking a door. Ask first and it is a
-// two-way choice with nothing at stake.
+// It used to be a card of its own above the dashboard, shown only while an account was
+// completely untouched (`App.jsx`'s `untouched`). That was wrong twice over: it read as
+// a stray box floating above the real page, and gating it on "you have nothing yet"
+// meant an established user could never redeem a code at all — the one group most likely
+// to be handed one, when two nonprofits merge or somebody changes jobs.
 //
-// Redeeming a code MOVES this person into that org. It does not merge, and it does not
-// copy — which is why this is only offered while their own org is still empty.
+// So the form is now a component with no opinion about where it sits:
+//
+//   Tutorial step 1   before the API-key copy. "Is someone here already using this?" is
+//                     the first question, because answering yes makes every later step
+//                     unnecessary — you inherit a configured org.
+//   Settings          "Join another organization", with no gate and a confirm dialog,
+//                     because from there it is a move rather than a beginning.
+//
+// **Redeeming MOVES you.** It does not merge and it does not copy. That was always true
+// and was safe to leave implicit while the form only appeared on empty accounts; it is
+// not safe now, which is why the Settings caller puts the consequences in a dialog and
+// the server enforces the same leave rules as closing an account (`db.redeem_invite`).
 
-export default function JoinOrg({ onJoined, onSkip }) {
+export default function JoinOrg({
+  cta = "Join my colleague",
+  onJoined,
+  beforeJoin,          // optional async gate — Settings uses it for the confirm dialog
+}) {
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
   async function join(event) {
     event.preventDefault();
-    if (!code.trim()) return;
-    setBusy(true);
+    const trimmed = code.trim();
+    if (!trimmed) return;
     setError(null);
+
+    if (beforeJoin && !(await beforeJoin(trimmed))) return;
+
+    setBusy(true);
     try {
-      await api.org.join(code.trim());
-      await onJoined();
+      const result = await api.org.join(trimmed);
+      setCode("");
+      await onJoined(result);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -34,16 +53,8 @@ export default function JoinOrg({ onJoined, onSkip }) {
   }
 
   return (
-    <section className="card welcome">
-      <h2>Welcome to Fundworthy</h2>
-      <p>
-        Is someone at your organization already using Fundworthy? If they sent you an
-        invitation code, enter it here and you will share their funders, programs and
-        findings.
-      </p>
-
+    <>
       {error && <div className="notice error">{error}</div>}
-
       <form onSubmit={join} className="join">
         <label htmlFor="invite-code">Invitation code</label>
         <input
@@ -58,17 +69,9 @@ export default function JoinOrg({ onJoined, onSkip }) {
           spellCheck="false"
         />
         <Busy type="submit" busy={busy} busyLabel="Joining" disabled={!code.trim()}>
-          Join my colleague
+          {cta}
         </Busy>
       </form>
-
-      <p className="muted small">
-        No code? Start your own organization instead — you can invite colleagues later
-        from the Settings page.
-      </p>
-      <button className="text" onClick={onSkip}>
-        I'm setting this up for the first time
-      </button>
-    </section>
+    </>
   );
 }

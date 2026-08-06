@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path("data/rise.db")
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 14
 
 # The org that owns everything written before tenancy existed. A single-tenant install
 # (and every row in the pilot's live database) belongs to it, so adding org scoping is a
@@ -193,6 +193,16 @@ CREATE TABLE IF NOT EXISTS funders (
     check_ok    INTEGER,
     check_note  TEXT NOT NULL DEFAULT '',
     checked_at  TEXT,
+    -- Blocked, which is a third thing and not a stronger `active=0`.
+    --
+    --   active=0  paused. Stays on the list, greyed, not fetched. One click back.
+    --   blocked   never fetched, AND never offered again — suppressed in the starter
+    --             lists and in the shared directory, which `active` does not touch.
+    --   deleted   the row is gone.
+    --
+    -- Pausing and blocking used to be the same flag, so an org that blocked a funder
+    -- got it re-offered by every researched list it imported afterwards.
+    blocked     INTEGER NOT NULL DEFAULT 0,
     tier        INTEGER NOT NULL DEFAULT 1,
     confidence  INTEGER NOT NULL DEFAULT 1,   -- agent.sources.Confidence
     programs    TEXT NOT NULL DEFAULT '[]',   -- json array of program slugs
@@ -269,6 +279,17 @@ CREATE TABLE IF NOT EXISTS runs (
     -- Per-source outcome. Without this a broken funder and a genuinely quiet week
     -- look identical on the dashboard, which is the one ambiguity that costs trust.
     source_health      TEXT NOT NULL DEFAULT '[]',
+    -- Per-candidate rejects: which pages each tier set aside and why. `rejected_by_filter`
+    -- above counts reasons, which answers "how many" and never "which ones" — the only
+    -- question somebody asks about their own funder list. Capped at models.MAX_REJECTS
+    -- rows, so the counts stay complete when the list does not.
+    rejects            TEXT NOT NULL DEFAULT '[]',
+    -- How many candidates reached tiers 2 and 3, and what each tier cost. Derived from
+    -- Budget.by_model at the end of the run rather than recomputed here, because the
+    -- price table lives with the models.
+    triaged            INTEGER NOT NULL DEFAULT 0,
+    scored             INTEGER NOT NULL DEFAULT 0,
+    usd_by_stage       TEXT NOT NULL DEFAULT '{}',
     progress           TEXT NOT NULL DEFAULT '{}'
 );
 """
@@ -318,6 +339,11 @@ DEFAULT_SETTINGS: dict[str, str] = {
         ["warm_partner", "foundation", "government", "arts_agency"]
     ),
     "search_beyond_partners": "0",  # lights up once the discovery provider lands
+    # Which model runs each paid tier, as `provider:model`. Empty means "whatever
+    # agent/score.py recommends", so the default follows the code rather than being
+    # frozen into every org's settings row the day they signed up.
+    "triage_model": "",
+    "scoring_model": "",
     # Who this install is for. Empty by default and shown as "Your organization" until
     # someone fills it in — the UI used to hardcode the organization's name in a dozen
     # places, which is wrong for anyone else and was never a fact the code should have
@@ -741,6 +767,34 @@ def _migrate(conn: sqlite3.Connection) -> None:
                     conn.execute(f"UPDATE {table} SET {col}=NULL")
         current = 12
 
+    if current < 13:
+        # v13 adds the per-candidate reject log behind the stage boxes, plus the two
+        # tier counts and the per-tier cost split.
+        #
+        # Nothing backfills. A run that finished before this existed genuinely has no
+        # per-candidate record — the detail was logged at DEBUG and thrown away — and
+        # inventing rows from `rejected_by_filter` counts would put funder names on a
+        # page that were never checked against anything.
+        run_cols = {r["name"] for r in conn.execute("PRAGMA table_info(runs)")}
+        for col, decl in (("rejects", "TEXT NOT NULL DEFAULT '[]'"),
+                          ("triaged", "INTEGER NOT NULL DEFAULT 0"),
+                          ("scored", "INTEGER NOT NULL DEFAULT 0"),
+                          ("usd_by_stage", "TEXT NOT NULL DEFAULT '{}'")):
+            if col not in run_cols:
+                conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {decl}")
+        current = 13
+
+    if current < 14:
+        # v14 separates blocking from pausing. Nothing is migrated INTO it: every
+        # existing `active=0` row is a pause, because pausing is all the UI could
+        # express, and promoting them to blocks would silently stop researched lists
+        # offering funders that people had only set aside for the season.
+        funder_cols = {r["name"] for r in conn.execute("PRAGMA table_info(funders)")}
+        if "blocked" not in funder_cols:
+            conn.execute("ALTER TABLE funders ADD COLUMN blocked "
+                         "INTEGER NOT NULL DEFAULT 0")
+        current = 14
+
     conn.execute(
         "INSERT INTO meta(key, value) VALUES('schema_version', ?) "
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -986,13 +1040,34 @@ class InviteError(ValueError):
     """The code cannot be redeemed, with a reason safe to show the person holding it."""
 
 
-def redeem_invite(conn: sqlite3.Connection, code: str, uid: str, email: str) -> str:
-    """Move (or place) this person into the org the code belongs to. Returns the org id.
+def redeem_invite(conn: sqlite3.Connection, code: str, uid: str, email: str) -> dict:
+    """Move (or place) this person into the org the code belongs to.
 
     Redeeming is idempotent per person but single-use per code: the second person to try
     the same code is told to ask for their own. The error messages deliberately do not
     distinguish "no such code" from "already used" beyond what the holder needs to act —
     there is nothing to enumerate here, but there is also no reason to be chatty.
+
+    **Joining MOVES you, so leaving is governed by the same rules as closing an account**
+    (`main.delete_own_account`), and for the same reasons. This used to be a bare
+    `UPDATE users SET org_id`, which walked straight past both of them:
+
+      - An admin with colleagues could leave, and the last person who could invite or
+        remove anybody was gone. The org was frozen with no way to unfreeze it.
+      - Somebody leaving an org they were alone in left it with no members and everything
+        still in it — findings, and an encrypted API key that is a live credential
+        attached to an account nobody can sign into.
+
+    So the caller goes out through `remove_member`, which strands a now-empty org (see
+    `strand_org`: findings, run log and key deleted; hand-added funders kept) and re-seats
+    the owner if it was them. The refusal is the only case where nothing happens at all.
+
+    Ordering matters: everything that can refuse is checked BEFORE the code is marked
+    redeemed. Marking first and raising after would burn a single-use invitation on an
+    attempt that did nothing, and the holder would have to ask for another one.
+
+    Returns what happened, because the caller has to be told: {org_id, left_org,
+    stranded}. `stranded` true means their previous org's findings and key are gone.
     """
     code = code.strip().upper()
     row = conn.execute("SELECT * FROM invites WHERE code=?", (code,)).fetchone()
@@ -1005,21 +1080,41 @@ def redeem_invite(conn: sqlite3.Connection, code: str, uid: str, email: str) -> 
         raise InviteError("That invitation has expired. Ask for a new one.")
 
     org_id = row["org_id"]
+    existing = conn.execute("SELECT uid, org_id FROM users WHERE uid=? OR email=?",
+                            (uid, email)).fetchone()
+    old_org = existing["org_id"] if existing else None
+
+    # Already there. Not an error — somebody re-pasting a code they have used should be
+    # told they are in, not told off — but the invitation is not spent on it either.
+    if old_org == org_id:
+        return {"org_id": org_id, "left_org": None, "stranded": False}
+
+    stranded = False
+    if old_org:
+        others = conn.execute(
+            "SELECT COUNT(*) AS n FROM users WHERE org_id=? AND uid<>?",
+            (old_org, existing["uid"])).fetchone()["n"]
+        if others and org_owner(conn, old_org) == existing["uid"]:
+            raise InviteError(
+                "You are the admin of the organization you are in now, and other people "
+                "are still in it. Hand it over to one of them from Settings first — "
+                "otherwise nobody left could invite or remove anyone.")
+        stranded = not others
+
     now = now_iso()
     conn.execute("UPDATE invites SET redeemed_at=?, redeemed_by=? WHERE code=?",
                  (now, email, code))
 
-    existing = conn.execute("SELECT uid, org_id FROM users WHERE uid=? OR email=?",
-                            (uid, email)).fetchone()
     if existing:
-        conn.execute("UPDATE users SET uid=?, org_id=?, last_seen_at=? WHERE uid=?",
-                     (uid, org_id, now, existing["uid"]))
-    else:
-        conn.execute(
-            "INSERT INTO users(uid, email, org_id, created_at, last_seen_at) "
-            "VALUES(?,?,?,?,?)", (uid, email, org_id, now, now))
-    log.info("%s joined org %s by invitation", email, org_id)
-    return org_id
+        # Out through the same door as closing an account, rather than a bare reassign.
+        remove_member(conn, existing["uid"], old_org)
+    conn.execute(
+        "INSERT INTO users(uid, email, org_id, created_at, last_seen_at) "
+        "VALUES(?,?,?,?,?)", (uid, email, org_id, now, now))
+
+    log.info("%s joined org %s by invitation (left %s, stranded=%s)",
+             email, org_id, old_org or "no org", stranded)
+    return {"org_id": org_id, "left_org": old_org, "stranded": stranded}
 
 
 def org_members(conn: sqlite3.Connection, org_id: str) -> list[dict]:
@@ -1311,9 +1406,18 @@ def import_starter_list(conn: sqlite3.Connection, key: str, org_id: str) -> int:
     if lst is None:
         raise ValueError(f"no starter list called {key!r}")
 
+    # A blocked funder is never re-offered. `ON CONFLICT DO NOTHING` already protects a
+    # row that exists, but blocking is supposed to mean "and stop suggesting this" — and
+    # deleting a blocked row then importing the list would put it straight back.
+    blocked = {r["id"] for r in
+               conn.execute("SELECT id FROM funders WHERE blocked=1 AND org_id=?",
+                            (org_id,))}
+
     stamp = now_iso()
     added = 0
     for s in lst.sources:
+        if _funder_id(s.funder, s.url) in blocked:
+            continue
         cold = replace(s, warm=False)
         cur = conn.execute(
             """INSERT INTO funders(

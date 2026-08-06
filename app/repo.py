@@ -165,9 +165,40 @@ def create_program(conn, data: dict, *, org_id: str) -> dict:
     return get_program(conn, program_id, org_id=org_id)  # type: ignore[return-value]
 
 
+def program_is_empty(card: dict) -> bool:
+    """A card with nothing in it for the model to match against.
+
+    `summary` and `keywords` are the two fields `agent/score.py: org_context` actually
+    puts in the prompt. A card with neither contributes its name and nothing else, and
+    the scoring prompt has to fall back to "(No description recorded yet. Judge fit
+    conservatively…)" — so ticking one does not narrow the search, it just adds a line
+    of noise to every candidate.
+    """
+    return not str(card.get("summary") or "").strip() and not (card.get("keywords") or [])
+
+
 def update_program(conn, program_id: str, changes: dict, *, org_id: str) -> dict | None:
-    if get_program(conn, program_id, org_id=org_id) is None:
+    current = get_program(conn, program_id, org_id=org_id)
+    if current is None:
         return None
+
+    # An empty card cannot be ticked. The UI renders one as dashed and un-tickable and
+    # opens the editor instead, but that is a UI affordance and this is the rule: a
+    # direct PUT, the CLI, or a future integration must not be able to activate a card
+    # the scorer can do nothing with.
+    #
+    # Checked against the card as it will be AFTER this write, not as it is now, so
+    # filling in a summary and ticking it in one request is allowed — which is exactly
+    # what saving the editor does.
+    after = {**current, **{k: v for k, v in changes.items() if k in _PROGRAM_FIELDS}}
+    if after.get("active") and program_is_empty(after):
+        raise ValueError(
+            f'"{after.get("name") or "This program"}" has no description yet, so there '
+            "is nothing for the researcher to match grants against. Add a summary or "
+            "some keywords — or paste the program's web page and let the assistant "
+            "fill it in — and then tick it."
+        )
+
     sets, values = [], []
     for field in _PROGRAM_FIELDS:
         if field not in changes:
@@ -200,7 +231,8 @@ def delete_program(conn, program_id: str, *, org_id: str) -> bool:
 # --- funders ------------------------------------------------------------------
 
 _FUNDER_FIELDS = ("name", "url", "sector", "funder_type", "warm", "active",
-                  "tier", "confidence", "programs", "notes", "exclude_reason")
+                  "blocked", "tier", "confidence", "programs", "notes",
+                  "exclude_reason")
 
 
 def _funder_out(row) -> dict:
@@ -218,13 +250,18 @@ def _funder_out(row) -> dict:
     # with a type that was assumed rather than checked.
     if d.get("check_ok") is not None:
         d["check_ok"] = bool(d["check_ok"])
+    d["blocked"] = bool(d.get("blocked"))
     return d
 
 
-def list_funders(conn, *, org_id: str, active_only: bool = False) -> list[dict]:
+def list_funders(conn, *, org_id: str, active_only: bool = False,
+                 include_blocked: bool = True) -> list[dict]:
     sql = "SELECT * FROM funders WHERE org_id=?"
     if active_only:
-        sql += " AND active=1"
+        # A blocked funder is never searched, so "active" has to mean both.
+        sql += " AND active=1 AND blocked=0"
+    elif not include_blocked:
+        sql += " AND blocked=0"
     # Alphabetical, case-insensitively. It used to be `warm DESC, name` — partners
     # first — which is exactly the priority the stakeholder asked us to drop. NOCASE
     # because SQLite's default is byte order, which puts every capitalised name above
@@ -245,8 +282,27 @@ def excluded_funder_names(conn, *, org_id: str) -> set[str]:
     return {
         str(r["name"]).strip().casefold()
         for r in conn.execute(
-            "SELECT name FROM funders WHERE active=0 AND org_id=?", (org_id,))
+            "SELECT name FROM funders WHERE (active=0 OR blocked=1) AND org_id=?",
+            (org_id,))
     }
+
+
+def blocked_funder_keys(conn, *, org_id: str) -> set[str]:
+    """Blocked funders, by casefolded name and by casefolded URL.
+
+    Both, because the three places that offer a funder identify it differently: a
+    researched list matches on the derived id, the shared directory dedupes on URL, and
+    a person types a name. Matching on one of those lets the other two put a blocked
+    funder back in front of somebody who explicitly took it away.
+    """
+    keys: set[str] = set()
+    for r in conn.execute("SELECT name, url FROM funders WHERE blocked=1 AND org_id=?",
+                          (org_id,)):
+        keys.add(str(r["name"] or "").strip().casefold())
+        url = str(r["url"] or "").strip().rstrip("/").casefold()
+        if url:
+            keys.add(url)
+    return keys
 
 
 def get_funder(conn, funder_id: str, *, org_id: str) -> dict | None:
@@ -294,7 +350,12 @@ def update_funder(conn, funder_id: str, changes: dict, *, org_id: str) -> dict |
         value = changes[field]
         if field == "programs":
             value = dumps(value if isinstance(value, list) else [])
-        elif field in {"warm", "active"}:
+        elif field in {"warm", "active", "blocked"}:
+            # `blocked` belongs here and not in the `str(value)` fallback below, which
+            # would store the literal "True" in an INTEGER column — so `blocked=1` never
+            # matches and a funder somebody blocked keeps being searched and re-offered.
+            # Same family as `share_funders` stored as "True": a value crossing a
+            # boundary with a type that was assumed rather than checked.
             value = 1 if value else 0
         elif field in {"tier", "confidence"}:
             value = int(value or 1)
@@ -450,7 +511,8 @@ def create_run(conn, run_id: str | None = None, *, org_id: str,
 def update_run(conn, run_id: str, **fields) -> None:
     if not fields:
         return
-    for json_field in ("rejected_by_filter", "notes", "progress", "source_health"):
+    for json_field in ("rejected_by_filter", "notes", "progress", "source_health",
+                       "rejects", "usd_by_stage"):
         if json_field in fields and not isinstance(fields[json_field], str):
             fields[json_field] = dumps(fields[json_field])
     sets = ", ".join(f"{k}=?" for k in fields)
@@ -463,6 +525,8 @@ def _run_out(row) -> dict:
     d["notes"] = loads(d.get("notes"), [])
     d["progress"] = loads(d.get("progress"), {})
     d["source_health"] = loads(d.get("source_health"), [])
+    d["rejects"] = loads(d.get("rejects"), [])
+    d["usd_by_stage"] = loads(d.get("usd_by_stage"), {})
     return d
 
 
@@ -648,6 +712,10 @@ def shared_funders(conn, *, org_id: str, limit: int = 60) -> list[dict]:
     """
     mine = {(r["url"] or "").strip().rstrip("/").casefold()
             for r in conn.execute("SELECT url FROM funders WHERE org_id=?", (org_id,))}
+    # Blocking means "stop suggesting this", so it has to reach the one screen whose
+    # whole job is suggesting things. Matched on name as well as URL, because another
+    # org may well have typed the same funder with a different address.
+    blocked = blocked_funder_keys(conn, org_id=org_id)
 
     rows = conn.execute(
         """SELECT f.id, f.org_id, f.name, f.url, f.sector, f.funder_type, f.notes,
@@ -669,7 +737,9 @@ def shared_funders(conn, *, org_id: str, limit: int = 60) -> list[dict]:
     out: dict[str, dict] = {}
     for r in rows:
         key = (r["url"] or "").strip().rstrip("/").casefold()
-        if key in mine:
+        if key in mine or key in blocked:
+            continue
+        if str(r["name"] or "").strip().casefold() in blocked:
             continue
         if key in out:
             out[key]["added_by_count"] += 1

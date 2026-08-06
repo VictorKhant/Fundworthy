@@ -421,14 +421,26 @@ def test_indexed_adapters_survive_the_round_trip(db):
     assert apis == ["ca_grants_portal", "grants_gov"]
 
 
-def test_unticking_a_sector_also_stops_its_indexed_sources(db):
-    """The CA Grants Portal and Grants.gov are government money. If the user unticks
-    government funding, not searching the government's own databases is what they
-    asked for — the tick has to mean the same thing everywhere."""
+def test_sector_no_longer_narrows_the_funder_list(db):
+    """R8 removed the sector filter, and this used to assert the opposite.
+
+    It was an invisible exclusion on a taxonomy we invented: four buckets, assigned by
+    `sector_for` or defaulted to "foundation" for anything typed in, silently dropping
+    funders in the free tier where nothing explains itself. Same reasoning as the
+    geography filter in agent/filters.py, and the same fix — removed rather than
+    repaired. Which funders get searched is the funder list, one decision at a time.
+
+    The argument stays in the signature so old callers still work; it is ignored.
+    """
     from agent.sources import Tier, sources_from_db
 
-    fetchable, _ = sources_from_db(Tier.GOVERNMENT, ["warm_partner"])
-    assert [s for s in fetchable if s.is_api] == []
+    everything, _ = sources_from_db(Tier.GOVERNMENT, [])
+    one_sector, _ = sources_from_db(Tier.GOVERNMENT, ["warm_partner"])
+
+    assert [s.funder for s in one_sector] == [s.funder for s in everything], \
+        "a ticked sector still narrows the search, invisibly"
+    assert any(s.is_api for s in one_sector), \
+        "the indexed databases were dropped by a filter that should be gone"
 
 
 def test_credit_never_lands_on_an_unchecked_source():

@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
+import { useConfirm } from "./Confirm";
+import Icon from "./Icon";
 import Spinner, { Busy } from "./Spinner";
 import { api, pacificStamp, usd } from "../api";
 
@@ -14,7 +16,76 @@ import { api, pacificStamp, usd } from "../api";
 // it is tokens per minute, and it refills), so a "credit remaining" figure could only be
 // invented. The number below is one we can stand behind, from our own run log.
 
-function Meter({ spend }) {
+// Quick amounts plus a typed figure. The meter reported a limit nobody could change
+// without going to look for it, and the one moment somebody wants to change it is the
+// moment they are looking at a bar that is nearly full.
+
+function CapEditor({ cap, onSaved }) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState(String(cap));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => { setValue(String(cap)); }, [cap]);
+
+  async function save(amount) {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.settings.save({ monthly_budget_usd: Number(amount) });
+      setOpen(false);
+      await onSaved();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <button className="text small" onClick={() => setOpen(true)}>
+        Change the monthly limit
+      </button>
+    );
+  }
+
+  return (
+    <div className="capedit">
+      <div className="row">
+        {[10, 20, 50, 100].map((amount) => (
+          <button key={amount} className={`pill ${Number(cap) === amount ? "on" : ""}`}
+                  disabled={busy} onClick={() => save(amount)}>
+            ${amount}
+          </button>
+        ))}
+      </div>
+      <div className="row">
+        <label className="field inline">
+          <span className="muted small">Or</span>
+          <input type="number" min="1" max="500" step="1" value={value}
+                 onChange={(e) => setValue(e.target.value)} style={{ width: "6.5em" }} />
+        </label>
+        <Busy className="primary" busy={busy} busyLabel="Saving"
+              disabled={!value || Number(value) <= 0} onClick={() => save(value)}>
+          Save
+        </Busy>
+        <button className="text" onClick={() => setOpen(false)} disabled={busy}>
+          Cancel
+        </button>
+      </div>
+      {error && <div className="notice error">{error}</div>}
+      {/* Said plainly, because this limit is ours and it is not the only one. We can
+          stop spending; we cannot stop Anthropic charging. */}
+      <p className="muted small">
+        This is Fundworthy's own limit. Your Anthropic account has its own spending
+        limit on top of it, and that is the one that holds if anything here goes wrong.
+      </p>
+    </div>
+  );
+}
+
+function Meter({ spend, onChange }) {
   const pct = spend.cap_usd > 0
     ? Math.min(100, Math.round((spend.spent_usd / spend.cap_usd) * 100))
     : 0;
@@ -33,10 +104,11 @@ function Meter({ spend }) {
            aria-label={`${usd(spend.spent_usd)} spent of ${usd(spend.cap_usd)}`}>
         <span style={{ width: `${pct}%` }} />
       </div>
+      <CapEditor cap={spend.cap_usd} onSaved={onChange} />
       {spend.over_cap ? (
         <p className="muted small">
           This month's limit is used up, so searches will not run until next month.
-          Raise the limit below if you want to keep going.
+          Raise the limit above if you want to keep going.
         </p>
       ) : (
         <p className="muted small">
@@ -49,6 +121,7 @@ function Meter({ spend }) {
 }
 
 export default function Organization({ spend, onChange }) {
+  const [dialog, ask] = useConfirm();
   const [org, setOrg] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -86,11 +159,18 @@ export default function Organization({ spend, onChange }) {
   // from the funders, the findings and the API key at once; handing the org over cannot
   // be taken back by the person doing it.
   async function drop(member) {
-    if (!window.confirm(
-      `Remove ${member.email} from your organization?\n\n` +
-      "They lose access to your funders, your findings and your saved API key " +
-      "immediately. Next time they sign in they get a fresh, empty organization of " +
-      "their own.\n\nThis cannot be undone — you would have to invite them back.")) return;
+    const answer = await ask({
+      tone: "clay",
+      title: `Remove ${member.email} from your organization?`,
+      points: [
+        "They lose access to your funders, your findings and your saved API key "
+          + "immediately.",
+        "Next time they sign in they get a fresh, empty organization of their own.",
+        "This cannot be undone — you would have to invite them back.",
+      ],
+      confirmLabel: "Remove them",
+    });
+    if (!answer) return;
     setActing(`drop:${member.uid}`);
     setError(null);
     try {
@@ -105,11 +185,17 @@ export default function Organization({ spend, onChange }) {
   }
 
   async function handOver(member) {
-    if (!window.confirm(
-      `Make ${member.email} the admin of your organization?\n\n` +
-      "They will be able to remove people, including you. You stay a member and can " +
-      "carry on as normal, but you will not be able to take this back yourself — only " +
-      "they can hand it on again.")) return;
+    const answer = await ask({
+      title: `Make ${member.email} the admin of your organization?`,
+      points: [
+        "They will be able to remove people, including you.",
+        "You stay a member and can carry on as normal.",
+        "You will not be able to take this back yourself — only they can hand it on "
+          + "again.",
+      ],
+      confirmLabel: "Hand it over",
+    });
+    if (!answer) return;
     setActing(`give:${member.uid}`);
     setError(null);
     try {
@@ -146,9 +232,10 @@ export default function Organization({ spend, onChange }) {
 
   return (
     <section className="card">
+      {dialog}
       <h2>Your organization</h2>
 
-      {spend && <Meter spend={spend} />}
+      {spend && <Meter spend={spend} onChange={onChange} />}
 
       {error && <div className="notice error">{error}</div>}
 
@@ -173,16 +260,25 @@ export default function Organization({ spend, onChange }) {
               {/* Manage shows for the admin, and never on their own row: removing
                   yourself is what Delete account is for, and handing the org to yourself
                   is not a thing. The server checks all of this again — a hidden button is
-                  not a permission. */}
+                  not a permission.
+
+                  The two are separated by a divider. They sat in a `.row` at `gap: 4px`:
+                  "Make admin" and "Remove" four pixels apart, one of which hands somebody
+                  your organisation and the other of which cuts them off from it. Make
+                  admin keeps its words because it is rare and unfamiliar; Remove is an
+                  icon with an aria-label, which is the R10 split. */}
               {org.you_are_admin && m.uid !== org.you && (
-                <span className="row">
-                  <Busy className="text" busy={acting === `give:${m.uid}`}
+                <span className="member-actions">
+                  <Busy className="pill" busy={acting === `give:${m.uid}`}
                         busyLabel="Handing over" onClick={() => handOver(m)}>
                     Make admin
                   </Busy>
-                  <Busy className="text danger" busy={acting === `drop:${m.uid}`}
-                        busyLabel="Removing" onClick={() => drop(m)}>
-                    Remove
+                  <span className="member-divider" aria-hidden="true" />
+                  <Busy className="iconbtn danger" busy={acting === `drop:${m.uid}`}
+                        busyLabel="Removing" onClick={() => drop(m)}
+                        title={`Remove ${m.email} from your organization`}
+                        aria-label={`Remove ${m.email} from your organization`}>
+                    <Icon name="bin" size={15} />
                   </Busy>
                 </span>
               )}

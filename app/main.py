@@ -49,6 +49,8 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from agent.models import MAX_REJECTS
+from agent.score import MODEL_CHOICES, PRICING, SCORING_MODEL, TRIAGE_MODEL
 from . import archive, auth, export, repo, scheduler, secrets
 from .db import (DEFAULT_ORG_ID, SECTORS, InviteError, create_invite, import_starter_list,
                  init_db, list_invites, month_key, org_for_user, org_members, org_owner,
@@ -105,6 +107,10 @@ class SettingsIn(BaseModel):
     share_funders: bool | None = None
     sectors_active: list[str] | None = None
     search_beyond_partners: bool | None = None
+    # `provider:model`, validated against PRICING below — an id with no price would
+    # KeyError inside the run rather than here, which is the worst place to find out.
+    triage_model: str | None = Field(None, max_length=80)
+    scoring_model: str | None = Field(None, max_length=80)
     org_name: str | None = Field(None, max_length=200)
     org_location: str | None = Field(None, max_length=200)
     # The weekly schedule. Validated here rather than trusted: `schedule_hour` reaches a
@@ -259,6 +265,15 @@ def write_settings(body: SettingsIn, org: str = Depends(current_org)) -> dict:
         unknown = [s for s in changes["sectors_active"] if s not in SECTORS]
         if unknown:
             raise HTTPException(400, f"Unknown sector(s): {', '.join(unknown)}")
+    # A model with no price cannot be checked against the spend limit, and finding that
+    # out is a KeyError on the first call of a run rather than an error here. Empty is
+    # allowed and means "use whatever the code recommends".
+    for field_name in ("triage_model", "scoring_model"):
+        chosen = changes.get(field_name)
+        if chosen and chosen not in PRICING:
+            raise HTTPException(
+                400, f"{chosen} is not a model Fundworthy knows the price of, so it "
+                     "cannot be kept inside your spending limit.")
     with session() as conn:
         settings = repo.update_settings(conn, changes, org_id=org)
     # Turning sharing on is what schedules the reachability checks. Nothing this org
@@ -347,8 +362,13 @@ def create_program(body: ProgramIn, org: str = Depends(current_org)) -> dict:
 @api.put("/programs/{program_id}")
 def update_program(program_id: str, body: ProgramIn,
                    org: str = Depends(current_org)) -> dict:
-    with session() as conn:
-        updated = repo.update_program(conn, program_id, _set(body), org_id=org)
+    try:
+        with session() as conn:
+            updated = repo.update_program(conn, program_id, _set(body), org_id=org)
+    except ValueError as exc:
+        # Ticking a card with no description. The message is written for the person, not
+        # for a log, because it is rendered straight into the panel.
+        raise HTTPException(400, str(exc)) from exc
     if updated is None:
         raise HTTPException(404, "No such program.")
     return {"program": updated}
@@ -698,6 +718,70 @@ def list_runs(limit: int = 20, org: str = Depends(current_org)) -> dict:
         return {"runs": repo.list_runs(conn, limit=limit, org_id=org)}
 
 
+def _run_summary(run: dict | None) -> dict | None:
+    """A run row without its reject list. See the note at the /api/state call site."""
+    if run is None:
+        return None
+    return {k: v for k, v in run.items() if k != "rejects"}
+
+
+@api.get("/runs/{run_id}/rejects")
+def run_rejects(run_id: str, reason: str | None = None, limit: int = 60,
+                offset: int = 0, org: str = Depends(current_org)) -> dict:
+    """Which candidates a run set aside, and why. Behind the stage boxes.
+
+    Its own endpoint rather than a field on `/api/state`, because this is up to
+    `models.MAX_REJECTS` rows of detail that nobody sees until they open a stage — and
+    `/api/state` is fetched on every dashboard load. Putting it there would make the
+    common path pay for the rare one.
+
+    Grouped counts come back whole (they are small and the boxes need all of them); the
+    rows themselves page, which is the "paginate server-side if a run ever exceeds it"
+    the roadmap asks for.
+    """
+    with session() as conn:
+        run = repo.get_run(conn, run_id, org_id=org)
+    if run is None:
+        raise HTTPException(404, "No such search.")
+
+    rows = run.get("rejects") or []
+    # Every reason present, with its true total from `rejected_by_filter` where we have
+    # one. The two can legitimately disagree: the row list is capped, and the API
+    # adapters report counts with no rows at all.
+    counts = dict(run.get("rejected_by_filter") or {})
+    by_reason: dict[str, dict] = {}
+    for row in rows:
+        g = by_reason.setdefault(row["reason"], {"reason": row["reason"],
+                                                 "stage": row["stage"], "rows": 0})
+        g["rows"] += 1
+    groups = [{**g, "total": counts.get(g["reason"], g["rows"])}
+              for g in by_reason.values()]
+    # Reasons that were counted but produced no rows — the indexed databases aggregate
+    # their own rejects. Shown, so the totals add up, and labelled as detail-free rather
+    # than silently missing.
+    #
+    # NB the loop variable is `key`, not `reason`: `reason` is this function's filter
+    # parameter, and rebinding it here left it holding the last counted reason, so every
+    # unfiltered request came back filtered to whatever that happened to be. The groups
+    # were right and the rows were one row, which is a confusing way to find out.
+    for key, total in counts.items():
+        if key not in by_reason:
+            groups.append({"reason": key, "stage": 1, "rows": 0, "total": total})
+    groups.sort(key=lambda g: (g["stage"], -g["total"]))
+
+    if reason:
+        rows = [r for r in rows if r["reason"] == reason]
+    return {
+        "groups": groups,
+        "rejects": rows[offset:offset + limit],
+        "shown": len(rows[offset:offset + limit]),
+        "matching": len(rows),
+        # True when the pipeline stopped recording rows but kept counting. The UI says
+        # so rather than letting the numbers quietly disagree.
+        "truncated": len(run.get("rejects") or []) >= MAX_REJECTS,
+    }
+
+
 @api.get("/runs/current")
 def current_run(org: str = Depends(current_org)) -> dict:
     """This org's current run — or its last one if nothing is going.
@@ -756,12 +840,20 @@ def state(org: str = Depends(current_org)) -> dict:
             "settings": repo.get_settings(conn, org_id=org),
             **_key_state(conn, org),
             "sectors_available": list(SECTORS),
+            # The model picker's options come from the pipeline, so adding a model is
+            # one edit in agent/score.py rather than two lists quietly drifting apart —
+            # and a model offered here with no PRICING entry would abort a run.
+            "model_choices": MODEL_CHOICES,
+            "model_defaults": {"2": TRIAGE_MODEL, "3": SCORING_MODEL},
             "programs": repo.list_programs(conn, org_id=org),
             "funders": repo.list_funders(conn, org_id=org),
             "month": month_key(),
             "clear": [r for r in rows if not r["needs_human_check"]],
             "needs_check": [r for r in rows if r["needs_human_check"]],
-            "latest_run": repo.latest_run(conn, org_id=org),
+            # Without the reject rows: they can be hundreds, they are only read when
+            # somebody opens a stage box, and /api/state is fetched on every load.
+            # GET /api/runs/{id}/rejects serves them.
+            "latest_run": _run_summary(repo.latest_run(conn, org_id=org)),
             "running": bool(MANAGER.current_run_id_for(org)),
             "spend": repo.spend_summary(conn, org_id=org),
             # Why a search would not work, if it would not. Same list, same wording, as
@@ -996,16 +1088,22 @@ def join_org(body: JoinIn, user=Depends(auth.require_user)) -> dict:
 
     Note this deliberately does **not** depend on `current_org`: resolving the caller's
     current org would create an empty one for them a moment before they leave it.
+
+    Joining **moves** somebody, so it is a leave as much as a join, and `redeem_invite`
+    applies the same two rules as closing an account: an admin with colleagues has to
+    hand the org over first, and an org left with nobody in it is stranded rather than
+    abandoned with a live API key in it. The response says which of those happened,
+    because "you also just wiped the org you were in" is not something to discover later.
     """
     if user is None:
         raise HTTPException(
             400, "Joining an organization needs sign-in, which this install has off.")
     try:
         with session() as conn:
-            org_id = redeem_invite(conn, body.code, user.uid, user.email)
+            result = redeem_invite(conn, body.code, user.uid, user.email)
     except InviteError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return {"org_id": org_id, "joined": True}
+    return {"joined": True, **result}
 
 
 @api.get("/auth/me")

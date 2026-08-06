@@ -347,18 +347,36 @@ def sources_from_db(max_tier: Tier = Tier.WARM,
     try:
         with session(target) as conn:
             rows = [dict(r) for r in conn.execute(
-                "SELECT * FROM funders WHERE active=1 AND org_id=? "
+                "SELECT * FROM funders WHERE active=1 AND blocked=0 AND org_id=? "
                 "ORDER BY warm DESC, name", (scope,))]
     except Exception:  # noqa: BLE001
         return None
 
-    wanted = set(sectors or [])
+    # --- sector: deliberately not a filter any more (R8) ------------------------
+    #
+    # This used to be `if wanted and r["sector"] not in wanted: continue`, and the
+    # `sectors` argument is now accepted and ignored. Same reasoning as the geography
+    # filter in agent/filters.py, which was removed for the same reason rather than
+    # fixed:
+    #
+    #   - The taxonomy is **our guess**. "warm_partner / foundation / government /
+    #     arts_agency" is four buckets we invented, and the settings copy admitted it.
+    #     A funder's bucket is assigned by `sector_for` from the shipped registry, or
+    #     defaulted to "foundation" when somebody types one in — so unticking a box
+    #     excluded funders on the strength of a label nobody at the nonprofit chose.
+    #   - It failed silently and for free, in the tier that explains nothing. A funder
+    #     was simply never fetched, and the only clue was a thinner week.
+    #
+    # Which funders get searched is decided by the funder list — pause, block, delete —
+    # which is a decision the org actually made, one funder at a time, and which the
+    # stage boxes now report on.
+    #
+    # The argument stays in the signature and `sectors_active` stays in the schema, so
+    # an old caller and an old settings row both still work.
     fetchable: list[Source] = []
     unconfirmed: list[Source] = []
     for r in rows:
         if int(r["tier"]) > int(max_tier):
-            continue
-        if wanted and r["sector"] not in wanted:
             continue
         source = Source(
             name=r["name"],

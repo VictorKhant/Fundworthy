@@ -188,7 +188,12 @@ def test_program_without_a_name_is_rejected(client):
 
 def test_ticking_a_program_changes_what_the_run_would_search(client):
     """The tick is the whole activation mechanism, so it has to reach the config the
-    pipeline reads — not just the row in the table."""
+    pipeline reads — not just the row in the table.
+
+    Describing the card and ticking it arrive in ONE request, because that is what saving
+    the editor does and because an empty card can no longer be activated on its own (see
+    the test below).
+    """
     from agent.config import load_from_db
 
     before = load_from_db()
@@ -196,10 +201,69 @@ def test_ticking_a_program_changes_what_the_run_would_search(client):
 
     ilia = next(p for p in client.get("/api/programs").json()["programs"]
                 if p["slug"] == "ILIA")
-    client.put(f"/api/programs/{ilia['id']}", json={"active": True})
+    resp = client.put(f"/api/programs/{ilia['id']}",
+                      json={"active": True, "summary": "Leadership awards for local "
+                                                       "nonprofit directors."})
+    assert resp.status_code == 200, resp.text
 
     after = load_from_db()
     assert "ILIA" in after.programs_active
+
+
+def test_an_empty_card_cannot_be_ticked(client):
+    """A card with no summary and no keywords gives the scorer nothing to match against.
+
+    `agent/score.py: org_context` puts exactly those two fields in the prompt, and falls
+    back to "(No description recorded yet. Judge fit conservatively…)" without them — so
+    ticking an empty card does not narrow the search, it adds a line of noise to every
+    candidate that gets scored.
+
+    The dashboard renders one as dashed and un-tickable and opens the editor instead, but
+    that is an affordance. This is the rule, and it has to hold for a direct PUT.
+    """
+    ilia = next(p for p in client.get("/api/programs").json()["programs"]
+                if p["slug"] == "ILIA")
+    assert not ilia["summary"] and not ilia["keywords"], "the fixture stopped being empty"
+
+    resp = client.put(f"/api/programs/{ilia['id']}", json={"active": True})
+
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert "no description" in detail, detail
+    # Written for the person who pressed it, not for a log.
+    for jargon in ("ValueError", "None", "keywords=[]", "program_is_empty"):
+        assert jargon not in detail, detail
+
+    # And it really did not tick.
+    again = next(p for p in client.get("/api/programs").json()["programs"]
+                 if p["slug"] == "ILIA")
+    assert again["active"] is False
+
+
+def test_describing_a_card_and_ticking_it_in_one_write_is_allowed(client):
+    """The editor's Save does exactly this, so the guard has to judge the card as it will
+    be after the write rather than as it was before it."""
+    ilia = next(p for p in client.get("/api/programs").json()["programs"]
+                if p["slug"] == "ILIA")
+
+    resp = client.put(f"/api/programs/{ilia['id']}",
+                      json={"active": True, "keywords": ["leadership", "fellowship"]})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["program"]["active"] is True
+
+
+def test_an_already_ticked_card_can_still_be_edited_and_unticked(client):
+    """The guard must not trap a card that was ticked before the rule existed. Unticking
+    is always allowed, and so is any edit that leaves it inactive."""
+    arts = next(p for p in client.get("/api/programs").json()["programs"]
+                if p["slug"] == "ARTS")
+    assert arts["active"] is True
+
+    assert client.put(f"/api/programs/{arts['id']}",
+                      json={"active": False}).status_code == 200
+    assert client.put(f"/api/programs/{arts['id']}",
+                      json={"active": False, "summary": ""}).status_code == 200
 
 
 def test_per_program_floor_lowers_the_crawl_filter(client):
@@ -375,8 +439,14 @@ def test_a_search_with_an_empty_funder_list_is_refused(client):
     assert "Discover funders" in r.json()["detail"]
 
 
-def test_funders_that_no_ticked_sector_matches_get_their_own_message(client):
-    """A different fix from an empty list, so a different sentence. Same empty result."""
+def test_a_funder_on_the_list_is_searchable_whatever_the_sectors_say(client):
+    """The inverse of what this asserted before R8.
+
+    A funder used to be excluded when its sector was unticked, and preflight had a whole
+    refusal for "you have funders but none match the ticked kinds". Both are gone: the
+    taxonomy was our guess, the exclusion was silent and free, and a funder on the list
+    is now simply a funder that gets fetched.
+    """
     client.post("/api/settings/api-key", json={"api_key": FAKE_KEY})
     _tick_a_program(client)
     for f in client.get("/api/funders").json()["funders"]:
@@ -388,8 +458,9 @@ def test_funders_that_no_ticked_sector_matches_get_their_own_message(client):
     client.put("/api/settings", json={"sectors_active": ["arts_agency"]})
 
     codes = _codes(client)
-    assert "no_searchable_funders" in codes, "they have one, it just isn't searchable"
-    assert "no_funders" not in codes, "an empty list is a different problem"
+    assert "no_searchable_funders" not in codes, "an invisible sector filter is back"
+    assert "no_funders" not in codes, "they have one and it counts"
+    assert codes == [], f"nothing should stop this search: {codes}"
 
 
 def test_a_search_with_nothing_ticked_to_search_for_is_refused(client):
@@ -905,3 +976,112 @@ def test_editing_a_funder_onto_another_ones_page_is_refused(client):
     clash = client.put(f"/api/funders/{other['funder']['id']}",
                        json={"url": "https://example.invalid/coastal"})
     assert clash.status_code == 409
+
+
+# --- the reject log behind the stage boxes -------------------------------------
+
+def _run_with_rejects(client):
+    """A finished run carrying rejects from all three tiers, written the way the
+    pipeline writes them."""
+    from datetime import datetime, timezone
+
+    from agent.models import RunLog, StopReason
+    from app.db import DEFAULT_ORG_ID, session
+    from app import repo
+    from sinks.sqlite import SqliteSink
+
+    run = RunLog(started_at=datetime.now(timezone.utc))
+    run.reject(1, "award_below_floor", funder="Parker", title="Micro",
+               url="https://p.example/micro", detail="$4,000 < $10,000")
+    run.reject(1, "award_below_floor", funder="Alliance", title="Sparks",
+               url="https://a.example/sparks", detail="$2,500 < $10,000")
+    run.reject(1, "thin_landing_page", funder="Arts Council", title="Grants",
+               url="https://arts.example/", detail="410 characters")
+    run.reject(2, "triage_not_an_opportunity", funder="Parker", title="Grantees",
+               url="https://p.example/past", detail="past grantee list, not an open call")
+    run.reject(3, "deadline_passed", funder="Parker", title="Spring",
+               url="https://p.example/spring", detail="closed 2026-05-01")
+    # A count with no rows, the way the indexed databases report theirs.
+    run.rejected_by_filter["no_award_stated"] = 9
+    run.triaged, run.scored, run.candidates_parsed = 8, 3, 15
+    run.usd_by_stage = {"1": 0.0, "2": 0.0031, "3": 0.2884}
+    run.usd_spent = 0.2915
+    run.stop_reason = StopReason.TARGET_MET
+    run.finished_at = datetime.now(timezone.utc)
+
+    with session() as conn:
+        repo.create_run(conn, "r-rej", org_id=DEFAULT_ORG_ID)
+    sink = SqliteSink(org_id=DEFAULT_ORG_ID)
+    sink.run_id = "r-rej"
+    sink.write_run_log(run)
+    return "r-rej"
+
+
+def test_the_reject_log_survives_the_round_trip(client):
+    """Every tier's rows, with the detail that makes them checkable."""
+    run_id = _run_with_rejects(client)
+    body = client.get(f"/api/runs/{run_id}/rejects?limit=400").json()
+
+    assert len(body["rejects"]) == 5, body["rejects"]
+    assert {r["stage"] for r in body["rejects"]} == {1, 2, 3}
+
+    micro = next(r for r in body["rejects"] if r["title"] == "Micro")
+    assert micro["detail"] == "$4,000 < $10,000", "the specific fact is the whole point"
+    triaged = next(r for r in body["rejects"] if r["stage"] == 2)
+    assert triaged["detail"] == "past grantee list, not an open call", \
+        "triage's own words used to be logged and dropped"
+
+
+def test_an_unfiltered_request_returns_every_row(client):
+    """Regression. The loop that adds count-only reasons used `reason` as its variable,
+    which is also this endpoint's filter parameter — so after the loop it held the last
+    counted reason and every unfiltered request came back filtered to it. The groups
+    were right and the list had one row in it."""
+    run_id = _run_with_rejects(client)
+    body = client.get(f"/api/runs/{run_id}/rejects?limit=400").json()
+
+    rows_from_groups = sum(g["rows"] for g in body["groups"])
+    assert len(body["rejects"]) == rows_from_groups, (
+        "the grouped counts and the row list disagree, which means something filtered "
+        "the rows and not the groups"
+    )
+
+
+def test_filtering_by_reason_narrows_the_rows_but_not_the_groups(client):
+    run_id = _run_with_rejects(client)
+    body = client.get(f"/api/runs/{run_id}/rejects?reason=award_below_floor").json()
+
+    assert len(body["rejects"]) == 2
+    assert {r["reason"] for r in body["rejects"]} == {"award_below_floor"}
+    assert len(body["groups"]) > 1, "the boxes still need every reason's count"
+
+
+def test_a_reason_counted_without_rows_is_still_reported(client):
+    """The indexed databases filter before we read anything, so they report counts with
+    no page-by-page detail. The total has to appear anyway or the numbers do not add up."""
+    run_id = _run_with_rejects(client)
+    body = client.get(f"/api/runs/{run_id}/rejects").json()
+
+    empty = next(g for g in body["groups"] if g["reason"] == "no_award_stated")
+    assert empty["total"] == 9
+    assert empty["rows"] == 0, "no rows, and the UI says why rather than showing a blank"
+
+
+def test_the_dashboard_payload_does_not_carry_the_reject_rows(client):
+    """They can be hundreds and are read only when a stage box is opened. /api/state is
+    fetched on every load, so it carries the summary and not the detail."""
+    _run_with_rejects(client)
+    latest = client.get("/api/state").json()["latest_run"]
+
+    assert latest is not None
+    assert "rejects" not in latest, "the hot path is paying for the rare one"
+    # But the things the boxes themselves need are there.
+    assert latest["triaged"] == 8 and latest["scored"] == 3
+    assert latest["usd_by_stage"]["3"] == 0.2884
+
+
+def test_rejects_are_scoped_to_the_org_that_ran_the_search(client):
+    """Same rule as every other route: another org's run is a 404, not a peek."""
+    run_id = _run_with_rejects(client)
+    assert client.get(f"/api/runs/{run_id}/rejects").status_code == 200
+    assert client.get("/api/runs/not-a-real-run/rejects").status_code == 404

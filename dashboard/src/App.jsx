@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
 import { authEnabled, authError, currentUser, initAuth, onUserChange, signOutNow } from "./auth";
-import JoinOrg from "./components/JoinOrg";
 import MaintenanceBanner from "./components/MaintenanceBanner";
 import Tutorial from "./components/Tutorial";
 import Sidebar from "./components/Sidebar";
@@ -106,9 +105,6 @@ export default function App() {
   const [open, setOpen] = useState(window.innerWidth >= 900);
   const [state, setState] = useState(null);
   const [error, setError] = useState(null);
-  // Set once the person says "I'm setting this up for the first time", so the join
-  // prompt does not come back on every refresh of a still-empty dashboard.
-  const [startedFresh, setStartedFresh] = useState(false);
   // Lets someone who has finished the walkthrough keep using the app in the same session
   // even if a step is technically incomplete — clicking Finish is a decision, and
   // re-imposing the guide after it would be nagging.
@@ -120,12 +116,19 @@ export default function App() {
   // see the note by `setupIncomplete` below.
   const [tutorialOpen, setTutorialOpen] = useState(false);
 
+  // Returns the state it fetched as well as storing it. Callers that need to *decide*
+  // something from the result — the walkthrough, after joining an org, has to know
+  // whether the org it landed in is already set up — cannot read `state` for it: they
+  // are inside the same render that queued the update, so they would see the old value.
   const refresh = useCallback(async () => {
     try {
-      setState(await api.state());
+      const fresh = await api.state();
+      setState(fresh);
       setError(null);
+      return fresh;
     } catch (e) {
       setError(e.message);
+      return null;
     }
   }, []);
 
@@ -229,14 +232,6 @@ export default function App() {
   // doing a step elsewhere in the app counts.
   const needsTutorial = Boolean(state) && tutorialOpen && !tutorialDone;
 
-  const untouched =
-    authEnabled() &&
-    !startedFresh &&
-    Boolean(state) &&
-    (state.funders || []).length === 0 &&
-    (state.programs || []).length === 0 &&
-    !state.key_available;
-
   return (
     <div className={`shell ${open ? "with-sidebar" : ""}`}>
       <Sidebar
@@ -274,13 +269,6 @@ export default function App() {
             <Spinner label="Loading your dashboard" />
             Loading your dashboard…
           </p>
-        )}
-
-        {state && page === "dashboard" && untouched && (
-          <JoinOrg
-            onJoined={async () => { setStartedFresh(true); await refresh(); }}
-            onSkip={() => setStartedFresh(true)}
-          />
         )}
 
         {/* The walkthrough takes over the page rather than sitting above the dashboard.

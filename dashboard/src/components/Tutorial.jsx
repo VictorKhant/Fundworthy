@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, money } from "../api";
+import { authEnabled } from "../auth";
+import JoinOrg from "./JoinOrg";
 import Spinner, { Busy } from "./Spinner";
 
 // The first-run walkthrough. It makes you do the steps rather than read about them.
@@ -46,10 +48,11 @@ function Step({ n, of, title, children, done, onNext, nextLabel = "Next" }) {
   );
 }
 
-function KeyStep({ state, onChange, ...rest }) {
+function KeyStep({ state, onChange, onJoined, ...rest }) {
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
+  const [joining, setJoining] = useState(false);
 
   async function save(event) {
     event.preventDefault();
@@ -75,6 +78,36 @@ function KeyStep({ state, onChange, ...rest }) {
 
   return (
     <Step {...rest} done={Boolean(state.key_available)}>
+      {/* Asked before anything else, because "yes" makes the rest of the walkthrough
+          unnecessary — you inherit a colleague's funders, cards and key rather than
+          building your own. Asking afterwards would be asking somebody to throw away
+          the work they just did. It used to be a separate card floating above the
+          dashboard, only ever shown on a completely empty account. */}
+      {authEnabled() && !state.key_available && (
+        <div className="tut-join">
+          {joining ? (
+            <>
+              <p className="small">
+                Enter the code your colleague sent you. You will share their funders,
+                programs and findings, and can skip the rest of this setup.
+              </p>
+              <JoinOrg onJoined={onJoined} />
+              <button className="text small" onClick={() => setJoining(false)}>
+                I don't have a code
+              </button>
+            </>
+          ) : (
+            <p className="small">
+              Is someone at your organization already using Fundworthy?{" "}
+              <button className="text" onClick={() => setJoining(true)}>
+                Enter their invitation code
+              </button>{" "}
+              instead of setting this up again.
+            </p>
+          )}
+        </div>
+      )}
+
       <p>
         Fundworthy reads funders' websites using Claude, and it uses <strong>your</strong>{" "}
         key — so your searches are billed to you and nobody else can see them. A weekly
@@ -545,6 +578,22 @@ export default function Tutorial({ state, onChange, onDone }) {
         of={steps.length}
         title={title}
         onNext={() => (last ? onDone() : setAt(at + 1))}
+        // Joining a colleague's org hands you a configured one — their key, their
+        // funders, their program cards. Walking somebody through setting all three up
+        // immediately afterwards would be asking them to redo work that is already done.
+        //
+        // So: if the org they landed in has finished onboarding, close the walkthrough
+        // outright. If it has not — a colleague invited them into an org still being set
+        // up — the remaining steps are real, so refresh and let the step logic reopen on
+        // whichever one is genuinely unfinished.
+        onJoined={async () => {
+          const fresh = await onChange();
+          if (fresh?.onboarding_done) {
+            onDone();
+          } else {
+            setAt(steps.length - 1);
+          }
+        }}
       />
 
       {at > 0 && (

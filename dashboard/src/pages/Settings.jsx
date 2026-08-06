@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import Confirm, { useConfirm } from "../components/Confirm";
+import JoinOrg from "../components/JoinOrg";
 import Organization from "../components/Organization";
 import Spinner, { Busy } from "../components/Spinner";
 import { api } from "../api";
@@ -31,6 +33,7 @@ const STEPS = [
 ];
 
 function KeyPanel({ state, onChange }) {
+  const [dialog, ask] = useConfirm();
   const [key, setKey] = useState("");
   // Which of the three is running, not just "something is". They take visibly different
   // amounts of time — checking a key is a round trip to Anthropic — so the spinner has to
@@ -70,7 +73,18 @@ function KeyPanel({ state, onChange }) {
   }
 
   async function remove() {
-    if (!window.confirm("Remove the saved key? Searches will stop being scored until you add one.")) return;
+    const answer = await ask({
+      tone: "clay",
+      title: "Remove the saved key?",
+      points: [
+        "Searches will stop running until you add one — Fundworthy has nothing to read "
+          + "funders' pages with.",
+        "Nothing you have already found is deleted.",
+        "You can paste the same key back at any time.",
+      ],
+      confirmLabel: "Remove it",
+    });
+    if (!answer) return;
     setDoing("remove");
     try {
       await api.settings.deleteKey();
@@ -85,6 +99,7 @@ function KeyPanel({ state, onChange }) {
 
   return (
     <section className="panel raised">
+      {dialog}
       <h2>Your AI key</h2>
       <p className="settings-lede">
         The key is what pays for the reading and scoring — think of it as the researcher's
@@ -505,6 +520,104 @@ function ReportQueue() {
 // key go, the funder list stays. That is deliberate — a funder is a name and a grants
 // page, not private research, and the intent is to fold hand-added ones into the shared
 // directory so the next nonprofit in that city does not start from nothing.
+// "Join another organization" — the same invitation code, from an account that already
+// has something in it.
+//
+// The old form only ever appeared on a completely empty account, which meant somebody
+// already using Fundworthy could not redeem a code at all. That is the group most likely
+// to be handed one: two nonprofits merging, or somebody moving jobs.
+//
+// The catch, and the reason for the dialog: **joining moves you.** It has always worked
+// that way, and it was safe to leave implicit while the form only showed on empty
+// accounts. From here it is not, because there is something to lose. What that is
+// depends on whether anyone else is in the org, so the dialog is assembled from the real
+// membership rather than warning generically.
+function JoinAnotherOrg({ onChange }) {
+  const [org, setOrg] = useState(null);
+  const [pending, setPending] = useState(null);   // the code awaiting confirmation
+  const [note, setNote] = useState(null);
+  const decision = useRef(null);
+
+  const load = useCallback(() => {
+    api.org.read().then(setOrg).catch(() => setOrg(null));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  if (!org) return null;
+
+  const members = org.members || [];
+  const alone = members.length <= 1;
+  const stuck = org.you_are_admin && !alone;
+
+  // Resolved when the dialog is answered. `beforeJoin` awaits it, so the code is only
+  // sent if they confirm — the request never leaves until then.
+  function beforeJoin(code) {
+    setPending(code);
+    return new Promise((resolve) => { decision.current = resolve; });
+  }
+  function settle(ok) {
+    setPending(null);
+    decision.current?.(ok);
+    decision.current = null;
+  }
+
+  return (
+    <section className="panel">
+      <h2>Join another organization</h2>
+
+      {stuck ? (
+        <p className="settings-lede">
+          You are this organization's admin and {members.length - 1} other{" "}
+          {members.length === 2 ? "person is" : "people are"} in it. Hand it over to one
+          of them above first — joining somewhere else would leave nobody here who can
+          invite or remove anyone.
+        </p>
+      ) : (
+        <>
+          <p className="settings-lede">
+            If a colleague sent you an invitation code, you can move into their
+            organization. You will share their funders, programs and findings.{" "}
+            <strong>This moves you — it does not merge the two.</strong>
+          </p>
+          {note && <div className="notice">{note}</div>}
+          <JoinOrg cta="Join that organization" beforeJoin={beforeJoin}
+                   onJoined={async (result) => {
+                     setNote(result.stranded
+                       ? "You have moved. The organization you left had nobody else in "
+                         + "it, so its findings and saved key were deleted."
+                       : "You have moved into that organization.");
+                     await onChange();
+                     load();
+                   }} />
+        </>
+      )}
+
+      <Confirm
+        open={Boolean(pending)}
+        tone="clay"
+        title="Move to that organization?"
+        body={`You are about to leave ${org.name || "this organization"} and join the one
+               that code belongs to.`}
+        points={alone ? [
+          "You are the only person here, so this organization will be left empty.",
+          "Its findings, its run history and its saved API key will be deleted.",
+          "The funders you added by hand stay, and may be offered to other nonprofits "
+            + "if you turned sharing on.",
+          "Everything you see after this belongs to the organization you are joining.",
+        ] : [
+          `${members.length - 1} other ${members.length === 2 ? "person stays" : "people stay"} here, so this organization keeps everything.`,
+          "You lose access to it — its findings, its funders and its key.",
+          "You would need a new invitation code to come back.",
+        ]}
+        confirmLabel="Yes, move me"
+        busyLabel="Moving"
+        onCancel={() => settle(false)}
+        onConfirm={() => settle(true)}
+      />
+    </section>
+  );
+}
+
 function DeleteAccount() {
   const [open, setOpen] = useState(false);
   const [typed, setTyped] = useState("");
@@ -655,6 +768,9 @@ export default function Settings({ state, onChange }) {
 
       <ShareFunders settings={state.settings} onChange={onChange} />
       <ReportQueue />
+      {/* Below Organization, and above closing the account: both are ways of leaving,
+          and this is the reversible one. */}
+      {authEnabled() && <JoinAnotherOrg onChange={onChange} />}
       <DeleteAccount />
 
       <section className="panel">

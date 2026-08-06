@@ -447,7 +447,9 @@ def test_an_invite_moves_the_joiner_into_the_inviters_org(db):
 
         joined = redeem_invite(conn, invite["code"], "uid-new", "colleague@example.org")
 
-    assert joined == owner
+    assert joined["org_id"] == owner
+    assert joined["left_org"] is None, "a brand-new person left nothing behind"
+    assert joined["stranded"] is False
 
 
 def test_an_invite_is_single_use(db):
@@ -487,7 +489,7 @@ def test_joining_by_invite_gives_access_to_that_orgs_data(db):
         code = create_invite(conn, owner)["code"]
 
         joined = redeem_invite(conn, code, "uid-new", "colleague@example.org")
-        names = [p["name"] for p in repo.list_programs(conn, org_id=joined)]
+        names = [p["name"] for p in repo.list_programs(conn, org_id=joined["org_id"])]
 
     assert "Shared Program" in names
 
@@ -502,6 +504,112 @@ def test_a_revoked_invite_cannot_be_used(db):
 
         with pytest.raises(InviteError, match="not valid"):
             redeem_invite(conn, code, "uid-2", "two@example.org")
+
+
+# --- joining is also leaving ---------------------------------------------------
+#
+# `redeem_invite` MOVES somebody, so it has to answer the same two questions closing an
+# account does. It used to be a bare `UPDATE users SET org_id`, which answered neither:
+# an admin could walk out of an org with colleagues still in it and freeze it, and a
+# sole member could leave their org behind with a live encrypted API key in it.
+
+def test_the_last_person_out_strands_the_org_they_left(db):
+    """Same rule as closing an account: findings and the key go, hand-added funders stay.
+
+    A key left behind is the part that actually matters — it is a live credential in an
+    org that now has nobody who can sign in to remove it.
+    """
+    from app import secrets
+    from app.db import create_invite, redeem_invite
+
+    with session(db) as conn:
+        # The first signer-in adopts the pre-tenancy org and its 60-odd seeded funders,
+        # so the person under test has to be the second. Otherwise "the funders they
+        # added by hand" is the whole starter list and the test passes for the wrong
+        # reason — or fails for one.
+        org_for_user(conn, "uid-pilot", "pilot@example.org")
+        old = org_for_user(conn, "uid-mover", "mover@example.org")
+        secrets.store_api_key(conn, "sk-ant-leftbehind", org_id=old)
+        repo.create_funder(conn, {"name": "Their Own Find",
+                                  "url": "https://own.example/grants"}, org_id=old)
+        repo.create_run(conn, "r-old", org_id=old)
+
+        other = org_for_user(conn, "uid-host", "host@example.org")
+        code = create_invite(conn, other)["code"]
+
+        result = redeem_invite(conn, code, "uid-mover", "mover@example.org")
+
+        assert result["org_id"] == other
+        assert result["left_org"] == old
+        assert result["stranded"] is True
+
+        key, _source = secrets.resolve_api_key(conn, org_id=old)
+        assert not key, "a live credential outlived the account it belonged to"
+        assert repo.list_runs(conn, org_id=old) == []
+        kept = [f["name"] for f in repo.list_funders(conn, org_id=old)]
+        assert kept == ["Their Own Find"], "hand-added funders are the part worth keeping"
+
+
+def test_an_admin_with_colleagues_cannot_join_their_way_out(db):
+    """Otherwise the only person who can invite or remove anybody leaves, and the org is
+    frozen with no way to unfreeze it. Closing an account already refuses this."""
+    from app.db import InviteError, create_invite, redeem_invite
+
+    with session(db) as conn:
+        home = org_for_user(conn, "uid-boss", "boss@example.org")
+        colleague_code = create_invite(conn, home)["code"]
+        redeem_invite(conn, colleague_code, "uid-staff", "staff@example.org")
+
+        elsewhere = org_for_user(conn, "uid-other", "other@example.org")
+        code = create_invite(conn, elsewhere)["code"]
+
+        with pytest.raises(InviteError, match="[Hh]and it over"):
+            redeem_invite(conn, code, "uid-boss", "boss@example.org")
+
+        # And nothing happened: not the move, and not the invitation either.
+        assert org_for_user(conn, "uid-boss", "boss@example.org") == home
+        row = conn.execute("SELECT redeemed_at FROM invites WHERE code=?",
+                           (code,)).fetchone()
+        assert row["redeemed_at"] is None, \
+            "a refused attempt burned a single-use code"
+
+
+def test_a_colleague_who_is_not_the_admin_may_leave_freely(db):
+    """The other side of the rule. Somebody who is not holding the keys is not trapped,
+    and the org they leave keeps everything because it still has members."""
+    from app.db import create_invite, redeem_invite
+
+    with session(db) as conn:
+        org_for_user(conn, "uid-pilot", "pilot@example.org")   # adopts the seeded org
+        home = org_for_user(conn, "uid-boss", "boss@example.org")
+        repo.create_funder(conn, {"name": "Stays Put",
+                                  "url": "https://stays.example/grants"}, org_id=home)
+        redeem_invite(conn, create_invite(conn, home)["code"],
+                      "uid-staff", "staff@example.org")
+
+        elsewhere = org_for_user(conn, "uid-other", "other@example.org")
+        result = redeem_invite(conn, create_invite(conn, elsewhere)["code"],
+                               "uid-staff", "staff@example.org")
+
+        assert result["stranded"] is False
+        assert [f["name"] for f in repo.list_funders(conn, org_id=home)] == ["Stays Put"]
+
+
+def test_redeeming_a_code_for_the_org_you_are_already_in_is_a_no_op(db):
+    """Re-pasting a code you have used should say "you are in", not throw — and must not
+    take you out through `remove_member` and straight back in, which on a one-person org
+    would strand it and delete the findings you are looking at."""
+    from app.db import create_invite, redeem_invite
+
+    with session(db) as conn:
+        home = org_for_user(conn, "uid-boss", "boss@example.org")
+        repo.create_run(conn, "r-keep", org_id=home)
+        code = create_invite(conn, home)["code"]
+
+        result = redeem_invite(conn, code, "uid-boss", "boss@example.org")
+
+        assert result == {"org_id": home, "left_org": None, "stranded": False}
+        assert len(repo.list_runs(conn, org_id=home)) == 1, "it deleted its own org"
 
 
 # --- a new org starts clean ---------------------------------------------------
@@ -1074,3 +1182,108 @@ def test_closing_an_org_keeps_what_it_contributed_and_drops_the_copies(db):
         # And it is still on offer to everybody else, which is the reason to keep it.
         assert [x["name"] for x in repo.shared_funders(conn, org_id=A)] == \
             ["Their Own Research"]
+
+
+# --- pause vs block vs delete ---------------------------------------------------
+#
+# Three actions, and the middle one did not exist. Unticking set `active=0` and "Remove"
+# deleted the row, which reads backwards: the reversible thing was hidden in a checkbox
+# and the permanent one was a button on every row.
+
+def test_pausing_a_funder_leaves_it_offerable_but_unsearched(db):
+    """A pause is seasonal. It must not stop the researched lists mentioning the funder,
+    because the org has not said they never want to hear about it."""
+    with session(db) as conn:
+        org_for_user(conn, "uid-1", "first@example.org")
+        org = org_for_user(conn, "uid-2", "second@example.org")
+        f = repo.create_funder(conn, {"name": "Parker", "url": "https://p.example/g"},
+                               org_id=org)
+        repo.update_funder(conn, f["id"], {"active": False}, org_id=org)
+
+        assert repo.list_funders(conn, org_id=org, active_only=True) == []
+        still_there = repo.list_funders(conn, org_id=org)
+        assert len(still_there) == 1 and still_there[0]["blocked"] is False
+
+
+def test_a_blocked_funder_is_never_searched(db):
+    from agent.sources import sources_from_db
+
+    with session(db) as conn:
+        org_for_user(conn, "uid-1", "first@example.org")
+        org = org_for_user(conn, "uid-2", "second@example.org")
+        f = repo.create_funder(conn, {"name": "Parker", "url": "https://p.example/g"},
+                               org_id=org)
+        repo.update_funder(conn, f["id"], {"blocked": True}, org_id=org)
+
+        assert repo.list_funders(conn, org_id=org, active_only=True) == [], \
+            "blocked has to mean unsearched even though `active` is still 1"
+
+    sources, _skipped = sources_from_db(3, [], org_id=org)
+    assert [s.funder for s in sources] == [], "the crawl would still have fetched it"
+
+
+def test_a_blocked_funder_is_not_offered_by_a_researched_list(db):
+    """The reason blocking cannot just be `active=0`. Importing a starter list used to
+    re-offer anything the org had taken off, every time."""
+    from agent.directory import STARTER_LISTS
+    from app.db import import_starter_list
+
+    key = STARTER_LISTS[0].key
+    with session(db) as conn:
+        org_for_user(conn, "uid-1", "first@example.org")
+        org = org_for_user(conn, "uid-2", "second@example.org")
+
+        import_starter_list(conn, key, org)
+        imported = repo.list_funders(conn, org_id=org)
+        assert imported, "the fixture list is empty"
+
+        victim = imported[0]
+        repo.update_funder(conn, victim["id"], {"blocked": True}, org_id=org)
+
+        before = len(repo.list_funders(conn, org_id=org))
+        import_starter_list(conn, key, org)          # import it again
+        after = repo.list_funders(conn, org_id=org)
+
+    assert len(after) == before, "a second import added rows"
+    blocked_row = next(f for f in after if f["id"] == victim["id"])
+    assert blocked_row["blocked"] is True, "the import un-blocked it"
+
+
+def test_a_blocked_funder_is_not_offered_by_another_nonprofit(db):
+    """The other place a funder gets suggested. Blocking is 'stop suggesting this', so
+    it has to reach the screen whose whole job is suggesting things."""
+    with session(db) as conn:
+        org_for_user(conn, "uid-1", "first@example.org")
+        sharer = org_for_user(conn, "uid-share", "share@example.org")
+        me = org_for_user(conn, "uid-me", "me@example.org")
+
+        repo.update_settings(conn, {"share_funders": True}, org_id=sharer)
+        theirs = repo.create_funder(
+            conn, {"name": "Shared Foundation", "url": "https://shared.example/grants"},
+            org_id=sharer)
+        conn.execute("UPDATE funders SET check_ok=1, check_note='ok' WHERE id=? AND org_id=?",
+                     (theirs["id"], sharer))
+
+        assert [f["name"] for f in repo.shared_funders(conn, org_id=me)] \
+            == ["Shared Foundation"], "the precondition: it is on offer"
+
+        mine = repo.create_funder(
+            conn, {"name": "Shared Foundation", "url": "https://shared.example/grants"},
+            org_id=me)
+        repo.update_funder(conn, mine["id"], {"blocked": True}, org_id=me)
+
+        assert repo.shared_funders(conn, org_id=me) == [], \
+            "a funder this org blocked came back as somebody else's suggestion"
+
+
+def test_blocking_reaches_the_indexed_databases_too(db):
+    """Same second door the remove list already has: a blocked funder's grants can
+    arrive through Grants.gov even though we never fetched their own page."""
+    with session(db) as conn:
+        org_for_user(conn, "uid-1", "first@example.org")
+        org = org_for_user(conn, "uid-2", "second@example.org")
+        f = repo.create_funder(conn, {"name": "Parker", "url": "https://p.example/g"},
+                               org_id=org)
+        repo.update_funder(conn, f["id"], {"blocked": True}, org_id=org)
+
+        assert "parker" in repo.excluded_funder_names(conn, org_id=org)

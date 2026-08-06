@@ -4,6 +4,7 @@ import DownloadCsv from "../components/DownloadCsv";
 import Findings from "../components/Findings";
 import Programs from "../components/Programs";
 import RunLog from "../components/RunLog";
+import Stages from "../components/Stages";
 import SearchSettings from "../components/SearchSettings";
 import { Busy } from "../components/Spinner";
 import StatusStrip from "../components/StatusStrip";
@@ -181,6 +182,16 @@ export default function Dashboard({ state, onChange, onGoto }) {
         </div>
       )}
 
+      {/* Which programs this week's search is for. At the TOP, because it is a
+          question you answer before reading results rather than after — it used to be a
+          list of full-width rows at the foot of the page, below the findings it decides
+          the shape of. */}
+      <Programs
+        programs={state.programs}
+        globalFloor={state.settings.min_award}
+        onChange={onChange}
+      />
+
       {/* Everything standing between this org and a working search, each with the page
           that fixes it. The two notices this replaced said what was missing but not what
           it meant, and there was nothing at all for the two commonest causes of an empty
@@ -258,7 +269,6 @@ export default function Dashboard({ state, onChange, onGoto }) {
         <SearchSettings
           draft={draft}
           set={set}
-          sectors={state.sectors_available}
           dirty={dirty}
           saving={saving}
           // Wrapped, not passed: `onSave` is wired straight to a button's onClick, so
@@ -275,8 +285,29 @@ export default function Dashboard({ state, onChange, onGoto }) {
         />
       )}
 
+      {/* What the search did, as three boxes — the cost order, which is also the
+          argument: free, cheap, expensive. Hidden while a run is going, because the
+          numbers are the *finished* run's and showing last week's funnel above a live
+          log reads as this run's progress. */}
+      {!isRunning && state.latest_run && (
+        <Stages
+          run={state.latest_run}
+          settings={state.settings}
+          choices={state.model_choices || {}}
+          defaults={state.model_defaults || {}}
+          onChange={onChange}
+        />
+      )}
+
+      {/* The log is kept verbatim and moved behind a disclosure. It is still the only
+          thing that explains a run that died halfway, so it stays reachable — and it
+          opens automatically while a run is going, because during a run it is the only
+          thing there is to watch. */}
       {(isRunning || live.log?.length > 0) && (
-        <RunLog isRunning={isRunning} log={live.log} />
+        <details className="runlog-details" open={isRunning}>
+          <summary>Show the technical log</summary>
+          <RunLog isRunning={isRunning} log={live.log} />
+        </details>
       )}
 
       {/* "Nothing to review" has several very different causes and used to have one
@@ -286,14 +317,6 @@ export default function Dashboard({ state, onChange, onGoto }) {
           key sends them to fix the wrong thing. */}
       <Findings clear={clear} needsCheck={needsCheck} emptyBody={emptyBody()} />
 
-      {/* Setup, at the bottom. Two columns on a desk, one on a laptop. */}
-      <div className="paircols">
-        <Programs
-          programs={state.programs}
-          globalFloor={state.settings.min_award}
-          onChange={onChange}
-        />
-      </div>
     </>
   );
 }

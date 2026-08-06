@@ -28,9 +28,11 @@ from .config import Config, ConfigUnavailable, load_config
 from .fetch import Fetcher
 from .filters import Flag, apply_filters
 from .models import (
+    MAX_REJECTS,
     Opportunity,
     Program,
     RawCandidate,
+    Reject,
     RunLog,
     SourceHealth,
     SourceKind,
@@ -179,8 +181,9 @@ async def crawl(cfg: Config, run: RunLog,
         # for and never got: "the Equity Impact Grant is a hard reject — that is one
         # program, not the whole County. Other County solicitations stay eligible."
         if _on_remove_list(source.funder, page.title, excluded):
-            key = "on_the_remove_list"
-            run.rejected_by_filter[key] = run.rejected_by_filter.get(key, 0) + 1
+            run.reject(1, "on_the_remove_list", funder=source.funder,
+                       title=page.title, url=page.url,
+                       detail="you took this one off the search")
             return
 
         # Already shown to the user this month. Dropping it here — in the free tier,
@@ -188,20 +191,27 @@ async def crawl(cfg: Config, run: RunLog,
         # Haiku call, and they do not re-read the same row four Thursdays running.
         # The archive resets monthly, so it can legitimately come back later.
         if stable_id(page.url, page.title) in already_seen:
-            key = "already_seen_this_month"
-            run.rejected_by_filter[key] = run.rejected_by_filter.get(key, 0) + 1
+            run.reject(1, "already_seen_this_month", funder=source.funder,
+                       title=page.title, url=page.url,
+                       detail="already on this month's list")
             run.duplicates_skipped += 1
             return
 
         if _is_thin_landing_page(page):
-            key = "thin_landing_page"
-            run.rejected_by_filter[key] = run.rejected_by_filter.get(key, 0) + 1
+            run.reject(1, "thin_landing_page", funder=source.funder,
+                       title=page.title, url=page.url,
+                       detail=f"{len(page.text)} characters, no amount and no deadline")
             return
         verdict = apply_filters(page, source.funder, cfg)
         if verdict.rejected and verdict.reason:
-            key = verdict.reason.value
-            run.rejected_by_filter[key] = run.rejected_by_filter.get(key, 0) + 1
-            log.debug("    rejected [%s] %s — %s", key, page.title[:50], verdict.detail)
+            # `verdict.detail` is the specific fact — "$4,000 < $10,000", the parsed
+            # deadline, the matched remove-list fragment. It was logged at DEBUG and
+            # dropped; it is the one thing that makes a reject checkable by the person
+            # whose funder list produced it.
+            run.reject(1, verdict.reason.value, funder=source.funder,
+                       title=page.title, url=page.url, detail=verdict.detail)
+            log.debug("    rejected [%s] %s — %s",
+                      verdict.reason.value, page.title[:50], verdict.detail)
             return
         if Flag.MATCH_REQUIREMENT in verdict.flags:
             # Counted, not narrated. The structured sources state matching funds on
@@ -240,6 +250,9 @@ async def crawl(cfg: Config, run: RunLog,
                 for warning in result.warnings:
                     run.notes.append(warning)
                     log.warning("  ⚠ %s", warning)
+                # Already aggregated by the adapter, so these are counts without rows.
+                # The stage boxes show them in the totals and say the detail is not
+                # available rather than inventing one.
                 for key, count in result.rejected.items():
                     run.rejected_by_filter[key] = run.rejected_by_filter.get(key, 0) + count
                 for page in result.pages:
@@ -421,20 +434,37 @@ def evaluate(survivors: list[tuple[ParsedPage, Source]], cfg: Config, run: RunLo
             [p for p in source.programs if p in cfg.programs_active],
         )
         try:
+            run.triaged += 1
             relevant, reason = triage(candidate, budget, cfg)     # tier 2 — Haiku
             if not relevant:
-                key = "triage_not_an_opportunity"
-                run.rejected_by_filter[key] = run.rejected_by_filter.get(key, 0) + 1
+                # `reason` is the model's own ≤15-word answer. It used to be formatted
+                # into a log line and dropped, which meant the one tier that can explain
+                # itself in English was the one tier that explained nothing.
+                run.reject(2, "triage_not_an_opportunity", funder=source.funder,
+                           title=candidate.title, url=candidate.source_url,
+                           detail=reason)
                 continue
+            run.scored += 1
             opp = score_one(candidate, source, cfg, budget)        # tier 3 — Sonnet
             # Post-scoring deadline guard: §7 rejects passed deadlines, but the
             # deterministic parser (tier 1) often can't find the date. Sonnet does.
             # Enforce the hard reject here, now that we have a trustworthy deadline.
             if opp.deadline is not None and opp.deadline < date.today():
-                key = "deadline_passed"
-                run.rejected_by_filter[key] = run.rejected_by_filter.get(key, 0) + 1
+                run.reject(3, "deadline_passed", funder=source.funder,
+                           title=opp.title, url=opp.source_url,
+                           detail=f"closed {opp.deadline.isoformat()}")
                 log.info("  dropped (deadline %s passed): %s", opp.deadline, opp.title[:40])
                 continue
+
+            # Not a reject — it is kept and shown — but the accuracy gate stripping a
+            # value is the single most useful thing tier 3 can tell somebody about its
+            # own reliability, and it was only ever a log warning.
+            if opp.needs_human_check and len(run.rejects) < MAX_REJECTS:
+                run.rejects.append(Reject(
+                    stage=3, reason="claim_could_not_be_confirmed",
+                    funder=source.funder, title=opp.title, url=opp.source_url,
+                    detail="kept, but a value the model reported was not on the page",
+                ))
             kinds[opp.source_kind] += 1
             out.append(opp)
         except BudgetExceeded as exc:
@@ -472,7 +502,39 @@ def evaluate(survivors: list[tuple[ParsedPage, Source]], cfg: Config, run: RunLo
     if run.stop_reason is None:
         run.stop_reason = StopReason.SOURCES_EXHAUSTED
     run.usd_spent = budget.spent_usd
+    run.usd_by_stage = stage_costs(budget, cfg)
     return out
+
+
+def stage_costs(budget: Budget, cfg: Config | None = None) -> dict[str, float]:
+    """Split the run's spend across the three tiers, for the stage boxes.
+
+    `Budget.by_model` already tracks spend per model; this is only the mapping from a
+    model name to the tier it serves. Tier 1 is always 0.00 and is included anyway,
+    because "the free tier is free" is the whole cost argument in CLAUDE.md §5 and a box
+    with no cost line next to two that have one reads as missing data rather than as
+    zero.
+
+    Anything under a model we do not recognise lands on tier 3: an unexpected model is
+    far more likely to be a scoring choice than a triage one, and over-attributing cost
+    to the expensive tier is the safe direction to be wrong in.
+    """
+    from .score import SCORING_MODEL, TRIAGE_MODEL
+
+    triage = (cfg.triage_model if cfg else "") or TRIAGE_MODEL
+    scoring = (cfg.scoring_model if cfg else "") or SCORING_MODEL
+
+    costs = {"1": 0.0, "2": 0.0, "3": 0.0}
+    for model, spent in budget.by_model.items():
+        # The two stages can legitimately be the same model — somebody who picks Sonnet
+        # for triage as well. Then `by_model` has one entry for both and there is no way
+        # to split it, so it lands on scoring: over-attributing to the expensive tier is
+        # the safe direction, and the total is right either way.
+        if model == triage and model != scoring:
+            costs["2"] += spent
+        else:
+            costs["3"] += spent
+    return costs
 
 
 def _report(cfg: Config, run: RunLog, opportunities: list[Opportunity]) -> None:

@@ -30,16 +30,90 @@ from .verify import quote_on_page, unsourced_figures, year_in_quote
 
 log = logging.getLogger(__name__)
 
-TRIAGE_MODEL = "claude-haiku-4-5"    # §5: Haiku for triage
-SCORING_MODEL = "claude-sonnet-4-6"  # §5: Sonnet for final scoring
+# The defaults, and the recommendation the picker chips. §5's tiering is Haiku to
+# triage and Sonnet to score; these are what you get if nobody chooses.
+TRIAGE_MODEL = "anthropic:claude-haiku-4-5"
+SCORING_MODEL = "anthropic:claude-sonnet-4-6"
 
-# USD per million tokens, standard published rates (Haiku 4.5 $1/$5, Sonnet 4.6
-# $3/$15). We budget at the standard rate: over-estimating spend makes the ceiling
-# stop us early, which is the safe direction to be wrong in.
+# USD per million tokens, standard published rates. We budget at the standard rate:
+# over-estimating spend makes the ceiling stop us early, which is the safe direction to
+# be wrong in.
+#
+# **Every selectable model must have an entry.** `Budget.check` does `PRICING[model]`
+# and a KeyError there aborts the run — so a model offered in the picker and missing
+# here is not a mispriced run, it is no run at all. `test_score.py` asserts the two
+# lists agree.
+#
+# Keys are `provider:model`, which is not premature: the setting is stored in that shape
+# so adding a second provider later is a new entry here rather than a migration over
+# everybody's saved settings. There is one provider today and the UI never shows the
+# prefix.
 PRICING = {
-    TRIAGE_MODEL: {"input": 1.00, "output": 5.00},
-    SCORING_MODEL: {"input": 3.00, "output": 15.00},
+    "anthropic:claude-haiku-4-5":   {"input": 1.00, "output": 5.00},
+    "anthropic:claude-sonnet-4-6":  {"input": 3.00, "output": 15.00},
+    "anthropic:claude-opus-4-1":    {"input": 15.00, "output": 75.00},
 }
+
+# What the picker offers, per stage, and what each one is for in one line. Ordered
+# cheapest first, which is also the order of §5's argument.
+MODEL_CHOICES = {
+    2: [
+        {"id": "anthropic:claude-haiku-4-5", "label": "Haiku",
+         "note": "Fast and very cheap. The recommended choice for a yes/no question.",
+         "recommended": True},
+        {"id": "anthropic:claude-sonnet-4-6", "label": "Sonnet",
+         "note": "Reads more carefully, and costs roughly three times as much for a "
+                 "question that is usually obvious."},
+    ],
+    3: [
+        {"id": "anthropic:claude-haiku-4-5", "label": "Haiku",
+         "note": "Cheapest, but scoring is the judgement you are actually paying for."},
+        {"id": "anthropic:claude-sonnet-4-6", "label": "Sonnet",
+         "note": "The recommended choice. Reads the page in full and explains its score.",
+         "recommended": True},
+        {"id": "anthropic:claude-opus-4-1", "label": "Opus",
+         "note": "The most careful reader, and five times Sonnet's price. On a long "
+                 "funder list this will hit your per-search limit before the list ends."},
+    ],
+}
+
+
+def model_label(model_id: str) -> str:
+    """"anthropic:claude-sonnet-4-6" -> "Sonnet". Falls back to the bare model name."""
+    for choices in MODEL_CHOICES.values():
+        for c in choices:
+            if c["id"] == model_id:
+                return c["label"]
+    return (model_id or "").split(":")[-1]
+
+
+def api_model(model_id: str) -> str:
+    """Strip the provider prefix for the wire. One provider today; this is the seam."""
+    return (model_id or "").split(":", 1)[-1]
+
+
+def price_for(model_id: str) -> dict[str, float]:
+    """The rate card for a model, accepting a bare name as well as `provider:model`.
+
+    A KeyError here does not mis-price anything — it aborts the whole run on the first
+    call. The prefix arrived with per-stage model choice, and anything still passing a
+    bare `claude-sonnet-4-6` (a script, the CLI, a caller we have not thought of) would
+    die rather than degrade. With one provider the mapping is unambiguous, so it is
+    resolved instead.
+
+    A genuinely unknown model still raises, and should: that is a model nobody has
+    priced, and guessing a price for it would put a wrong number under a spend limit.
+    """
+    if model_id in PRICING:
+        return PRICING[model_id]
+    if ":" not in (model_id or ""):
+        prefixed = f"anthropic:{model_id}"
+        if prefixed in PRICING:
+            return PRICING[prefixed]
+    raise KeyError(
+        f"{model_id!r} has no entry in PRICING, so its cost cannot be checked against "
+        "the spend limit. Every selectable model needs one."
+    )
 
 TRIAGE_TEXT_CAP = 8_000     # chars ≈ 2k tokens (§8: "cap at ~2k tokens per candidate")
 SCORING_TEXT_CAP = 12_000
@@ -52,6 +126,10 @@ SCORING_MAX_TOKENS = 8_000  # headroom: max_tokens caps thinking + response on S
 # boilerplate (§4) lands in the prompt. Asserting the threshold rather than pasting a
 # marker that does nothing keeps the code honest about which it is.
 SONNET_CACHE_MIN_TOKENS = 2048
+
+
+# Recognised by app/runner.py and stripped from the visible log.
+SPEND_MARKER = "::spend "
 
 
 class BudgetExceeded(RuntimeError):
@@ -68,7 +146,7 @@ class Budget:
     by_model: dict[str, float] = field(default_factory=dict)
 
     def _cost(self, model: str, in_tok: int, out_tok: int) -> float:
-        p = PRICING[model]
+        p = price_for(model)
         return (in_tok * p["input"] + out_tok * p["output"]) / 1_000_000
 
     def check(self, model: str, est_in: int, est_out: int) -> None:
@@ -85,6 +163,16 @@ class Budget:
         self.spent_usd += cost
         self.calls += 1
         self.by_model[model] = self.by_model.get(model, 0.0) + cost
+        # The running total, for the status strip. `usd_spent` is otherwise only written
+        # when the run finishes, so the strip read $0.0000 for the whole of a ten-minute
+        # search and then jumped to the final figure — on the one number the app asks to
+        # be trusted with.
+        #
+        # A marker line on stdout rather than a database write per call: the runner is
+        # already reading every line the child prints, so this costs one string, and the
+        # child writing the run row mid-run would race the sink that owns it. `_pump`
+        # recognises the prefix and keeps it out of the log people read.
+        log.info("%s%.6f", SPEND_MARKER, self.spent_usd)
         return cost
 
 
@@ -463,16 +551,17 @@ def triage(candidate: RawCandidate, budget: Budget,
         f"URL: {candidate.source_url}\n\n"
         f"{candidate.text[:TRIAGE_TEXT_CAP]}"
     )
-    budget.check(TRIAGE_MODEL, _estimate_tokens(system + body), TRIAGE_MAX_TOKENS)
+    model = cfg.triage_model or TRIAGE_MODEL
+    budget.check(model, _estimate_tokens(system + body), TRIAGE_MAX_TOKENS)
 
     resp = _client().messages.create(
-        model=TRIAGE_MODEL,
+        model=api_model(model),
         max_tokens=TRIAGE_MAX_TOKENS,
         system=system,
         messages=[{"role": "user", "content": body}],
         output_config={"format": {"type": "json_schema", "schema": TRIAGE_SCHEMA}},
     )
-    cost = budget.record(TRIAGE_MODEL, resp.usage.input_tokens, resp.usage.output_tokens)
+    cost = budget.record(model, resp.usage.input_tokens, resp.usage.output_tokens)
     data = _first_json(resp)
     log.debug("  triage %-40s -> %s (%s) $%.5f",
               candidate.title[:40], data["is_opportunity"], data["reason"], cost)
@@ -495,7 +584,8 @@ def score_one(candidate: RawCandidate, source: Source, cfg: Config,
         f"\nPage title: {candidate.title}\nURL: {candidate.source_url}\n\n"
         f"{candidate.text[:SCORING_TEXT_CAP]}"
     )
-    budget.check(SCORING_MODEL, _estimate_tokens(system + body), SCORING_MAX_TOKENS)
+    model = cfg.scoring_model or SCORING_MODEL
+    budget.check(model, _estimate_tokens(system + body), SCORING_MAX_TOKENS)
 
     system_block: dict = {"type": "text", "text": system}
     if _estimate_tokens(system) >= SONNET_CACHE_MIN_TOKENS:
@@ -503,7 +593,7 @@ def score_one(candidate: RawCandidate, source: Source, cfg: Config,
         system_block["cache_control"] = {"type": "ephemeral"}
 
     resp = _client().messages.create(
-        model=SCORING_MODEL,
+        model=api_model(model),
         max_tokens=SCORING_MAX_TOKENS,
         system=[system_block],
         messages=[{"role": "user", "content": body}],
@@ -514,7 +604,7 @@ def score_one(candidate: RawCandidate, source: Source, cfg: Config,
             "effort": "medium",
         },
     )
-    cost = budget.record(SCORING_MODEL, resp.usage.input_tokens, resp.usage.output_tokens)
+    cost = budget.record(model, resp.usage.input_tokens, resp.usage.output_tokens)
     data = _first_json(resp)
 
     page_text = candidate.text

@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import repo
+from agent.score import SPEND_MARKER
 from .db import db_path, dumps, session
 from .secrets import SOURCE_ENVIRONMENT, resolve_api_key
 
@@ -146,23 +147,12 @@ def preflight(conn, *, org_id: str, no_llm: bool = False) -> list[dict]:
             ),
             "page": "discover",
         })
-    else:
-        # Funders on the list, but the sector ticks or the tier may exclude every one of
-        # them. Same empty result, completely different fix, so it gets its own sentence.
-        # Asked of the same function the crawl will ask, not of a second copy of the rule.
-        sectors = list(settings["sectors_active"])
-        found = sources_from_db(max_tier_for(sectors), sectors, org_id=org_id)
-        if found is not None and not found[0]:
-            out.append({
-                "code": "no_searchable_funders",
-                "message": (
-                    f"You have {active} funder{'' if active == 1 else 's'} on your list, "
-                    "but none of them match the kinds of funding you have ticked, so "
-                    'there is nothing to fetch. Tick more kinds under "Adjust search '
-                    'settings", or add funders on Discover funders.'
-                ),
-                "page": "discover",
-            })
+
+    # A "your funders do not match the ticked sectors" refusal used to follow, for the
+    # case where the list was non-empty but the sector filter excluded all of it. It is
+    # gone with that filter (R8): the funder list is no longer narrowed by sector, so a
+    # funder on the list is a funder that gets fetched, and the state cannot arise. The
+    # empty-list refusal above still covers the one that can.
 
     return out
 
@@ -181,6 +171,21 @@ def drain_notice() -> str:
 
 # Lines from the child that mean something to a non-technical reader. Everything else
 # (httpx chatter, robots.txt fetches) is kept in the buffer but not surfaced as status.
+def _spend_from(line: str) -> float | None:
+    """Pull the running total out of a `::spend 0.041234` marker, or return None.
+
+    Tolerant on purpose — a malformed marker is a cosmetic loss, and raising here would
+    take down the thread draining the child's output.
+    """
+    marker = SPEND_MARKER.strip()
+    if marker not in line:
+        return None
+    try:
+        return float(line.rsplit(marker, 1)[1].strip().split()[0])
+    except (IndexError, ValueError):
+        return None
+
+
 _INTERESTING = ("✓", "✗", "⚠", "scored", "Crawling", "candidates survived",
                 "Archive", "Sources", "dropped", "Budget", "Wrote", "RUN SUMMARY")
 
@@ -410,6 +415,13 @@ class RunManager:
                 line = raw.rstrip()
                 if not line:
                     continue
+                # The running spend total, emitted by Budget.record after every call.
+                # Consumed and dropped: it is machine chatter, and a log full of
+                # "::spend 0.0421" is worse than the delay it fixes.
+                spend = _spend_from(line)
+                if spend is not None:
+                    self._write_spend(slot.run_id, spend)
+                    continue
                 slot.lines.append(line)
                 if any(token in line for token in _INTERESTING):
                     self._write_progress(slot.run_id, line)
@@ -421,6 +433,18 @@ class RunManager:
             with self._lock:
                 if self._slots.get(slot.org_id) is slot:
                     del self._slots[slot.org_id]
+
+    def _write_spend(self, run_id: str, spent: float) -> None:
+        """The live figure the status strip reads, written straight onto the run row.
+
+        Best-effort like `_write_progress`: a search must not die because one cosmetic
+        write lost a race with the sink.
+        """
+        try:
+            with session() as conn:
+                repo.update_run(conn, run_id, usd_spent=round(spent, 6))
+        except Exception as exc:  # noqa: BLE001
+            log.debug("could not write live spend for %s: %s", run_id, exc)
 
     def _write_progress(self, run_id: str, message: str) -> None:
         try:
