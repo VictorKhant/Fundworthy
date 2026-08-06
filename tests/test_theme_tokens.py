@@ -130,14 +130,46 @@ def test_an_ai_judgement_never_looks_like_a_sourced_value(palettes, theme):
     ("danger", "card", "a destructive action"),
 ])
 def test_text_carries_on_its_own_background(palettes, theme, fg, bg, label):
-    """WCAG AA for normal text, in both themes.
-
-    `--muted` on `--card` is deliberately not in this list: it sits at 3.68 in the
-    light palette, which predates dark mode and is the researched theme. Raising it is
-    a visual change to every helper line in the app and belongs to its own decision,
-    not to this one. The dark value is 4.87, so dark mode does not inherit the problem.
-    """
+    """WCAG AA for normal text, in both themes."""
     light, dark = palettes
     t = light if theme == "light" else {**light, **dark}
     ratio = contrast(t[fg], t[bg])
     assert ratio >= 4.5, f"{theme}: {label} is {ratio:.2f}:1, under the 4.5:1 floor"
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+@pytest.mark.parametrize("surface", ["card", "panel", "bg"])
+def test_muted_text_carries_on_every_surface_it_sits_on(palettes, theme, surface):
+    """`--muted` has its own test because it has three backgrounds and used to fail on
+    all of them — 3.68 / 3.56 / 3.38 in the light palette.
+
+    It is the third most-used text colour in the app and most of it is the helper line
+    under a field, so this was a large amount of text below AA. The fix was 8% of
+    lightness with the hue untouched.
+
+    Parametrised over all three surfaces on purpose. The first attempt darkened it only
+    until it cleared white and shipped something that still failed on `--panel` and
+    `--bg`, which is where most muted text actually sits. The binding surface is the
+    lightest one in light mode and the *darkest* one in dark mode, and testing one
+    surface cannot notice that.
+    """
+    light, dark = palettes
+    t = light if theme == "light" else {**light, **dark}
+    ratio = contrast(t["muted"], t[surface])
+    assert ratio >= 4.5, (
+        f"{theme}: muted text on --{surface} is {ratio:.2f}:1, under the 4.5:1 floor"
+    )
+
+
+def test_muted_stays_a_step_below_the_secondary_ink(palettes):
+    """The reason it cannot simply be darkened until the test passes: ink → secondary →
+    muted is a hierarchy, and collapsing muted into `--body` would satisfy contrast by
+    removing the distinction the colour exists to draw."""
+    light, dark = palettes
+    for theme, t in (("light", light), ("dark", {**light, **dark})):
+        muted = contrast(t["muted"], t["card"])
+        body = contrast(t["body"], t["card"])
+        assert body > muted * 1.25, (
+            f"{theme}: --muted ({muted:.2f}) has crept up to --body ({body:.2f}), so "
+            "helper text no longer reads as secondary"
+        )
