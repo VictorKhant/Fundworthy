@@ -5,6 +5,7 @@ import JoinOrg from "./components/JoinOrg";
 import MaintenanceBanner from "./components/MaintenanceBanner";
 import Tutorial from "./components/Tutorial";
 import Sidebar from "./components/Sidebar";
+import Spinner from "./components/Spinner";
 import Archive from "./pages/Archive";
 import Dashboard from "./pages/Dashboard";
 import Discover from "./pages/Discover";
@@ -197,10 +198,15 @@ export default function App() {
   // Read from the account, not from a flag we store: whether you still need setting up
   // *is* whether you have a key and a ticked program. Nothing to drift out of sync, and
   // doing a step elsewhere in the app counts.
+  // Funders are in this test now that the walkthrough has a step for them. Every new org
+  // is given the starter lists, so it rarely fires — but an org that removed every funder
+  // has an app that can do nothing, and the dashboard is the wrong place to discover that.
   const needsTutorial =
     Boolean(state) &&
     !tutorialDone &&
-    (!state.key_available || !(state.programs || []).some((p) => p.active));
+    (!state.key_available ||
+      !(state.programs || []).some((p) => p.active) ||
+      !(state.funders || []).some((f) => f.active));
 
   const untouched =
     authEnabled() &&
@@ -242,7 +248,12 @@ export default function App() {
           </div>
         )}
 
-        {!state && !error && <p className="muted">Loading…</p>}
+        {!state && !error && (
+          <p className="loading-line">
+            <Spinner label="Loading your dashboard" />
+            Loading your dashboard…
+          </p>
+        )}
 
         {state && page === "dashboard" && untouched && (
           <JoinOrg
@@ -261,7 +272,10 @@ export default function App() {
         )}
 
         {state && page === "dashboard" && !needsTutorial && (
-          <Dashboard state={state} onChange={refresh} />
+          // `onGoto` is how a "you have no funders" notice can be a button rather than a
+          // sentence naming a page. Telling somebody to open Discover funders and leaving
+          // them to find it is the step people abandon.
+          <Dashboard state={state} onChange={refresh} onGoto={setPage} />
         )}
         {state && page === "settings" && <Settings state={state} onChange={refresh} />}
         {page === "archive" && <Archive />}

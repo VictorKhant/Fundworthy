@@ -234,7 +234,11 @@ def test_funder_crud_and_deactivation(client):
     funders = client.get("/api/funders").json()["funders"]
     assert len(funders) >= 8
 
-    target = next(f for f in funders if f["warm"])
+    # A funder the org has said it already receives money from — said by them, on the
+    # editor, because the starter lists no longer arrive claiming relationships on
+    # anyone's behalf.
+    target = funders[0]
+    client.put(f"/api/funders/{target['id']}", json={"warm": True})
     client.put(f"/api/funders/{target['id']}", json={"active": False})
 
     after = {f["id"]: f for f in client.get("/api/funders").json()["funders"]}
@@ -272,6 +276,100 @@ def test_the_kill_switch_blocks_the_rerun_button(client):
     r = client.post("/api/runs", json={"no_llm": True})
     assert r.status_code == 409
     assert "switched off" in r.json()["detail"]
+
+
+# --- refusing a search that could not have worked -----------------------------
+#
+# Every one of these used to be found out the expensive way. The button started a
+# subprocess, the subprocess politely crawled every funder on the list for five to ten
+# minutes, and the user got back an empty page with nothing on it to explain why. All
+# three causes are a database read away, and none of them is the user's fault for not
+# knowing.
+
+def _codes(client) -> list[str]:
+    return [b["code"] for b in client.get("/api/state").json()["blockers"]]
+
+
+def _tick_a_program(client) -> None:
+    first = client.get("/api/programs").json()["programs"][0]
+    client.put(f"/api/programs/{first['id']}", json={"active": True})
+
+
+def test_a_search_with_no_api_key_is_refused_instead_of_crawling_for_nothing(client):
+    """The expensive failure. Without a key the pipeline used to shrug, set
+    `use_llm = False`, fetch every funder anyway and score none of them."""
+    _tick_a_program(client)
+    assert "no_api_key" in _codes(client)
+
+    r = client.post("/api/runs", json={})
+    assert r.status_code == 409
+    assert "Settings" in r.json()["detail"], "say which page fixes it"
+
+
+def test_the_free_crawl_mode_still_needs_no_key(client):
+    """`--no-llm` is a real mode — deterministic tiers, $0.00, nothing scored. Refusing
+    it for want of a key would be refusing the one thing that genuinely does not need
+    one."""
+    _tick_a_program(client)
+    with session() as conn:
+        from app.runner import preflight
+        assert not preflight(conn, org_id=DEFAULT_ORG_ID, no_llm=True)
+
+
+def test_a_search_with_an_empty_funder_list_is_refused(client):
+    """The funder list is the entire search space. Empty, a run does nothing at all —
+    and 'did nothing' and 'found nothing' render identically on the dashboard."""
+    client.post("/api/settings/api-key", json={"api_key": FAKE_KEY})
+    _tick_a_program(client)
+    for f in client.get("/api/funders").json()["funders"]:
+        client.delete(f"/api/funders/{f['id']}")
+
+    assert "no_funders" in _codes(client)
+    r = client.post("/api/runs", json={})
+    assert r.status_code == 409
+    assert "Discover funders" in r.json()["detail"]
+
+
+def test_funders_that_no_ticked_sector_matches_get_their_own_message(client):
+    """A different fix from an empty list, so a different sentence. Same empty result."""
+    client.post("/api/settings/api-key", json={"api_key": FAKE_KEY})
+    _tick_a_program(client)
+    for f in client.get("/api/funders").json()["funders"]:
+        client.delete(f"/api/funders/{f['id']}")
+    client.post("/api/funders", json={
+        "name": "A Foundation They Added", "url": "https://example.invalid/grants",
+        "sector": "foundation",
+    })
+    client.put("/api/settings", json={"sectors_active": ["arts_agency"]})
+
+    codes = _codes(client)
+    assert "no_searchable_funders" in codes, "they have one, it just isn't searchable"
+    assert "no_funders" not in codes, "an empty list is a different problem"
+
+
+def test_a_search_with_nothing_ticked_to_search_for_is_refused(client):
+    client.post("/api/settings/api-key", json={"api_key": FAKE_KEY})
+    for p in client.get("/api/programs").json()["programs"]:
+        client.put(f"/api/programs/{p['id']}", json={"active": False})
+
+    assert "no_programs" in _codes(client)
+    assert client.post("/api/runs", json={}).status_code == 409
+
+
+def test_a_fully_set_up_org_has_nothing_blocking_it(client):
+    client.post("/api/settings/api-key", json={"api_key": FAKE_KEY})
+    _tick_a_program(client)
+    assert _codes(client) == []
+
+
+def test_the_disabled_button_and_the_error_say_the_same_words(client):
+    """The invariant that keeps them honest. A button greyed out with one explanation
+    and a failure carrying a different one is how somebody concludes the app is broken —
+    so both come from `runner.preflight` and there is no second copy to drift."""
+    _tick_a_program(client)
+    blockers = client.get("/api/state").json()["blockers"]
+    assert blockers
+    assert client.post("/api/runs", json={}).json()["detail"] == blockers[0]["message"]
 
 
 def test_archive_endpoint_shape(client):

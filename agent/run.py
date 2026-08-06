@@ -676,13 +676,28 @@ async def main_async(args: argparse.Namespace) -> int:
     for warning in cfg.warnings:
         log.warning("⚠ %s", warning)
 
+    # Step 0b: is there anything to read pages *with*. Before the crawl, for the same
+    # reason the kill switch is before the crawl.
+    #
+    # This used to shrug and carry on with `use_llm = False`, which is the worst of both
+    # worlds: a full crawl — every funder fetched, robots checked, politeness delays
+    # observed, five to ten minutes of it — and then nothing scored at the end, because
+    # scoring was never possible. The user pressed Search, waited, and got an empty list
+    # with no explanation on it. Refusing up front costs them nothing and says which
+    # single thing to fix. `--no-llm` is still the way to ask for the free tiers on
+    # purpose, and it still works exactly as before.
     use_llm = not args.no_llm
     if use_llm and not os.environ.get("ANTHROPIC_API_KEY"):
-        log.warning(
-            "⚠ ANTHROPIC_API_KEY is not set — running deterministic tiers only. "
-            "Nothing will be scored. Use --no-llm to make this explicit."
+        run.stop_reason = StopReason.NO_API_KEY
+        run.finished_at = datetime.now(timezone.utc)
+        print(
+            "No Claude API key, so there is nothing to read funder pages with — "
+            "stopping before any page is fetched.\n"
+            "  Fix it: open Settings in the dashboard and paste your key.\n"
+            "  Or run with --no-llm to crawl and filter only, which costs nothing "
+            "and scores nothing."
         )
-        use_llm = False
+        return 0
 
     budget = Budget(ceiling_usd=args.budget or cfg.weekly_budget_usd)
 
@@ -717,6 +732,18 @@ async def main_async(args: argparse.Namespace) -> int:
         funder_990 = await enrich_990(run, cfg.org_id) if use_llm else {}
         opportunities = evaluate(survivors, cfg, run, budget, use_llm=use_llm,
                                  funder_990=funder_990)
+
+        # "Nothing was found" and "nothing was looked at" produce the same empty list
+        # and mean completely different things. `sources_exhausted` on zero sources
+        # reads as a quiet week; it is actually an empty funder list, which is the one
+        # state where the app can do nothing at all until the user acts.
+        if run.sources_attempted == 0:
+            run.stop_reason = StopReason.NO_FUNDERS
+            run.notes.append(
+                "No funders to search. Fundworthy only reads the funders on your list, "
+                "and yours has none that match the kinds of funding you have ticked. "
+                "Add some on Discover funders."
+            )
     except Exception as exc:  # noqa: BLE001
         # Whatever went wrong, the user still gets what we did find, plus a run log
         # saying it was incomplete. A silent empty Sheet on Thursday morning is

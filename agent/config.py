@@ -203,6 +203,23 @@ class ConfigUnavailable(RuntimeError):
     """Config could not be read while running in strict mode."""
 
 
+def max_tier_for(sectors_active) -> Tier:
+    """How far out a run reaches, given the sectors the user ticked.
+
+    Its own function because two callers need the same answer and they must not drift:
+    `load_from_db` uses it to build the config a run reads, and `app/runner.py` uses it
+    before the run starts, to work out whether the funder list will actually yield
+    anything to fetch. A "you have no funders to search" message derived from a
+    different tier rule than the crawl uses would be a lie in one of the two directions.
+    """
+    sectors = set(sectors_active or ())
+    if "government" in sectors:
+        return Tier.GOVERNMENT
+    if "intermediary" in sectors:
+        return Tier.INTERMEDIARY
+    return Tier.WARM
+
+
 # --- the database path (the normal one) ---------------------------------------
 
 def load_from_db(db_path=None, *, org_id: str | None = None) -> Config | None:
@@ -256,9 +273,7 @@ def load_from_db(db_path=None, *, org_id: str | None = None) -> Config | None:
     ]
     # Government sources are a real scope decision (§11 Q3), and the answer is yes —
     # the user wants RFPs and contracts too. Ticking the sector is what turns them on.
-    cfg.max_tier = Tier.GOVERNMENT if "government" in cfg.sectors_active else (
-        Tier.INTERMEDIARY if "intermediary" in cfg.sectors_active else Tier.WARM
-    )
+    cfg.max_tier = max_tier_for(cfg.sectors_active)
     return cfg
 
 

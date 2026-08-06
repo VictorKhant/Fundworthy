@@ -66,7 +66,7 @@ jobs:
           # never shipped (the VM builds its own from its .env). It has to be set to
           # something, because scripts/seo-urls.mjs deletes robots.txt and sitemap.xml
           # when it is empty, and the tests for those would then skip in CI.
-          VITE_SITE_URL: https://fundworthy.example.org
+          SITE_URL: https://fundworthy.example.org
       # Offline by construction — no API key, no network, nothing to spend.
       - run: python -m pytest tests/ -q
 

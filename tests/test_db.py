@@ -102,9 +102,26 @@ def test_the_other_four_programs_are_seeded_empty_not_invented(db):
 def test_seeds_funders_from_the_source_registry(db):
     with session(db) as conn:
         funders = repo.list_funders(conn, org_id=DEFAULT_ORG_ID)
-    warm = [f for f in funders if f["warm"]]
-    assert len(warm) == 8, "the eight partners from CLAUDE.md"
+    assert len(funders) >= 8
     assert all(f["sector"] for f in funders), "every funder carries a sector tag"
+
+
+def test_a_seeded_org_is_told_it_has_no_relationships_with_anybody(db):
+    """`Source.warm` is the pilot's fact about the pilot, and it is not transitive.
+
+    Importing it verbatim put "Existing relationship" on eight funders in the list of a
+    nonprofit that had signed up ten minutes earlier — an assertion about their
+    organisation that nobody at their organisation had made. Whether a relationship
+    exists is theirs to state, on the funder editor, and it starts unstated.
+    """
+    with session(db) as conn:
+        funders = repo.list_funders(conn, org_id=DEFAULT_ORG_ID)
+
+    assert not [f for f in funders if f["warm"]], "nobody's warmth but their own"
+    assert not [f for f in funders if f["sector"] == "warm_partner"], (
+        "sector_for() reads warmth, so it has to be derived from the cold copy too — "
+        "otherwise the chip goes but the 'Partners we already work with' heading stays"
+    )
 
 
 def test_award_floor_default_is_ten_thousand(db):
@@ -190,8 +207,13 @@ def test_funder_deactivation_keeps_the_record(db):
     leaves the search, but the relationship history stays."""
     with session(db) as conn:
         funders = repo.list_funders(conn, org_id=DEFAULT_ORG_ID)
-        target = next(f for f in funders if f["warm"])
+        # Marked warm here rather than found warm: an org states its own relationships,
+        # so the seed no longer arrives with any. Deactivating one is the same act
+        # either way — this is the funder they said they already receive money from.
+        target = funders[0]
+        repo.update_funder(conn, target["id"], {"warm": True}, org_id=DEFAULT_ORG_ID)
         repo.update_funder(conn, target["id"], {"active": False}, org_id=DEFAULT_ORG_ID)
+        assert repo.get_funder(conn, target["id"], org_id=DEFAULT_ORG_ID)["warm"] is True
 
         assert repo.get_funder(conn, target["id"], org_id=DEFAULT_ORG_ID)["active"] is False
         assert target["id"] not in {f["id"] for f in repo.list_funders(conn, active_only=True, org_id=DEFAULT_ORG_ID)}

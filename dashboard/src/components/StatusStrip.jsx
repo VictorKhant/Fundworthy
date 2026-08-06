@@ -11,10 +11,21 @@ import { pacificStamp } from "../api";
 const STOP_REASONS = {
   target_met: "Found enough for this week and stopped.",
   budget: "Hit the spending limit and stopped rather than going over.",
-  sources_exhausted: "Checked every funder on your list.",
+  sources_exhausted:
+    "Checked every funder on your list. Nothing new above your award floor is a "
+    + "normal week, not a fault.",
   disabled: "The researcher is switched off.",
   stopped_by_user: "You stopped it.",
   error: "Something went wrong — the log below says what.",
+  partial: "Something broke part-way through. What it had already found is above.",
+  // The two that used to be indistinguishable from a quiet week. Both mean the search
+  // could not have worked, and both name the one thing to change.
+  no_api_key:
+    "Stopped before reading anything: there was no Claude API key to read with. "
+    + "Add one on Settings.",
+  no_funders:
+    "Stopped without reading anything: there were no funders to search. Fundworthy "
+    + "only reads the funders on your list — add some on Discover funders.",
 };
 
 export default function StatusStrip({ enabled, run, ceiling, knobsOpen, onToggleKnobs }) {

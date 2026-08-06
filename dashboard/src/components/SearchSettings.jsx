@@ -166,9 +166,10 @@ export default function SearchSettings({
               Undo changes
             </button>
           )}
-          <button className="dark" onClick={onSave} disabled={saving || !dirty}>
-            {saving ? "Saving…" : "Save settings"}
-          </button>
+          <Busy className="dark" busy={saving} busyLabel="Saving"
+                onClick={onSave} disabled={!dirty}>
+            Save settings
+          </Busy>
         </div>
       </div>
     </section>

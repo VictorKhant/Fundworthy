@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import Funders from "../components/Funders";
+import Spinner, { Busy } from "../components/Spinner";
 
 // Discover funders — the page for deciding who Fundworthy watches.
 //
@@ -57,7 +58,12 @@ function StarterLists({ onChange }) {
       </p>
 
       {error && <div className="notice error">{error}</div>}
-      {!lists && <p className="muted">Loading…</p>}
+      {!lists && (
+        <p className="loading-line">
+          <Spinner label="Loading the researched lists" />
+          Loading…
+        </p>
+      )}
 
       <div className="directory">
         {(lists || []).map((l) => (
@@ -72,14 +78,10 @@ function StarterLists({ onChange }) {
             {l.imported >= l.count ? (
               <span className="muted small">On your list</span>
             ) : (
-              <button className="secondary" onClick={() => add(l.key)}
-                      disabled={busy === l.key}>
-                {busy === l.key
-                  ? "Adding…"
-                  : l.imported
-                    ? `Add the other ${l.count - l.imported}`
-                    : "Add to my list"}
-              </button>
+              <Busy className="secondary" busy={busy === l.key} busyLabel="Adding"
+                    onClick={() => add(l.key)}>
+                {l.imported ? `Add the other ${l.count - l.imported}` : "Add to my list"}
+              </Busy>
             )}
           </div>
         ))}

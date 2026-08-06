@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api } from "../api";
+import { Busy } from "./Spinner";
 
 // "Download spreadsheet", on both This week and Past findings.
 //
@@ -31,9 +32,9 @@ export default function DownloadCsv({ month }) {
 
   return (
     <>
-      <button onClick={download} disabled={busy}>
-        {busy ? "Preparing…" : "Download spreadsheet"}
-      </button>
+      <Busy busy={busy} busyLabel="Preparing" onClick={download}>
+        Download spreadsheet
+      </Busy>
       {error && <span className="muted small">{error}</span>}
     </>
   );

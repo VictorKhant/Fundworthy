@@ -923,3 +923,68 @@ button.text.danger { color: #B4503F; margin-left: auto; }
 }
 .schedule select { padding: 5px 8px; }
 .schedule p { flex-basis: 100%; margin: 4px 0 0; }
+
+/* --- waiting, visibly ------------------------------------------------------- */
+/*
+   Every slow operation in this app used to signal itself by changing a word on a button
+   and then holding perfectly still: "Reading the page…" for eight seconds while Sonnet
+   reads a website, "Searching…" for ten minutes. Static text is indistinguishable from a
+   frozen page, and the person this is built for has no mental model of a request in
+   flight to fall back on — so they press it again, and each press is another API call.
+
+   A bordered circle with one transparent edge. No SVG, no image request: it has to be on
+   screen the instant the click lands, and a spinner that loads after the wait it was
+   covering for is worse than nothing. Ships in components/Spinner.jsx.
+*/
+.spinner {
+  display: inline-block; width: 14px; height: 14px; flex-shrink: 0;
+  border: 2px solid currentColor; border-top-color: transparent;
+  border-radius: 50%; vertical-align: -2px;
+  animation: fw-spin .7s linear infinite;
+}
+@keyframes fw-spin { to { transform: rotate(360deg); } }
+
+/* A button's spinner inherits its text colour, so it needs the gap the flex row gives
+   it — and buttons here are inline-flex already for the ones carrying an icon. */
+button[aria-busy="true"] { display: inline-flex; align-items: center; gap: 8px; }
+
+/* The wait that is not attached to a button: a panel loading its own contents. */
+.loading-line {
+  display: flex; align-items: center; gap: 9px;
+  color: var(--muted); font-size: 13.5px; margin: 10px 0;
+}
+
+/* Announced, not just drawn. A rotating border says nothing to a screen reader. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* Motion is the whole point of a spinner, so it cannot simply be switched off for
+   someone who asked for less of it. It slows to a step instead: still obviously alive,
+   no continuous rotation. */
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation-duration: 2.4s; animation-timing-function: steps(8, end); }
+}
+
+/* --- why the search button is greyed out ------------------------------------ */
+/*
+   The list from `runner.preflight`. Word for word the message POST /api/runs would have
+   failed with — one function on the server produces both, so a person cannot be told one
+   thing by the disabled button and another by the error.
+
+   Each carries the page that fixes it, as a button rather than a sentence naming it:
+   "open Settings" is a second thing to go and find, and going and finding it is the step
+   people abandon.
+*/
+.blockers { margin: 0 0 18px; display: grid; gap: 10px; }
+.blocker {
+  display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap;
+  border: 1px solid #E8D9B8; background: #FBF3E4; color: #6B5326;
+  border-radius: 12px; padding: 12px 15px; font-size: 13.5px;
+}
+.blocker p { margin: 0; flex: 1 1 320px; }
+.blocker button { flex-shrink: 0; background: var(--card); border-color: #E0CFA9; }
+.blocker button:hover:not(:disabled) { border-color: #C9B27E; }
+
+.runlog-head { display: flex; align-items: center; gap: 8px; }

@@ -132,15 +132,27 @@ def resolve_api_key(conn=None, *, org_id: str | None = None) -> tuple[str | None
     Settings wins over the environment: the point of the Settings page is that the org can
     change the key without anyone touching a file.
 
-    **The environment fallback belongs to the default org alone, and that restriction is
-    the whole per-tenant billing boundary.** `ANTHROPIC_API_KEY` is one key, set once in
-    the VM's `.env` by whoever deployed the box. Before tenancy it was a convenience: a
-    single-tenant install could score before anyone had pasted anything. Once a second
-    nonprofit could sign in, the same line of code meant every org that had *not* saved a
-    key silently billed the deployer's — the new account looked like it was working, and
-    somebody else paid for it. So an org other than `DEFAULT_ORG_ID` gets its own saved key
-    or it gets nothing, and "nothing" surfaces as a visible prompt to add one rather than
-    as a quietly successful run on a stranger's credit card.
+    **`ANTHROPIC_API_KEY` is a single-tenant convenience, and it stops applying the moment
+    the install has tenants.** Two conditions, and both must hold:
+
+      1. Sign-in is off (`FIREBASE_PROJECT_ID` unset). That is the local shape from
+         CLAUDE.md §2 — bound to `127.0.0.1`, one org, nobody to authenticate — where the
+         file and the person paying for the key are the same party, and where the variable
+         is what keeps `./start.sh` zero-configuration.
+      2. The org is `DEFAULT_ORG_ID`, which under (1) is the only org there is.
+
+    The second condition alone used to be the whole rule, and it left one real hole on a
+    deployed box. `ANTHROPIC_API_KEY` there is set once, by whoever provisioned the VM, in
+    a systemd `EnvironmentFile` — so whichever single account ends up holding the default
+    org (the pilot named in `FUNDWORTHY_PILOT_EMAILS`, or the first person to sign in to a
+    genuinely empty install) searched on the deployer's credit, indefinitely, with a
+    Settings page that correctly said no key was saved. Nobody chose that; it is the
+    deploy instructions and the tenancy rules meeting at an angle nobody looked at.
+
+    So on a deployed install every org brings its own key, with no exceptions and no
+    org that is quietly special. A key left in the VM's environment is then inert rather
+    than a bill — which matters, because "delete this line after you upgrade" is not a
+    safety property anyone should have to remember.
 
     The *source* is returned, not just the key, because the fallback is quietly
     confusing on a developer's machine: with a `.env` present the pipeline scores
@@ -168,6 +180,13 @@ def resolve_api_key(conn=None, *, org_id: str | None = None) -> tuple[str | None
             log.debug("no settings database available (%s)", exc)
 
     if org_id != DEFAULT_ORG_ID:
+        return None, None
+
+    # Read straight from the environment rather than through `auth.enabled()`: this runs
+    # in the API process and in `python -m agent.run`, and only one of those has ever
+    # called `auth.configure()`. `FIREBASE_PROJECT_ID` is the same variable that decision
+    # is made from, so the two cannot disagree.
+    if os.environ.get("FIREBASE_PROJECT_ID", "").strip():
         return None, None
 
     from_env = os.environ.get("ANTHROPIC_API_KEY") or None

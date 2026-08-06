@@ -119,19 +119,28 @@ echo "    $before -> $after"
 say "Installing"
 .venv/bin/pip install -q -r requirements.txt
 
-# The dashboard build needs VITE_SITE_URL for the canonical link and the sitemap, and it
-# lives in the same .env the systemd unit reads. That file is an EnvironmentFile, not a
-# shell script — no `export`, and `source`ing it would run anything in it — so pull out
-# the one line rather than executing the file.
-if [ -z "${VITE_SITE_URL:-}" ] && [ -f "$APP_DIR/.env" ]; then
-    VITE_SITE_URL=$(sed -n 's/^[[:space:]]*VITE_SITE_URL[[:space:]]*=[[:space:]]*//p' \
-                    "$APP_DIR/.env" | tail -n 1 | tr -d '"'"'"'\r')
-    export VITE_SITE_URL
+# The dashboard build needs SITE_URL for the canonical link and the sitemap, and it lives
+# in the same .env the systemd unit reads. That file is an EnvironmentFile, not a shell
+# script — no `export`, and `source`ing it would run anything in it — so pull out the one
+# line rather than executing the file.
+#
+# seo-urls.mjs now reads ../.env itself, so this is belt and braces rather than the only
+# path. It stays because exporting the value is what makes it visible to anything else the
+# build shells out to, and because the echo below is where a missing hostname gets noticed.
+#
+# There is deliberately no fallback to the old `VITE_SITE_URL` spelling. One was written
+# and then removed unused: the only deployment was renamed by hand before this shipped, so
+# the grace period had nothing left to protect and would only have been dead code nobody
+# would remember to delete.
+if [ -z "${SITE_URL:-}" ] && [ -f "$APP_DIR/.env" ]; then
+    SITE_URL=$(sed -n 's/^[[:space:]]*SITE_URL[[:space:]]*=[[:space:]]*//p' \
+               "$APP_DIR/.env" | tail -n 1 | tr -d '"'"'"'\r')
+    export SITE_URL
 fi
-if [ -n "${VITE_SITE_URL:-}" ]; then
-    echo "    site URL: $VITE_SITE_URL"
+if [ -n "${SITE_URL:-}" ]; then
+    echo "    site URL: $SITE_URL"
 else
-    echo "    VITE_SITE_URL not set — the canonical link and sitemap will be omitted."
+    echo "    SITE_URL not set — the canonical link and sitemap will be omitted."
     echo "    Add it to $APP_DIR/.env so search engines can index this deployment."
 fi
 # `npm ci` is the right call — it installs exactly the lockfile — but it refuses outright

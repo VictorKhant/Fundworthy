@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import Spinner, { Busy } from "./Spinner";
 import { api, pacificStamp, usd } from "../api";
 
 // Who else is in this organization, and what it has spent this month.
@@ -109,7 +110,10 @@ export default function Organization({ spend, onChange }) {
 
       <h3 className="sub">People</h3>
       {!org ? (
-        <p className="muted">Loading…</p>
+        <p className="loading-line">
+          <Spinner label="Loading your organization" />
+          Loading…
+        </p>
       ) : (
         <ul className="plain">
           {org.members.map((m) => (
@@ -149,9 +153,10 @@ export default function Organization({ spend, onChange }) {
         </ul>
       )}
 
-      <button className="secondary" onClick={invite} disabled={busy}>
-        {busy ? "Creating…" : "Create an invitation code"}
-      </button>
+      <Busy className="secondary" busy={busy} busyLabel="Creating the code"
+            onClick={invite}>
+        Create an invitation code
+      </Busy>
       <p className="muted small">
         Each code works once and expires in two weeks. Send it however you normally talk
         to your colleague — Fundworthy does not send email on your behalf.
