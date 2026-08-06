@@ -1,5 +1,6 @@
 import { initials } from "../auth";
 import OrgSwitcher from "./OrgSwitcher";
+import ThemeToggle from "./ThemeToggle";
 
 // The shell's navigation. Three views, no router library — three views never justified a
 // dependency someone would have to keep updated, and they still don't.
@@ -58,6 +59,10 @@ export default function Sidebar({ page, setPage, open, setOpen, orgName, user, o
             {p.label}
           </button>
         ))}
+
+        {/* Carries the `margin-top: auto` that used to be on .sidebar-foot, so this and
+            the account block below it both sit at the bottom. */}
+        <ThemeToggle />
 
         <div className="sidebar-foot">
           {user ? (

@@ -86,6 +86,29 @@
     />
   </head>
   <body>
+    <!-- The theme, before anything paints.
+
+         React sets this too (components/ThemeToggle.jsx), but an effect runs after the
+         first paint — so a dark-mode user would get a full white flash on every load,
+         which is the one thing that makes a dark theme feel broken. Three lines inline
+         removes it.
+
+         Here rather than in <head> because styles.css scopes on `body[data-fw-theme]`,
+         and in <head> there is no document.body to set it on yet. This is the first
+         thing inside <body>, so it still runs before any content is rendered.
+
+         Default is light on purpose, and `prefers-color-scheme` is deliberately not
+         consulted: the light palette is the researched one, and flipping somebody into
+         dark before they have seen the app is not a preference they expressed here. -->
+    <script>
+      try {
+        document.body.setAttribute(
+          "data-fw-theme",
+          localStorage.getItem("fw.theme") === "dark" ? "dark" : "light"
+        );
+      } catch (e) {}
+    </script>
+
     <!-- What a crawler sees before React runs, and what a person sees if it never does.
          Replaced the moment the app mounts. Search engines do execute JavaScript, but
          they do it on a second pass and not always — so the one sentence that says what
