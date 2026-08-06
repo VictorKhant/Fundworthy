@@ -329,6 +329,11 @@ DEFAULT_SETTINGS: dict[str, str] = {
         ["warm_partner", "foundation", "government", "arts_agency"]
     ),
     "search_beyond_partners": "0",  # lights up once the discovery provider lands
+    # Which model runs each paid tier, as `provider:model`. Empty means "whatever
+    # agent/score.py recommends", so the default follows the code rather than being
+    # frozen into every org's settings row the day they signed up.
+    "triage_model": "",
+    "scoring_model": "",
     # Who this install is for. Empty by default and shown as "Your organization" until
     # someone fills it in — the UI used to hardcode the organization's name in a dozen
     # places, which is wrong for anyone else and was never a fact the code should have

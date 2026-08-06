@@ -245,3 +245,79 @@ def test_sourced_fields_stay_nullable():
     props = scoring_schema(["RULFP"])["properties"]
     for field in ("award_min_stated", "award_max_stated", "deadline_stated"):
         assert "null" in props[field]["type"], f"{field} must stay nullable — §6"
+
+
+# --- per-stage model choice ----------------------------------------------------
+
+def test_every_offered_model_has_a_price():
+    """The one that turns a UI mistake into a dead run.
+
+    `Budget.check` does a dict lookup on PRICING before every call. A model in the
+    picker with no entry does not produce a mis-priced run — it raises KeyError on the
+    first candidate and the whole search fails.
+    """
+    from agent.score import MODEL_CHOICES, PRICING
+
+    for stage, choices in MODEL_CHOICES.items():
+        for choice in choices:
+            assert choice["id"] in PRICING, (
+                f"step {stage} offers {choice['id']} and nothing knows what it costs"
+            )
+
+
+def test_each_stage_recommends_exactly_one_model():
+    from agent.score import MODEL_CHOICES
+
+    for stage, choices in MODEL_CHOICES.items():
+        recommended = [c for c in choices if c.get("recommended")]
+        assert len(recommended) == 1, f"step {stage} recommends {len(recommended)}"
+
+
+def test_the_defaults_are_the_recommended_choices():
+    """Otherwise the picker chips one option and the pipeline quietly runs another."""
+    from agent.score import MODEL_CHOICES, SCORING_MODEL, TRIAGE_MODEL
+
+    assert next(c["id"] for c in MODEL_CHOICES[2] if c.get("recommended")) == TRIAGE_MODEL
+    assert next(c["id"] for c in MODEL_CHOICES[3] if c.get("recommended")) == SCORING_MODEL
+
+
+def test_a_bare_model_name_is_still_priced():
+    """The `provider:` prefix arrived with per-stage choice. Anything still passing a
+    bare name — a script, the CLI — must degrade rather than abort a run."""
+    from agent.score import PRICING, price_for
+
+    assert price_for("claude-sonnet-4-6") == PRICING["anthropic:claude-sonnet-4-6"]
+    assert price_for("anthropic:claude-sonnet-4-6") == PRICING["anthropic:claude-sonnet-4-6"]
+
+
+def test_a_model_nobody_priced_still_raises():
+    """Guessing a price would put a wrong number under somebody's spend limit."""
+    import pytest as _pytest
+
+    from agent.score import price_for
+
+    with _pytest.raises(KeyError):
+        price_for("anthropic:claude-imaginary-9")
+
+
+def test_an_unknown_stored_model_falls_back_instead_of_killing_the_run(tmp_path, monkeypatch):
+    """A settings row written by an older build, or by hand, must not be able to abort
+    every future search."""
+    monkeypatch.setenv("FUNDWORTHY_DB_PATH", str(tmp_path / "rise.db"))
+    monkeypatch.setenv("FUNDWORTHY_KEYFILE", str(tmp_path / ".fernet-key"))
+
+    from agent.config import load_from_db
+    from agent.score import SCORING_MODEL
+    from app.db import DEFAULT_ORG_ID, init_db, session
+    from app import repo
+
+    init_db()
+    with session() as conn:
+        conn.execute(
+            "INSERT INTO settings(org_id, key, value, updated_at) VALUES(?,?,?,?) "
+            "ON CONFLICT(org_id, key) DO UPDATE SET value=excluded.value",
+            (DEFAULT_ORG_ID, "scoring_model", "anthropic:claude-from-the-future",
+             "2026-01-01"))
+
+    cfg = load_from_db(org_id=DEFAULT_ORG_ID)
+    assert cfg.scoring_model == SCORING_MODEL, "an unusable setting must not be obeyed"

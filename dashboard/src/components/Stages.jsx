@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { money } from "../api";
+import { api } from "../api";
+import ModelPicker from "./ModelPicker";
 import StageDetail from "./StageDetail";
 
 // What the search actually did, as three boxes — one per tier of CLAUDE.md §5.
@@ -45,9 +46,18 @@ const STAGES = [
   },
 ];
 
-export default function Stages({ run, modelLabels = {} }) {
+export default function Stages({ run, settings = {}, choices = {}, defaults = {}, onChange }) {
   const [open, setOpen] = useState(null);
+  const [picking, setPicking] = useState(null);
   if (!run) return null;
+
+  const chosen = {
+    2: settings.triage_model || defaults["2"],
+    3: settings.scoring_model || defaults["3"],
+  };
+  const labelFor = (n) =>
+    (choices[n] || []).find((c) => c.id === chosen[n])?.label
+    || (chosen[n] || "").split(":").pop();
 
   const cost = run.usd_by_stage || {};
   const parsed = run.candidates_parsed || 0;
@@ -70,11 +80,15 @@ export default function Stages({ run, modelLabels = {} }) {
         const setAside = Math.max(came - through, 0);
         const spent = cost[String(s.n)] ?? 0;
         return (
-          <button
+          <div
             key={s.key}
-            type="button"
+            role="button"
+            tabIndex={0}
             className={`stage stage-${s.key}`}
             onClick={() => setOpen(s)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen(s); }
+            }}
             aria-label={`${s.title} — ${through} of ${came} went through. Open the detail.`}
           >
             <span className="stage-n">Step {s.n}</span>
@@ -90,18 +104,48 @@ export default function Stages({ run, modelLabels = {} }) {
                 : came === 0 ? "nothing reached this step" : "all went through"}
             </span>
 
+            {/* The engine row is a nested control, so the box itself cannot be a
+                <button> — a button inside a button is invalid and React will not
+                render it. The card is a div with a role instead, and the picker stops
+                the click from opening the detail behind it. */}
             <span className="stage-engine">
               <span className="muted">Engine</span>
-              <span className={s.n === 1 ? "muted" : ""}>
-                {s.n === 1 ? s.engine : (modelLabels[s.n] || s.engine)}
-              </span>
+              {s.n === 1 ? (
+                <span className="muted">{s.engine}</span>
+              ) : (
+                <button
+                  type="button"
+                  className="text stage-model"
+                  onClick={(e) => { e.stopPropagation(); setPicking(s.n); }}
+                  title={`Change which model does step ${s.n}`}
+                >
+                  {labelFor(s.n)}
+                </button>
+              )}
               <span className="stage-cost">
                 {s.n === 1 ? "$0.00" : `$${spent.toFixed(4)}`}
               </span>
             </span>
-          </button>
+          </div>
         );
       })}
+
+      <ModelPicker
+        stage={picking}
+        choices={choices[picking] || []}
+        current={picking ? chosen[picking] : null}
+        // Rough, and labelled as rough. The honest number is what the last run cost;
+        // scaling it by the price ratio is the only forecast available before a run and
+        // is far more use than no number at all when Opus is five times Sonnet.
+        lastCost={picking ? (cost[String(picking)] ?? 0) : 0}
+        onClose={() => setPicking(null)}
+        onPick={async (id) => {
+          await api.settings.save(
+            picking === 2 ? { triage_model: id } : { scoring_model: id });
+          setPicking(null);
+          await onChange?.();
+        }}
+      />
 
       <StageDetail
         stage={open}

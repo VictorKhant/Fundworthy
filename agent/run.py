@@ -502,11 +502,11 @@ def evaluate(survivors: list[tuple[ParsedPage, Source]], cfg: Config, run: RunLo
     if run.stop_reason is None:
         run.stop_reason = StopReason.SOURCES_EXHAUSTED
     run.usd_spent = budget.spent_usd
-    run.usd_by_stage = stage_costs(budget)
+    run.usd_by_stage = stage_costs(budget, cfg)
     return out
 
 
-def stage_costs(budget: Budget) -> dict[str, float]:
+def stage_costs(budget: Budget, cfg: Config | None = None) -> dict[str, float]:
     """Split the run's spend across the three tiers, for the stage boxes.
 
     `Budget.by_model` already tracks spend per model; this is only the mapping from a
@@ -521,12 +521,17 @@ def stage_costs(budget: Budget) -> dict[str, float]:
     """
     from .score import SCORING_MODEL, TRIAGE_MODEL
 
+    triage = (cfg.triage_model if cfg else "") or TRIAGE_MODEL
+    scoring = (cfg.scoring_model if cfg else "") or SCORING_MODEL
+
     costs = {"1": 0.0, "2": 0.0, "3": 0.0}
     for model, spent in budget.by_model.items():
-        if model == TRIAGE_MODEL:
+        # The two stages can legitimately be the same model — somebody who picks Sonnet
+        # for triage as well. Then `by_model` has one entry for both and there is no way
+        # to split it, so it lands on scoring: over-attributing to the expensive tier is
+        # the safe direction, and the total is right either way.
+        if model == triage and model != scoring:
             costs["2"] += spent
-        elif model == SCORING_MODEL:
-            costs["3"] += spent
         else:
             costs["3"] += spent
     return costs

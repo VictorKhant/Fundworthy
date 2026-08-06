@@ -291,7 +291,13 @@ export default function Dashboard({ state, onChange, onGoto }) {
           numbers are the *finished* run's and showing last week's funnel above a live
           log reads as this run's progress. */}
       {!isRunning && state.latest_run && (
-        <Stages run={state.latest_run} />
+        <Stages
+          run={state.latest_run}
+          settings={state.settings}
+          choices={state.model_choices || {}}
+          defaults={state.model_defaults || {}}
+          onChange={onChange}
+        />
       )}
 
       {/* The log is kept verbatim and moved behind a disclosure. It is still the only

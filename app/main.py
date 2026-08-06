@@ -50,6 +50,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from agent.models import MAX_REJECTS
+from agent.score import MODEL_CHOICES, PRICING, SCORING_MODEL, TRIAGE_MODEL
 from . import archive, auth, export, repo, scheduler, secrets
 from .db import (DEFAULT_ORG_ID, SECTORS, InviteError, create_invite, import_starter_list,
                  init_db, list_invites, month_key, org_for_user, org_members, org_owner,
@@ -106,6 +107,10 @@ class SettingsIn(BaseModel):
     share_funders: bool | None = None
     sectors_active: list[str] | None = None
     search_beyond_partners: bool | None = None
+    # `provider:model`, validated against PRICING below — an id with no price would
+    # KeyError inside the run rather than here, which is the worst place to find out.
+    triage_model: str | None = Field(None, max_length=80)
+    scoring_model: str | None = Field(None, max_length=80)
     org_name: str | None = Field(None, max_length=200)
     org_location: str | None = Field(None, max_length=200)
     # The weekly schedule. Validated here rather than trusted: `schedule_hour` reaches a
@@ -260,6 +265,15 @@ def write_settings(body: SettingsIn, org: str = Depends(current_org)) -> dict:
         unknown = [s for s in changes["sectors_active"] if s not in SECTORS]
         if unknown:
             raise HTTPException(400, f"Unknown sector(s): {', '.join(unknown)}")
+    # A model with no price cannot be checked against the spend limit, and finding that
+    # out is a KeyError on the first call of a run rather than an error here. Empty is
+    # allowed and means "use whatever the code recommends".
+    for field_name in ("triage_model", "scoring_model"):
+        chosen = changes.get(field_name)
+        if chosen and chosen not in PRICING:
+            raise HTTPException(
+                400, f"{chosen} is not a model Fundworthy knows the price of, so it "
+                     "cannot be kept inside your spending limit.")
     with session() as conn:
         settings = repo.update_settings(conn, changes, org_id=org)
     # Turning sharing on is what schedules the reachability checks. Nothing this org
@@ -826,6 +840,11 @@ def state(org: str = Depends(current_org)) -> dict:
             "settings": repo.get_settings(conn, org_id=org),
             **_key_state(conn, org),
             "sectors_available": list(SECTORS),
+            # The model picker's options come from the pipeline, so adding a model is
+            # one edit in agent/score.py rather than two lists quietly drifting apart —
+            # and a model offered here with no PRICING entry would abort a run.
+            "model_choices": MODEL_CHOICES,
+            "model_defaults": {"2": TRIAGE_MODEL, "3": SCORING_MODEL},
             "programs": repo.list_programs(conn, org_id=org),
             "funders": repo.list_funders(conn, org_id=org),
             "month": month_key(),

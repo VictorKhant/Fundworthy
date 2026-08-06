@@ -118,6 +118,12 @@ class Config:
     per_kind_cap: int | None = None
     weekly_budget_usd: float = 1.00          # hard ceiling (§8)
     min_deadline_runway_days: int = 14       # reject inside this window (§7)
+    # Which model runs each paid tier, as `provider:model`. Defaults are §5's tiering;
+    # the settings page can move either one. Validated on the way in — an unknown id
+    # would KeyError in `Budget.check` and abort the run, so a bad setting falls back
+    # to the default rather than breaking the search.
+    triage_model: str = ""
+    scoring_model: str = ""
     source: str = "defaults"                 # "database" | "sheet" | "defaults"
     # Whose run this is. Carried on the config rather than threaded through every
     # function signature because every stage of the pipeline already receives a Config,
@@ -199,6 +205,23 @@ def _as_int(value, default: int) -> int:
         return default
 
 
+def _known_model(chosen: str | None, fallback: str) -> str:
+    """A stored model id we can actually price, or the default.
+
+    `Budget.check` does `PRICING[model]`, so an id that is not in the table does not
+    mis-price a run — it raises KeyError on the first call and the whole search dies.
+    A setting written by an older build, or by hand, must not be able to do that.
+    """
+    from .score import PRICING
+
+    chosen = (chosen or "").strip()
+    if chosen and chosen in PRICING:
+        return chosen
+    if chosen:
+        log.warning("unknown model %r in settings — using %s", chosen, fallback)
+    return fallback
+
+
 class ConfigUnavailable(RuntimeError):
     """Config could not be read while running in strict mode."""
 
@@ -260,6 +283,11 @@ def load_from_db(db_path=None, *, org_id: str | None = None) -> Config | None:
     cfg.sectors_active = list(settings["sectors_active"])
     cfg.search_beyond_partners = bool(settings["search_beyond_partners"])
     cfg.org_location = str(settings.get("org_location") or "")
+    # Imported here, not at the top: `agent.score` imports this module, so a top-level
+    # import of it is a cycle.
+    from .score import SCORING_MODEL, TRIAGE_MODEL
+    cfg.triage_model = _known_model(settings.get("triage_model"), TRIAGE_MODEL)
+    cfg.scoring_model = _known_model(settings.get("scoring_model"), SCORING_MODEL)
     cfg.programs = [
         ProgramCard(
             slug=c["slug"], name=c["name"], summary=c.get("summary", ""),

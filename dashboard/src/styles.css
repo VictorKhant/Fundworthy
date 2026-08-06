@@ -1365,3 +1365,30 @@ body[data-fw-theme="dark"] {
   /* Stacked, and the connector idea does not survive the rotation — so there is none. */
   .stages { grid-template-columns: 1fr; }
 }
+
+/* --- picking a model per step (R5) ------------------------------------------ */
+
+.stage-model { font-size: 12.5px; }
+.stage-model:hover:not(:disabled) { text-decoration: underline; }
+
+.modelpicker { max-width: 520px; }
+.modellist { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 8px; }
+
+.modelopt {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+  width: 100%; text-align: left; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--card);
+  padding: 11px 13px; font: inherit; color: var(--fg);
+}
+.modelopt:hover:not(:disabled) { border-color: var(--dash); background: var(--card); }
+.modelopt.on { border-color: var(--accent-line); background: var(--accent-soft); }
+
+.modelopt-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; width: 100%; }
+.modelopt-name { font-weight: 600; font-size: 14px; }
+.modelopt-note { font-size: 12.5px; color: var(--muted); }
+/* The number that stops somebody picking Opus and then wondering why the search
+   stopped halfway down their funder list. */
+.modelopt-cost {
+  margin-left: auto; font-variant-numeric: tabular-nums;
+  font-size: 12.5px; color: var(--clay-deep);
+}
