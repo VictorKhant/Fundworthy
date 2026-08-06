@@ -651,3 +651,45 @@ def test_every_on_off_setting_is_declared_as_one(db):
         f"{', '.join(missing)} default to an on/off value but are not in _BOOL_SETTINGS, "
         "so they will be stored as 'True'/'False' and read back as a truthy string."
     )
+
+
+def test_the_check_result_reaches_the_browser_as_a_tri_state(db):
+    """NULL / true / false, and all three have to survive the trip.
+
+    "Nobody has looked yet" is not "it failed", so this cannot collapse to a bool. And it
+    cannot stay as SQLite's 1/0 either: those cross to JavaScript as integers, where
+    `check_ok === true` is false for `1` — which is exactly how the Settings page came to
+    report "0 of 2 shared" while the database held one pass and one failure.
+    """
+    with session(db) as conn:
+        f = repo.create_funder(conn, {"name": "Checkable Trust",
+                                      "url": "https://example.invalid/c"},
+                               org_id=DEFAULT_ORG_ID)
+        assert repo.get_funder(conn, f["id"], org_id=DEFAULT_ORG_ID)["check_ok"] is None
+
+        for stored, expected in ((1, True), (0, False)):
+            conn.execute("UPDATE funders SET check_ok=? WHERE id=? AND org_id=?",
+                         (stored, f["id"], DEFAULT_ORG_ID))
+            got = repo.get_funder(conn, f["id"], org_id=DEFAULT_ORG_ID)["check_ok"]
+            assert got is expected, f"stored {stored!r} came back as {got!r}"
+
+
+def test_changing_a_funders_address_makes_us_look_at_it_again(db):
+    """Otherwise a shared funder whose link had a typo is marked unreachable for good:
+    `recheck_shared` only picks up rows never checked, so there would be no way back."""
+    with session(db) as conn:
+        f = repo.create_funder(conn, {"name": "Moved Trust",
+                                      "url": "https://example.invalid/old"},
+                               org_id=DEFAULT_ORG_ID)
+        conn.execute("UPDATE funders SET check_ok=0, check_note='did not load', "
+                     "checked_at='2026-01-01' WHERE id=? AND org_id=?",
+                     (f["id"], DEFAULT_ORG_ID))
+
+        # Editing something else leaves the verdict alone — it is still about that page.
+        repo.update_funder(conn, f["id"], {"notes": "rang them"}, org_id=DEFAULT_ORG_ID)
+        assert repo.get_funder(conn, f["id"], org_id=DEFAULT_ORG_ID)["check_ok"] is False
+
+        repo.update_funder(conn, f["id"], {"url": "https://example.invalid/new"},
+                           org_id=DEFAULT_ORG_ID)
+        after = repo.get_funder(conn, f["id"], org_id=DEFAULT_ORG_ID)
+        assert after["check_ok"] is None and after["checked_at"] is None

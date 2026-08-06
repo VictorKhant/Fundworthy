@@ -421,10 +421,17 @@ def create_funder(body: FunderIn, org: str = Depends(current_org)) -> dict:
 @api.put("/funders/{funder_id}")
 def update_funder(funder_id: str, body: FunderIn,
                   org: str = Depends(current_org)) -> dict:
+    changes = _set(body)
     with session() as conn:
-        updated = repo.update_funder(conn, funder_id, _set(body), org_id=org)
+        updated = repo.update_funder(conn, funder_id, changes, org_id=org)
+        sharing = repo.get_settings(conn, org_id=org)["share_funders"]
     if updated is None:
         raise HTTPException(404, "No such funder.")
+    # A new address clears the old verdict (see `repo.update_funder`), so look at it
+    # again — otherwise fixing a typo in a link would leave the funder marked unreachable
+    # and unshared for good, with nothing the person could do about it.
+    if sharing and "url" in changes:
+        _schedule_funder_checks(org)
     return {"funder": updated}
 
 
