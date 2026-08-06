@@ -1,38 +1,17 @@
 import { pacificStamp } from "../api";
+import Icon from "./Icon";
 
 // One line, always on screen: is the researcher on, when did it last run, what has it
 // spent against the ceiling, and the way in to the knobs.
 //
 // The spend is not optional and not collapsible. CLAUDE.md caps a run at $1.00, and
-// the whole product only works if the user trusts that — so the ceiling, the spend, and the
-// reason the run stopped are here, not in a log file they would have to be shown how to
-// find. This is the third of the correctness rules at the top of styles.css.
-
-// How the last search ended, in one line. `ok` decides the colour of the marker: sage for
-// "this is a normal outcome", clay for "something needs you". Nothing here is an error
-// dialog — a search that finds nothing is the product working — but a search that could
-// not run should not look the same as one that ran and found a quiet week.
-const STOP_REASONS = {
-  target_met: { ok: true, text: "Found enough for this week and stopped." },
-  sources_exhausted: { ok: true, text: "Checked every funder on your list." },
-  budget: { ok: false, text: "Hit your spending limit and stopped rather than going over." },
-  disabled: { ok: false, text: "The researcher is switched off." },
-  stopped_by_user: { ok: true, text: "You stopped it." },
-  error: { ok: false, text: "Something went wrong — the log below says what." },
-  partial: { ok: false, text: "Something broke part-way through. What it had already found is above." },
-  // The two that used to be indistinguishable from a quiet week. Both mean the search
-  // could not have worked, and both name the one thing to change.
-  no_api_key: {
-    ok: false,
-    text: "Stopped before reading anything — there was no Claude API key to read with. "
-      + "Add one on Settings.",
-  },
-  no_funders: {
-    ok: false,
-    text: "Stopped without reading anything — there were no funders to search. "
-      + "Fundworthy only reads the funders on your list.",
-  },
-};
+// the whole product only works if the user trusts that — so the ceiling and the spend
+// are here, not in a log file they would have to be shown how to find. This is the
+// third of the correctness rules at the top of styles.css.
+//
+// **How the run ended is no longer on this strip.** It rendered directly underneath,
+// four sections above the list it explains, and "why is this list short?" is a question
+// asked at the list. `STOP_REASONS` moved to `pages/Dashboard.jsx` with it.
 
 const DAY_LABEL = (d) => (d ? d[0].toUpperCase() + d.slice(1) + "s" : "");
 
@@ -41,7 +20,7 @@ const formatHour = (h) =>
   h === 0 ? "12am" : h < 12 ? `${h}am` : h === 12 ? "12pm" : `${h - 12}pm`;
 
 export default function StatusStrip({
-  enabled, run, ceiling, knobsOpen, onToggleKnobs, schedule,
+  enabled, run, ceiling, knobsOpen, onToggleKnobs, schedule, isRunning,
 }) {
   const spent = run?.usd_spent || 0;
   const pct = Math.min(100, (spent / (ceiling || 1)) * 100);
@@ -96,6 +75,10 @@ export default function StatusStrip({
               as free, and the point of showing spend at all is that they can see the
               real number move. */}
           Spent <strong>${spent.toFixed(4)}</strong> of ${ceiling.toFixed(2)}
+          {/* The figure moves during a search. Without a word on it, a number changing
+              by itself every second and a half reads as a glitch rather than as the
+              thing you are being asked to trust. */}
+          {isRunning && <span className="status-live">Live</span>}
           <span
             className="minibar costbar"
             role="img"
@@ -106,38 +89,15 @@ export default function StatusStrip({
         </span>
 
         <span className="status-actions">
-          <button className="text" onClick={onToggleKnobs} aria-expanded={knobsOpen}>
+          {/* Sliders, never a gear. This opens four numeric values you tune and it sits
+              two panels away from the Settings nav item — two gears on one screen
+              meaning different destinations is the confusion the split avoids. */}
+          <button className="text status-knobs" onClick={onToggleKnobs} aria-expanded={knobsOpen}>
+            <Icon name="sliders" size={14} />
             {knobsOpen ? "Hide search settings" : "Adjust search settings"}
           </button>
         </span>
       </section>
-
-      {/* How the last search ended. This was `muted small` — grey 13px fine print,
-          indistinguishable from every other muted line on the page, and set in a
-          stylesheet rule that carried nothing but a margin.
-
-          It is the answer to the question somebody actually arrives with on a thin
-          Thursday: *why is this list short?* "Checked every funder on your list" and
-          "there was no API key to read with" are completely different answers and only
-          one of them is a problem, so it now has a marker whose colour says which, and
-          text you can read without hunting for it. */}
-      {run?.stop_reason && (() => {
-        const outcome = STOP_REASONS[run.stop_reason];
-        return (
-          <p className={`run-outcome ${outcome && !outcome.ok ? "attention" : ""}`}>
-            <span className="run-outcome-dot" aria-hidden="true" />
-            <span>
-              {outcome ? outcome.text : run.stop_reason}
-              {run.duplicates_skipped > 0 && (
-                <span className="muted">
-                  {" "}Skipped {run.duplicates_skipped} you have already seen this month,
-                  for free.
-                </span>
-              )}
-            </span>
-          </p>
-        );
-      })()}
 
       {broken.length > 0 && (
         <div className="notice plain">

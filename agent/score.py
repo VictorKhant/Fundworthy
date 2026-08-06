@@ -128,8 +128,15 @@ SCORING_MAX_TOKENS = 8_000  # headroom: max_tokens caps thinking + response on S
 SONNET_CACHE_MIN_TOKENS = 2048
 
 
-# Recognised by app/runner.py and stripped from the visible log.
+# The child → runner protocol. Both are recognised by `app/runner.py: _pump`, consumed,
+# and kept out of the log a person reads — machine chatter in the middle of "✓ San Diego
+# Foundation — 3 amounts, 1 deadline" is worse than the delay either one fixes.
+#
+# They live together here rather than one per module because there are two writers and
+# one reader, and a marker whose prefix drifts from the parser's is a feature that
+# silently stops working.
 SPEND_MARKER = "::spend "
+STAGE_MARKER = "::stage "
 
 
 class BudgetExceeded(RuntimeError):

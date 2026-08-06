@@ -47,22 +47,40 @@ design constraint:
 - The accuracy gate (`agent/verify.py`): a sourced value is nulled unless the model
   returns the verbatim sentence it came from and that sentence is on the fetched page.
 - Dashboard controls: award floor, deadline runway, result cap, spend limit, program
-  cards as a chip row at the top of This week, an editable funder list with search and
-  paging, a monthly archive, a Re-run button, a real Stop.
+  cards as a chip row in a **"What to search for"** panel at the top of This week, an
+  editable funder list with search and paging, a monthly archive, a Re-run button, a real
+  Stop.
 - **Light and dark** (`body[data-fw-theme]`, a control at the foot of the sidebar). The
   dark palette is derived from the light one — same hues, moved down — because the
   previous attempt was cool grey against a warm light theme and was dropped for it.
   Default is light and `prefers-color-scheme` is deliberately not consulted.
 - **Three stage boxes** (`components/Stages.jsx`) in place of the streaming log as the
-  primary account of a run: free filters → Haiku triage → Sonnet scoring, each with what
-  came in, what went through, and what it cost. Opening one lists **which** pages were
-  set aside and why, with the specific fact — "$4,000 < $10,000", or triage's own
-  fifteen words. The log is kept verbatim behind "Show the technical log", because it is
-  still the only thing that explains a run that died halfway.
-- **Which model runs each paid step** is a setting, chosen from the Engine row on those
-  boxes, with the projected cost on each option (`triage_model` / `scoring_model`, stored
-  as `provider:model`).
-- Spend **moves while a search runs**. It used to be written only at the end.
+  primary account of a run: free filters → Haiku triage → Sonnet scoring, each showing
+  the pass count alone at display size with the denominator in its footer. Opening one
+  lists **which** pages were set aside and why, with the specific fact — "$4,000 <
+  $10,000", or triage's own fifteen words — and, above that, the rule that let the rest
+  through. The log is kept verbatim behind "Show the technical log" in the section
+  header, because it is still the only thing that explains a run that died halfway.
+- **The boxes are the run while it happens.** They were hidden for the whole of a search
+  and appeared at the end holding finished numbers, which made the one thing somebody
+  watches for ten minutes the one thing they could not see. The working box lifts and
+  pulses, the ones behind it dim, and each carries a progress rail. Those rails divide by
+  real totals or say they cannot: stage 2 is "of the pages that survived the free
+  filters, how many have been read" and stage 3 is "of the results you asked for, how
+  many are found" (the `target_met` condition), while stage 1 **sweeps** rather than
+  filling — nothing knows how many pages a funder list will yield until it has been
+  fetched, and a bar filling against an invented total is the one dishonest pixel this
+  page could have had.
+- **Which model runs each paid step** is a setting, chosen from the Engine row under
+  those boxes, with the projected cost on each option (`triage_model` / `scoring_model`,
+  stored as `provider:model`). **Which provider** those models come from is a panel on
+  Settings ("Which AI it uses") — Anthropic live, OpenAI/DeepSeek/Qwen present and
+  visibly disabled, because connecting one needs a provider column on the stored key, an
+  adapter interface in `agent/score.py` and per-provider pricing, and none of that is
+  built. A card that names the thing is a signpost; leaving them out would make the model
+  picker's "add a provider" line point at nothing.
+- Spend **moves while a search runs**, with a LIVE marker beside it — an unlabelled
+  number changing by itself reads as a glitch. It used to be written only at the end.
 - One themed confirm dialog (`components/Confirm.jsx`) instead of `window.confirm` —
   every destructive path says what will happen rather than asking "are you sure?".
 - **Responsive on two breakpoints and only two**, 900 and 620. Below 900 the sidebar
@@ -201,10 +219,18 @@ gap between the two is where the harm would live:
 | Is this a real registered organisation? | **no** — see the IRS 990 note in §5 |
 | Is it worth applying to? | **no**, and nothing here may imply otherwise |
 
-So Discover shows the sentence and the date (*"The page opened and names an award amount.
-Checked 2026-08-05."*) with the link, and no tick. No model is involved and nothing is
-spent. Failing the check is disqualifying; passing it only permits the entry to be
-offered, labelled as somebody else's suggestion.
+So Discover's **Add funders** section shows the sentence and the date (*"The page opened
+and names an award amount. Checked 2026-08-05."*) on a small card with the link, and no
+tick. No model is involved and nothing is spent. Failing the check is disqualifying;
+passing it only permits the entry to be offered, labelled as somebody else's suggestion —
+and the "we have not researched these" line sits **under** that grid, word for word,
+where it is the last thing read before Add rather than the first thing scrolled past.
+
+That section is a card grid and not a column of full-width rows, which is not only
+cosmetic: five shared funders as five full-width rows made the "who should I watch?"
+section taller than the funder list it sits above. The page order is Add funders →
+Funders it watches → Blacklist → "Find funders near you" — the last of those is disabled
+and unbuilt, and it was sitting between the two things people came for.
 
 **Anyone can report one, and one report hides it from everybody immediately**, before
 review. That is the deliberate direction to fail in: hiding a good funder costs one

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import Icon from "./Icon";
 import { Busy } from "./Spinner";
 
 // One dialog for every destructive path in the app, replacing window.confirm and
@@ -22,6 +23,7 @@ import { Busy } from "./Spinner";
 export default function Confirm({
   open,
   tone = "sage",
+  icon = null,           // an `Icon` name — see the note above the header below
   title,
   body,
   points = [],
@@ -125,7 +127,19 @@ export default function Confirm({
         aria-labelledby="dialog-title"
         ref={panel}
       >
-        <h2 id="dialog-title">{title}</h2>
+        {/* A tinted square holding the glyph of the thing about to happen — sage for an
+            ordinary confirmation, clay for a destructive one. It is what makes a pause
+            dialog and a delete dialog tell themselves apart before a word is read; the
+            only other difference between them is the colour of one button at the bottom,
+            which is at the far end of the panel from where the eye starts. */}
+        <h2 id="dialog-title">
+          {icon && (
+            <span className="dialog-icon" aria-hidden="true">
+              <Icon name={icon} size={19} />
+            </span>
+          )}
+          {title}
+        </h2>
         {body && <p className="dialog-body">{body}</p>}
 
         {points.length > 0 && (

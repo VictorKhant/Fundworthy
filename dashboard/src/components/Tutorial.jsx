@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, money } from "../api";
 import { authEnabled } from "../auth";
+import Icon from "./Icon";
 import JoinOrg from "./JoinOrg";
 import Spinner, { Busy } from "./Spinner";
 
@@ -330,24 +331,34 @@ function FunderStep({ state, onChange, ...rest }) {
         </p>
       )}
 
+      {/* The same cards as the marketplace on Discover funders, because it is the same
+          list of the same things — a person who imports here and comes back to that page
+          should recognise what they are looking at. `.directory` is the shared grid. */}
       <div className="directory">
         {(lists || []).map((l) => (
-          <div key={l.key} className="directory-row">
-            <div>
-              <strong>{l.name}</strong>{" "}
-              <span className="muted small">
-                {l.count} {l.count === 1 ? "source" : "funders"}
+          <div key={l.key} className={`marketcard ${l.imported >= l.count ? "done" : ""}`}>
+            <div className="marketcard-head">
+              <span className="marketcard-icon" aria-hidden="true">
+                <Icon name="pin" size={13} />
               </span>
-              <p className="muted small">{l.description}</p>
+              <span className="marketcard-name" title={l.name}>{l.name}</span>
+              <span className="marketcard-meta">
+                {l.count} {l.count === 1 ? "funder" : "funders"}
+              </span>
             </div>
-            {l.imported >= l.count ? (
-              <span className="muted small">On your list</span>
-            ) : (
-              <Busy className="secondary" busy={busy === l.key} busyLabel="Adding"
-                    onClick={() => add(l.key)}>
-                {l.imported ? `Add the other ${l.count - l.imported}` : "Add to my list"}
-              </Busy>
-            )}
+            <p className="marketcard-body">{l.description}</p>
+            <div className="marketcard-foot">
+              {l.imported >= l.count ? (
+                <span className="marketcard-on">
+                  <Icon name="check" size={12} /> On your list
+                </span>
+              ) : (
+                <Busy className="pill primary" busy={busy === l.key} busyLabel="Adding"
+                      onClick={() => add(l.key)}>
+                  {l.imported ? `Add the other ${l.count - l.imported}` : "Add to my list"}
+                </Busy>
+              )}
+            </div>
           </div>
         ))}
       </div>

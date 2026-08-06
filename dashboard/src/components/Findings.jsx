@@ -228,7 +228,11 @@ export function Finding({ o }) {
 // first, everything it wants a second opinion on at the very bottom. The backend already
 // sorts this way, so the split here is presentational only — the order is enforced in
 // SQL so every surface agrees.
-export default function Findings({ clear = [], needsCheck = [], emptyBody }) {
+// `helper` is the first-run orientation banner, passed in from the dashboard rather than
+// rendered at the top of the page. What it explains — the AI/sourced split — is marked
+// inline on every row below it, so it belongs against those rows and not in the position
+// the eye lands on first.
+export default function Findings({ clear = [], needsCheck = [], emptyBody, helper = null }) {
   const total = clear.length + needsCheck.length;
 
   if (total === 0) {
@@ -248,6 +252,7 @@ export default function Findings({ clear = [], needsCheck = [], emptyBody }) {
           Ranked best first. "Not stated" means the funder's page didn't say — the
           researcher never guesses.
         </p>
+        {helper}
         {clear.length === 0 ? (
           <p className="muted small">
             Nothing came through clean this time. That can be a perfectly good week — the

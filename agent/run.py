@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import signal
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -41,10 +42,41 @@ from .models import (
     stable_id,
 )
 from .parse import ParsedPage, parse_page, to_candidate
-from .score import Budget, BudgetExceeded, score_one, triage
+from .score import STAGE_MARKER, Budget, BudgetExceeded, score_one, triage
 from .sources import Source, Tier, active_sources, unconfirmed_sources
 
 log = logging.getLogger("rise")
+
+
+def _emit_funnel(run: RunLog, *, survivors: int | None = None,
+                 kept: int | None = None) -> None:
+    """Print the funnel as it stands, for the three stage boxes on This week.
+
+    The boxes used to be hidden for the whole of a run and appear at the end holding the
+    finished numbers, which made the one thing somebody watches for five to ten minutes —
+    *is this working?* — the one thing they could not see. Now they are the run.
+
+    Same shape as the spend marker beside it: a line on stdout that `app/runner.py: _pump`
+    consumes and drops. The child must not write the run row itself — the sink owns it,
+    and a mid-run write from here would race the process that is about to finish it.
+
+    `survivors` and `kept` are the two denominators. `parsed`/`triaged`/`scored` count
+    what has been *done*, and a count with nothing to divide by cannot fill a bar: stage 2
+    is "of the pages that survived the free filters, how many have been read", and stage 3
+    is "of the results you asked for, how many are found". Both are real stop conditions
+    (`sources_exhausted`, `target_met`) rather than a fraction invented to make a bar move.
+    """
+    funnel = {
+        "parsed": run.candidates_parsed,
+        "triaged": run.triaged,
+        "scored": run.scored,
+    }
+    if survivors is not None:
+        funnel["survivors"] = survivors
+    if kept is not None:
+        funnel["kept"] = kept
+    log.info("%s%s", STAGE_MARKER, json.dumps(funnel, separators=(",", ":")))
+
 
 def _is_thin_landing_page(page: ParsedPage) -> bool:
     """No amount, no deadline, barely any text — a nav page, not an opportunity.
@@ -169,6 +201,10 @@ async def crawl(cfg: Config, run: RunLog,
 
     def consider(page: ParsedPage, source: Source) -> None:
         run.candidates_parsed += 1
+        # `survivors` and not `triaged` is what stage 1's number means: "pages worth
+        # paying to read". Triage has not started yet during the crawl, so reporting the
+        # triaged count here would show a zero on the box that is currently working.
+        _emit_funnel(run, survivors=len(survivors))
         if page.url in survivors:
             return
 
@@ -413,6 +449,10 @@ def evaluate(survivors: list[tuple[ParsedPage, Source]], cfg: Config, run: RunLo
 
     out: list[Opportunity] = []
     scoring_errors = 0
+    # The two denominators the boxes divide by, sent once before the loop so stage 2's
+    # bar has a total to fill against from its first tick rather than after its first
+    # candidate.
+    _emit_funnel(run, survivors=len(ranked), kept=0)
     for page, source in ranked:
         if per_kind is not None:
             # Balanced mode: each kind gets its own cap, and a candidate from a kind
@@ -435,6 +475,7 @@ def evaluate(survivors: list[tuple[ParsedPage, Source]], cfg: Config, run: RunLo
         )
         try:
             run.triaged += 1
+            _emit_funnel(run, survivors=len(ranked), kept=len(out))
             relevant, reason = triage(candidate, budget, cfg)     # tier 2 — Haiku
             if not relevant:
                 # `reason` is the model's own ≤15-word answer. It used to be formatted
@@ -445,6 +486,7 @@ def evaluate(survivors: list[tuple[ParsedPage, Source]], cfg: Config, run: RunLo
                            detail=reason)
                 continue
             run.scored += 1
+            _emit_funnel(run, survivors=len(ranked), kept=len(out))
             opp = score_one(candidate, source, cfg, budget)        # tier 3 — Sonnet
             # Post-scoring deadline guard: §7 rejects passed deadlines, but the
             # deterministic parser (tier 1) often can't find the date. Sonnet does.
@@ -467,6 +509,7 @@ def evaluate(survivors: list[tuple[ParsedPage, Source]], cfg: Config, run: RunLo
                 ))
             kinds[opp.source_kind] += 1
             out.append(opp)
+            _emit_funnel(run, survivors=len(ranked), kept=len(out))
         except BudgetExceeded as exc:
             run.stop_reason = StopReason.BUDGET
             run.notes.append(f"BUDGET CEILING: {exc}")
