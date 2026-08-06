@@ -94,7 +94,7 @@ def test_a_page_that_does_not_load_is_kept_out(monkeypatch):
     """Failing is disqualifying. A dead link wastes the next person's time for certain."""
     _stub_fetch(monkeypatch, ok=False, html=None, error="http_404", status=404)
     ok, note = run(check_page("https://example.invalid/gone"))
-    assert ok is False and "did not load" in note
+    assert ok is False and "not there any more" in note
 
 
 def test_a_site_that_asks_not_to_be_read_says_so_rather_than_looking_broken(monkeypatch):
@@ -103,6 +103,43 @@ def test_a_site_that_asks_not_to_be_read_says_so_rather_than_looking_broken(monk
     _stub_fetch(monkeypatch, ok=False, html=None, error="robots_disallowed")
     ok, note = run(check_page("https://example.invalid/private"))
     assert ok is False and "asks not to be read" in note
+
+
+@pytest.mark.parametrize("error,status,expected", [
+    ("ConnectError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: "
+     "certificate has expired (_ssl.c:1006)", None, "security certificate"),
+    ("blocked_url: could not look up nope.invalid", None, "does not exist"),
+    ("ConnectTimeout: timed out", None, "took too long"),
+    ("http_404", 404, "not there any more"),
+    ("http_403", 403, "refused to let us"),
+    ("http_503", 503, "returned an error"),
+    ("too_many_redirects", None, "keeps redirecting"),
+    ("unreadable_content_type:application/pdf", None, "a file rather than a web page"),
+])
+def test_a_failure_says_what_to_do_about_it_not_what_python_saw(monkeypatch, error,
+                                                                status, expected):
+    """This sentence is shown to a nonprofit administrator and its whole job is to tell
+    them what to do next.
+
+    The first draft printed the exception repr — "(ConnectError: [SSL:
+    CERTIFICATE_VERIFY_FAILED] ... (_ssl.c:1006))" — which is accurate, actionable by
+    nobody, and exactly the register CLAUDE.md's binding constraint rules out.
+    """
+    _stub_fetch(monkeypatch, ok=False, html=None, error=error, status=status)
+    ok, note = run(check_page("https://example.invalid/x"))
+
+    assert ok is False
+    assert expected in note
+    for jargon in ("_ssl.c", "ConnectError", "Traceback", "http_4", "http_5"):
+        assert jargon not in note, f"{note!r} still reads like a stack trace"
+
+
+def test_an_unfamiliar_failure_keeps_the_raw_reason_rather_than_hiding_it(monkeypatch):
+    """A reason we have not seen before is more useful ugly than absent — it is how the
+    next case gets added to the list."""
+    _stub_fetch(monkeypatch, ok=False, html=None, error="something entirely new")
+    ok, note = run(check_page("https://example.invalid/x"))
+    assert ok is False and "something entirely new" in note
 
 
 def test_a_page_that_is_not_about_grants_is_kept_out(monkeypatch):

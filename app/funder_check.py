@@ -38,6 +38,49 @@ _GRANTY = re.compile(
 MIN_TEXT = 400        # below this there is no page to judge, only a shell
 
 
+def _why_it_failed(error: str | None, status: int | None) -> str:
+    """A reason a nonprofit administrator can act on.
+
+    This sentence is shown to the person who added the funder, and its whole job is to
+    tell them what to do next. The raw value is a Python exception repr — the first draft
+    of this feature printed *"That page did not load (ConnectError: [SSL:
+    CERTIFICATE_VERIFY_FAILED] certificate verify failed: certificate has expired
+    (_ssl.c:1006))"*, which is accurate, actionable by nobody, and exactly the register
+    CLAUDE.md's binding constraint rules out.
+
+    Unrecognised failures keep the raw text rather than being flattened into "something
+    went wrong": a reason we have not seen before is more useful ugly than absent, and it
+    is how the next case gets added to this list.
+    """
+    text = (error or "").lower()
+
+    if "robots_disallowed" in text:
+        return "That site asks not to be read automatically, so we cannot check it."
+    if "certificate" in text or "ssl" in text:
+        return ("That page's security certificate has expired or is invalid — a browser "
+                "would warn about it too. It is the site's problem to fix, not yours.")
+    if "could not look up" in text or "nodename" in text or "name or service" in text:
+        return "That web address does not exist. Check it for a typo."
+    if "timeout" in text or "timed out" in text:
+        return "That page took too long to answer. It may be temporarily down."
+    if "connect" in text or "refused" in text:
+        return "Nothing answered at that address."
+    if "too_many_redirects" in text:
+        return "That address keeps redirecting and never arrives anywhere."
+    if "unreadable_content_type" in text:
+        return "That link is a file rather than a web page — link to the page instead."
+    if "blocked_url" in text or "blocked_redirect" in text:
+        return "That address is not a public website, so we will not open it."
+    if status == 404 or "http_404" in text:
+        return "That page is not there any more. The funder may have moved it."
+    if status == 403 or "http_403" in text:
+        return "That site refused to let us read the page."
+    if status and 500 <= status < 600:
+        return "That site returned an error. It may be temporarily broken."
+
+    return f"That page did not load when we last looked ({error or status})."
+
+
 async def check_page(url: str | None) -> tuple[bool, str]:
     """(is it usable, one sentence saying why) for a funder's grants page.
 
@@ -59,11 +102,7 @@ async def check_page(url: str | None) -> tuple[bool, str]:
         return False, "That page could not be opened when we last looked."
 
     if not result.ok:
-        # The distinction is worth keeping: "we are not allowed to read it" is not the
-        # same as "it is not there", and only one of them suggests the link is wrong.
-        if result.error == "robots_disallowed":
-            return False, "That site asks not to be read automatically."
-        return False, f"That page did not load when we last looked ({result.error or result.status})."
+        return False, _why_it_failed(result.error, result.status)
 
     try:
         page = parse_page(result.final_url or url, result.html or "")

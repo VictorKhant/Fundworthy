@@ -208,6 +208,16 @@ def _funder_out(row) -> dict:
     d["programs"] = loads(d.get("programs"), [])
     d["warm"] = bool(d.get("warm"))
     d["active"] = bool(d.get("active"))
+    # **Tri-state, and it has to survive the trip.** NULL means nobody has looked yet,
+    # which is not the same as failing — so this cannot collapse to a plain bool.
+    #
+    # It also cannot stay as SQLite's 1/0. Those cross to the browser as integers, and
+    # `check_ok === true` is false for `1`, so the Settings page computed "0 of 2 shared"
+    # while the database held one pass and one failure. Same family of bug as
+    # `share_funders` being stored as the string "True": a value crossing the boundary
+    # with a type that was assumed rather than checked.
+    if d.get("check_ok") is not None:
+        d["check_ok"] = bool(d["check_ok"])
     return d
 
 
@@ -337,6 +347,13 @@ def update_funder(conn, funder_id: str, changes: dict, *, org_id: str) -> dict |
         sets.append(f"{field}=?")
         values.append(value)
     if sets:
+        # A new address is a new page, so the old verdict is about something else.
+        # Without this a funder whose URL failed the check once could never recover:
+        # `recheck_shared` only picks up rows with `checked_at IS NULL`, so fixing a typo
+        # would leave it permanently marked unreachable and permanently unshared, with
+        # nothing the person could do about it.
+        if "url" in changes:
+            sets += ["check_ok=NULL", "check_note=''", "checked_at=NULL"]
         sets.append("updated_at=?")
         values.extend([now_iso(), funder_id, org_id])
         conn.execute(

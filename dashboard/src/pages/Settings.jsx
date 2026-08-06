@@ -273,7 +273,26 @@ function OrgPanel({ settings, onChange }) {
 function ShareFunders({ settings, onChange }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [mine, setMine] = useState(null);
   const on = Boolean(settings.share_funders);
+
+  // What actually happened to the funders you offered.
+  //
+  // Without this the feature is a checkbox that does nothing observable. Ticking it
+  // schedules a background fetch of each page, and a funder is only offered to anybody
+  // once that has passed — so a page with an expired certificate, or a homepage with no
+  // grant language, silently never appears and you have no way to find out. That is
+  // exactly what happened the first time this was tested: added a foundation, looked on
+  // another account, saw nothing, and nothing anywhere said why.
+  const load = useCallback(async () => {
+    try {
+      const all = (await api.funders.list()).funders;
+      setMine(all.filter((f) => f.added_by === "user"));
+    } catch {
+      setMine([]);
+    }
+  }, []);
+  useEffect(() => { load(); }, [load, settings.share_funders]);
 
   async function toggle(next) {
     setSaving(true);
@@ -281,12 +300,21 @@ function ShareFunders({ settings, onChange }) {
     try {
       await api.settings.save({ share_funders: next });
       await onChange();
+      // The checks run in a background thread, so the first look is usually too early.
+      // One delayed refresh turns "nothing here" into the real answer without making
+      // anybody press anything.
+      setTimeout(load, 4000);
     } catch (e) {
       setError(e.message);
     } finally {
       setSaving(false);
     }
   }
+
+  const offered = (mine || []).filter((f) => f.check_ok === true);
+  const rejected = (mine || []).filter((f) => f.check_ok === false);
+  const waiting = (mine || []).filter((f) => f.check_ok === null
+                                          || f.check_ok === undefined);
 
   return (
     <section className="panel">
@@ -320,6 +348,51 @@ function ShareFunders({ settings, onChange }) {
 
       {saving && <p className="loading-line"><Spinner label="Saving" />Saving…</p>}
       {error && <div className="notice error">{error}</div>}
+
+      {on && mine !== null && (
+        mine.length === 0 ? (
+          <div className="notice plain">
+            You have not added any funders by hand yet, so there is nothing to share.
+            Funders that came from the researched lists do not count — everybody already
+            has those. Add one on <strong>Discover funders</strong>.
+          </div>
+        ) : (
+          <>
+            <h3 className="sub">
+              What you are offering — {offered.length} of {mine.length}
+            </h3>
+            <ul className="plain">
+              {offered.map((f) => (
+                <li key={f.id} className="member">
+                  <span>✓ {f.name}</span>
+                  <span className="muted small">{f.check_note}</span>
+                </li>
+              ))}
+              {waiting.map((f) => (
+                <li key={f.id} className="member">
+                  <span>{f.name}</span>
+                  <span className="muted small">Waiting to be checked…</span>
+                </li>
+              ))}
+              {/* The one that matters. A funder that failed is not being offered to
+                  anybody, and the reason is usually something the person can fix — a
+                  homepage instead of a grants page, or a link with a typo in it. */}
+              {rejected.map((f) => (
+                <li key={f.id} className="member">
+                  <span className="muted">{f.name} — not shared</span>
+                  <span className="muted small">{f.check_note}</span>
+                </li>
+              ))}
+            </ul>
+            {rejected.length > 0 && (
+              <p className="muted small">
+                Fixing the web address on <strong>Discover funders</strong> makes us look
+                again.
+              </p>
+            )}
+          </>
+        )
+      )}
     </section>
   );
 }
