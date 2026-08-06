@@ -298,7 +298,16 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 textarea { resize: vertical; line-height: 1.5; }
 input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; }
 
-.knobs { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 4px 20px; }
+/* Four numeric fields on one row where there is room. They were a wrapping grid of
+   200px columns with a line of hint prose under each, which made the panel about three
+   times taller than the controls in it — sitting over the findings it decides the shape
+   of. The hints are `title` tooltips now (see Knob in SearchSettings.jsx). */
+.knobs {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px 16px;
+  margin-bottom: 4px;
+}
+@media (max-width: 760px) { .knobs { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 420px) { .knobs { grid-template-columns: 1fr; } }
 .checks { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 4px 0; }
 .check { display: flex; align-items: center; gap: 7px; font-size: 13.5px; cursor: pointer; }
 
@@ -429,13 +438,17 @@ button.text:hover:not(:disabled) { color: var(--accent-deep); }
 /* Pulled up under the strip so the two read as one control, not two stacked panels. */
 .searchpanel {
   background: var(--card); border: 1px solid var(--line); border-radius: 14px;
-  padding: 20px 22px; margin: -14px 0 26px;
+  padding: 16px 18px; margin: -14px 0 22px;
 }
 .searchpanel-foot {
   display: flex; align-items: center; justify-content: space-between; gap: 14px;
-  margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line-soft);
+  margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line-soft);
   flex-wrap: wrap;
 }
+/* The two switches and Save on one line, with the schedule row dropping underneath only
+   when the automation switch is on. */
+.searchpanel-foot.compact { align-items: center; row-gap: 10px; }
+.searchpanel-foot.compact > .row { margin-left: auto; }
 
 /* --- the program chip row (R3) --------------------------------------------- */
 /*
@@ -1460,4 +1473,39 @@ body[data-fw-theme="dark"] {
 
 @media (max-width: 620px) {
   .marketplace .directory { grid-template-columns: 1fr; }
+}
+
+/* --- member actions and the spending cap (R9) -------------------------------- */
+/*
+   "Make admin" and "Remove" used to sit in a `.row` at `gap: 4px`. Four pixels between
+   handing somebody your organisation and cutting them off from it.
+*/
+.member-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.member-divider {
+  width: 1px; height: 18px; background: var(--line); flex-shrink: 0; margin: 0 4px;
+}
+
+button.pill {
+  padding: 4px 12px; font-size: 12.5px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--card); color: var(--body);
+}
+button.pill:hover:not(:disabled) { border-color: var(--dash); color: var(--fg); }
+button.pill.on { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent-deep); }
+
+/* Icon-only, so it needs its own hit area and its label lives in aria-label. */
+button.iconbtn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; padding: 0; border-radius: 9px;
+  border: 1px solid transparent; background: none; color: var(--muted);
+}
+button.iconbtn:hover:not(:disabled) { background: var(--line-soft); color: var(--fg); border-color: transparent; }
+button.iconbtn.danger { color: var(--clay); }
+button.iconbtn.danger:hover:not(:disabled) { background: var(--clay-soft); color: var(--danger); }
+
+.capedit { display: grid; gap: 8px; margin-top: 10px; }
+.capedit .field.inline { gap: 7px; margin: 0; }
+
+@media (max-width: 620px) {
+  /* 44px targets on touch. */
+  button.iconbtn { width: 44px; height: 44px; }
 }

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, SECTOR_LABELS } from "../api";
 import { useConfirm } from "./Confirm";
+import { IconButton } from "./Icon";
 import { Busy } from "./Spinner";
 
 // The partner list, editable. This used to be a hardcoded array in agent/sources.py.
@@ -134,15 +135,22 @@ function Row({ funder, onToggle, onEdit, onBlock, selecting, selected, onSelect 
       {/* Delete is not here any more. It is the only irreversible one of the three, and
           a row action next to a tick people press weekly is one they eventually press by
           accident — so it lives in "Delete several" mode and nowhere else. */}
+      {/* Icons for the two repeated actions, words for the rare one. "Put back" is
+          the reversal of something deliberate and happens once, so it says what it
+          does rather than asking somebody to recognise a glyph. */}
       <div className="row">
-        {!selecting && (
+        {!selecting && (funder.blocked ? (
+          <button className="text" onClick={() => onBlock(funder, false)}>
+            Put back
+          </button>
+        ) : (
           <>
-            <button className="text" onClick={() => onEdit(funder)}>Edit</button>
-            <button className="text" onClick={() => onBlock(funder, !funder.blocked)}>
-              {funder.blocked ? "Put back" : "Block"}
-            </button>
+            <IconButton name="edit" label={`Edit ${funder.name}`}
+                        onClick={() => onEdit(funder)} />
+            <IconButton name="block" label={`Block ${funder.name}`}
+                        onClick={() => onBlock(funder, true)} />
           </>
-        )}
+        ))}
       </div>
     </div>
   );

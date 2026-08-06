@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, money } from "../api";
 import { useConfirm } from "./Confirm";
+import Icon from "./Icon";
 import Spinner, { Busy } from "./Spinner";
 
 // Program cards: the thing the user ticks to say "search for this one this week".
@@ -236,21 +237,12 @@ function Chip({ program, globalFloor, onToggle, onEdit }) {
         title={`Edit ${program.name}`}
         aria-label={`Edit ${program.name}`}
       >
-        <PencilIcon />
+        <Icon name="edit" size={14} />
       </button>
     </div>
   );
 }
 
-function PencilIcon() {
-  return (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"
-         strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"
-         width="14" height="14">
-      <path d="M11.2 2.4a1.4 1.4 0 0 1 2 2L5.8 11.8l-2.7.7.7-2.7z" />
-    </svg>
-  );
-}
 
 export default function Programs({ programs, globalFloor, onChange }) {
   const [dialog, ask] = useConfirm();

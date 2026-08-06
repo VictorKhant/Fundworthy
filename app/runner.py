@@ -147,23 +147,12 @@ def preflight(conn, *, org_id: str, no_llm: bool = False) -> list[dict]:
             ),
             "page": "discover",
         })
-    else:
-        # Funders on the list, but the sector ticks or the tier may exclude every one of
-        # them. Same empty result, completely different fix, so it gets its own sentence.
-        # Asked of the same function the crawl will ask, not of a second copy of the rule.
-        sectors = list(settings["sectors_active"])
-        found = sources_from_db(max_tier_for(sectors), sectors, org_id=org_id)
-        if found is not None and not found[0]:
-            out.append({
-                "code": "no_searchable_funders",
-                "message": (
-                    f"You have {active} funder{'' if active == 1 else 's'} on your list, "
-                    "but none of them match the kinds of funding you have ticked, so "
-                    'there is nothing to fetch. Tick more kinds under "Adjust search '
-                    'settings", or add funders on Discover funders.'
-                ),
-                "page": "discover",
-            })
+
+    # A "your funders do not match the ticked sectors" refusal used to follow, for the
+    # case where the list was non-empty but the sector filter excluded all of it. It is
+    # gone with that filter (R8): the funder list is no longer narrowed by sector, so a
+    # funder on the list is a funder that gets fetched, and the state cannot arise. The
+    # empty-list refusal above still covers the one that can.
 
     return out
 

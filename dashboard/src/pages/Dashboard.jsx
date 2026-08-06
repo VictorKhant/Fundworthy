@@ -269,7 +269,6 @@ export default function Dashboard({ state, onChange, onGoto }) {
         <SearchSettings
           draft={draft}
           set={set}
-          sectors={state.sectors_available}
           dirty={dirty}
           saving={saving}
           // Wrapped, not passed: `onSave` is wired straight to a button's onClick, so

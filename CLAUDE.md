@@ -46,9 +46,25 @@ design constraint:
   scoring, behind a hard per-run budget ceiling.
 - The accuracy gate (`agent/verify.py`): a sourced value is nulled unless the model
   returns the verbatim sentence it came from and that sentence is on the fetched page.
-- Dashboard controls: award floor, deadline runway, result cap, spend limit, sector
-  selection, program cards with CRUD + an AI "build from a link" assistant, an editable
-  funder list, a monthly archive, a Re-run button with a live streaming log, a real Stop.
+- Dashboard controls: award floor, deadline runway, result cap, spend limit, program
+  cards as a chip row at the top of This week, an editable funder list with search and
+  paging, a monthly archive, a Re-run button, a real Stop.
+- **Light and dark** (`body[data-fw-theme]`, a control at the foot of the sidebar). The
+  dark palette is derived from the light one — same hues, moved down — because the
+  previous attempt was cool grey against a warm light theme and was dropped for it.
+  Default is light and `prefers-color-scheme` is deliberately not consulted.
+- **Three stage boxes** (`components/Stages.jsx`) in place of the streaming log as the
+  primary account of a run: free filters → Haiku triage → Sonnet scoring, each with what
+  came in, what went through, and what it cost. Opening one lists **which** pages were
+  set aside and why, with the specific fact — "$4,000 < $10,000", or triage's own
+  fifteen words. The log is kept verbatim behind "Show the technical log", because it is
+  still the only thing that explains a run that died halfway.
+- **Which model runs each paid step** is a setting, chosen from the Engine row on those
+  boxes, with the projected cost on each option (`triage_model` / `scoring_model`, stored
+  as `provider:model`).
+- Spend **moves while a search runs**. It used to be written only at the end.
+- One themed confirm dialog (`components/Confirm.jsx`) instead of `window.confirm` —
+  every destructive path says what will happen rather than asking "are you sure?".
 - Settings page storing the Anthropic API key **encrypted at rest, write-only** (no
   endpoint ever returns it).
 - CSV export of the week's findings, named after the org that downloaded it — it was
@@ -85,7 +101,7 @@ That is safe in a way it would not have been before per-org keys: a new account 
 the server crawl on the free tier, which `FUNDWORTHY_MAX_RUNS_PER_DAY` can bound if one
 account ever misbehaves.
 
-**Multi-tenant storage** (schema v11). Every row has an owner. `orgs` and `users` tables;
+**Multi-tenant storage** (schema v14). Every row has an owner. `orgs` and `users` tables;
 `org_id` on `settings`, `programs`, `funders`, `opportunities` and `runs`; and each org
 holds **its own encrypted Anthropic key**, so one nonprofit can never spend another's.
 
@@ -344,6 +360,14 @@ every other org's archive.
 (default **$10,000**), deadline inside the runway (default 14 days), funder on the
 **remove list**. Match-requirement is *flagged, not filtered*.
 
+**There is no sector filter either, and it went the same way** (R8). Four checkboxes —
+"warm_partner / foundation / government / arts_agency" — narrowed the funder list, on a
+taxonomy we invented and the settings copy admitted was a guess. A funder's bucket came
+from the shipped registry or defaulted to `foundation` for anything typed in, so
+unticking a box excluded funders on a label nobody at the nonprofit had chosen, silently,
+in the free tier. `sectors_active` stays in the schema and the API so old rows read back;
+nothing reads it. Which funders are searched is the funder list.
+
 **There is no geographic filter, on purpose.** There was one, and it is removed rather
 than fixed: where an org can apply is decided by *which funders it chose to search*, not
 by pattern-matching prose on a page we already decided to fetch. A text filter got it
@@ -352,6 +376,13 @@ passing regional ones that never named their region — and it did so silently, 
 tier, which explains nothing to anyone. `org_location` is now only a hint about which
 funders to show first. See the note at the top of `agent/filters.py`, and FUTURE.md §4a
 for the funder directory that replaces the idea properly.
+
+**Three things you can do to a funder, and they are different.** Pause (`active=0`)
+takes them out of this week's search and leaves them on the list; **block** (`blocked=1`)
+also stops them ever being *offered* again, by a researched list or by another
+nonprofit's suggestion; delete removes the row. Blocking needed its own column precisely
+because `active` does not reach the two places that offer a funder — an org that unticked
+one got it back from every import.
 
 **The remove list** is the single exclusion lever, and it is the user's: a funder (or a
 single named program, matched on page title) that is un-ticked is never fetched, never

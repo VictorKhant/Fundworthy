@@ -439,8 +439,14 @@ def test_a_search_with_an_empty_funder_list_is_refused(client):
     assert "Discover funders" in r.json()["detail"]
 
 
-def test_funders_that_no_ticked_sector_matches_get_their_own_message(client):
-    """A different fix from an empty list, so a different sentence. Same empty result."""
+def test_a_funder_on_the_list_is_searchable_whatever_the_sectors_say(client):
+    """The inverse of what this asserted before R8.
+
+    A funder used to be excluded when its sector was unticked, and preflight had a whole
+    refusal for "you have funders but none match the ticked kinds". Both are gone: the
+    taxonomy was our guess, the exclusion was silent and free, and a funder on the list
+    is now simply a funder that gets fetched.
+    """
     client.post("/api/settings/api-key", json={"api_key": FAKE_KEY})
     _tick_a_program(client)
     for f in client.get("/api/funders").json()["funders"]:
@@ -452,8 +458,9 @@ def test_funders_that_no_ticked_sector_matches_get_their_own_message(client):
     client.put("/api/settings", json={"sectors_active": ["arts_agency"]})
 
     codes = _codes(client)
-    assert "no_searchable_funders" in codes, "they have one, it just isn't searchable"
-    assert "no_funders" not in codes, "an empty list is a different problem"
+    assert "no_searchable_funders" not in codes, "an invisible sector filter is back"
+    assert "no_funders" not in codes, "they have one and it counts"
+    assert codes == [], f"nothing should stop this search: {codes}"
 
 
 def test_a_search_with_nothing_ticked_to_search_for_is_refused(client):
