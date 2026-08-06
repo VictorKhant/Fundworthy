@@ -401,10 +401,21 @@ export default function Tutorial({ state, onChange, onDone }) {
 
   return (
     <div className="tutorial">
+      {/* The rail is **progress**, not a scoreboard of the four `doneness` flags.
+          Drawing the flags directly looked broken, and on a brand-new account it looked
+          broken immediately: every org is seeded with funders, so step 3 was satisfied
+          before anyone had done anything, and the rail opened as
+          grey · grey · GREEN · grey — a filled segment sitting after two empty ones,
+          which reads as a rendering fault rather than as information.
+
+          Those flags are still exactly right for deciding which step to open on and when
+          "Next" lights up; they are just not a sequence, and a four-segment bar is only
+          ever read as one. So: passed, here, not yet — which is also the only reading
+          that can agree with the "Step 1 of 4" printed underneath it. */}
       <div className="tut-rail" aria-hidden="true">
         {steps.map((s, i) => (
           <span key={s.key}
-                className={`tut-pip ${i === at ? "at" : ""} ${doneness[i] ? "done" : ""}`} />
+                className={`tut-pip ${i === at ? "at" : ""} ${i < at ? "done" : ""}`} />
         ))}
       </div>
 
