@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, SECTOR_LABELS } from "../api";
+import { useConfirm } from "./Confirm";
 import { Busy } from "./Spinner";
 
 // The partner list, editable. This used to be a hardcoded array in agent/sources.py.
@@ -134,6 +135,7 @@ function Row({ funder, onToggle, onEdit, onDelete }) {
 }
 
 export default function Funders({ funders, sectors, onChange }) {
+  const [dialog, ask] = useConfirm();
   const [editing, setEditing] = useState(null);
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -149,28 +151,37 @@ export default function Funders({ funders, sectors, onChange }) {
     }
   };
 
-  const toggle = guard((f, active) => {
+  const toggle = guard(async (f, active) => {
     if (active) return api.funders.update(f.id, { active: true, exclude_reason: "" });
     // Ask why. "We already get money from them" and "they stopped funding us" both
     // mean don't search, and in six months nobody will remember which this was.
-    const reason = window.prompt(
-      `Take ${f.name} off the search?\n\n` +
-        `They will not be fetched, read, or scored — so this costs nothing every week.\n\n` +
-        `Why? (optional, but it saves you guessing later)`,
-      "We already receive funding from them",
-    );
-    if (reason === null) return Promise.resolve();
-    return api.funders.update(f.id, { active: false, exclude_reason: reason });
+    const answer = await ask({
+      title: `Take ${f.name} off the search?`,
+      points: [
+        "They will not be fetched, read, or scored, so this costs nothing every week.",
+        "They stay on your list, greyed out, and one click puts them back.",
+      ],
+      field: {
+        label: "Why? (optional, but it saves you guessing later)",
+        defaultValue: "We already receive funding from them",
+      },
+      confirmLabel: "Take them off",
+    });
+    if (!answer) return undefined;
+    return api.funders.update(f.id, { active: false, exclude_reason: answer.value });
   });
-  const remove = guard((f) => {
-    if (
-      !window.confirm(
-        `Remove ${f.name} completely?\n\nIf they have just stopped funding you, untick ` +
-          `"Search this one" instead — that keeps the record of the relationship.`
-      )
-    ) {
-      return Promise.resolve();
-    }
+  const remove = guard(async (f) => {
+    const answer = await ask({
+      tone: "clay",
+      title: `Remove ${f.name} completely?`,
+      points: [
+        "Their row and any notes on it are deleted. This cannot be undone.",
+        'If they have just stopped funding you, untick "Search this one" instead — '
+          + "that keeps the record of the relationship.",
+      ],
+      confirmLabel: "Remove them",
+    });
+    if (!answer) return undefined;
     return api.funders.remove(f.id);
   });
   const save = async (form) => {
@@ -196,6 +207,7 @@ export default function Funders({ funders, sectors, onChange }) {
 
   return (
     <section className="panel">
+      {dialog}
       <div className="panel-head">
         <h2>Funders it watches</h2>
         <button onClick={() => setEditing("new")}>+ Add</button>

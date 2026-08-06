@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Busy } from "./Spinner";
 
 // One dialog for every destructive path in the app, replacing window.confirm and
@@ -165,4 +165,48 @@ export default function Confirm({
       </div>
     </div>
   );
+}
+
+// `const [dialog, ask] = useConfirm()` — the awaitable form, which is what the seven
+// call sites this replaced actually wanted.
+//
+// They were all written against `window.confirm`, whose one virtue is that it is a
+// function you can await in the middle of a handler. A component is not, so without this
+// every caller would hand-roll the same promise-and-ref dance to bridge the two. Render
+// `{dialog}` anywhere in the component and call `await ask({...})` wherever the browser
+// dialog used to be.
+//
+// **Resolves to an object or null, never a bare boolean.** The two `window.prompt` cases
+// take an optional reason, and "" is a real answer meaning "no reason given" — with a
+// boolean it would be indistinguishable from pressing Cancel, and a funder would go on
+// the remove list with a reason nobody typed or not go on at all.
+//
+//    const answer = await ask({ title: …, points: [...] });
+//    if (!answer) return;              // cancelled
+//    answer.value                      // the typed text, when `field` was given
+export function useConfirm() {
+  const [config, setConfig] = useState(null);
+  const decide = useRef(null);
+
+  const ask = useCallback((cfg) => {
+    setConfig(cfg);
+    return new Promise((resolve) => { decide.current = resolve; });
+  }, []);
+
+  const settle = useCallback((answer) => {
+    setConfig(null);
+    decide.current?.(answer);
+    decide.current = null;
+  }, []);
+
+  const dialog = (
+    <Confirm
+      {...(config || {})}
+      open={Boolean(config)}
+      onCancel={() => settle(null)}
+      onConfirm={(value) => settle({ value: value ?? "" })}
+    />
+  );
+
+  return [dialog, ask];
 }

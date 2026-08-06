@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, SECTOR_LABELS } from "../api";
+import { useConfirm } from "../components/Confirm";
 import Funders from "../components/Funders";
 import Spinner, { Busy } from "../components/Spinner";
 
@@ -99,6 +100,7 @@ function StarterLists({ onChange }) {
 // is worth an application is a judgement nobody here can make for them, and dressing a
 // reachability check up as approval is exactly the accuracy shortcut §8 forbids.
 function SharedFunders({ onChange }) {
+  const [dialog, ask] = useConfirm();
   const [shared, setShared] = useState(null);
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
@@ -131,12 +133,20 @@ function SharedFunders({ onChange }) {
   }
 
   async function report(f) {
-    const reason = window.prompt(
-      `Report "${f.name}"?\n\n` +
-      "Use this if the page is wrong, misleading, or not something that should be put " +
-      "in front of a nonprofit.\n\nIt is hidden from everyone straight away while it is " +
-      "looked at.\n\nWhat is wrong with it? (optional)");
-    if (reason === null) return;
+    const answer = await ask({
+      tone: "clay",
+      title: `Report "${f.name}"?`,
+      body: "Use this if the page is wrong, misleading, or not something that should be "
+            + "put in front of a nonprofit.",
+      points: [
+        "It is hidden from everyone straight away, before anyone looks at it.",
+        "Your organization is recorded, and is never shown to anyone.",
+      ],
+      field: { label: "What is wrong with it? (optional)" },
+      confirmLabel: "Report it",
+    });
+    if (!answer) return;
+    const reason = answer.value;
     setBusy(`report:${f.id}`);
     setError(null);
     try {
@@ -154,6 +164,7 @@ function SharedFunders({ onChange }) {
 
   return (
     <section className="card">
+      {dialog}
       <h2>Suggested by other nonprofits</h2>
       <p className="muted">
         Funders other organizations added by hand and chose to share. <strong>We have

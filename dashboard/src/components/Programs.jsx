@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, money } from "../api";
+import { useConfirm } from "./Confirm";
 import Spinner, { Busy } from "./Spinner";
 
 // Program cards: the thing the user ticks to say "search for this one this week".
@@ -220,6 +221,7 @@ function Row({ program, globalFloor, onToggle, onEdit, onDelete }) {
 }
 
 export default function Programs({ programs, globalFloor, onChange }) {
+  const [dialog, ask] = useConfirm();
   const [editing, setEditing] = useState(null); // program | "new" | null
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -235,10 +237,18 @@ export default function Programs({ programs, globalFloor, onChange }) {
   };
 
   const toggle = guard((p, active) => api.programs.update(p.id, { active }));
-  const remove = guard((p) => {
-    if (!window.confirm(`Remove "${p.name}"? This does not delete anything it found.`)) {
-      return Promise.resolve();
-    }
+  const remove = guard(async (p) => {
+    const answer = await ask({
+      tone: "clay",
+      title: `Remove "${p.name}"?`,
+      points: [
+        "Nothing it has already found is deleted — the grants stay in This week and in "
+          + "your past findings.",
+        "Future searches will stop looking for grants that match this program.",
+      ],
+      confirmLabel: "Remove this program",
+    });
+    if (!answer) return undefined;
     return api.programs.remove(p.id);
   });
   // Saving a card is a write plus a full dashboard refresh, so it is not instant — and
@@ -262,6 +272,7 @@ export default function Programs({ programs, globalFloor, onChange }) {
 
   return (
     <section className="panel">
+      {dialog}
       <div className="panel-head">
         <h2>Your programs</h2>
         <button onClick={() => setEditing("new")}>+ Add</button>

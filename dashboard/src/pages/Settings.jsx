@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import Confirm from "../components/Confirm";
+import Confirm, { useConfirm } from "../components/Confirm";
 import JoinOrg from "../components/JoinOrg";
 import Organization from "../components/Organization";
 import Spinner, { Busy } from "../components/Spinner";
@@ -33,6 +33,7 @@ const STEPS = [
 ];
 
 function KeyPanel({ state, onChange }) {
+  const [dialog, ask] = useConfirm();
   const [key, setKey] = useState("");
   // Which of the three is running, not just "something is". They take visibly different
   // amounts of time — checking a key is a round trip to Anthropic — so the spinner has to
@@ -72,7 +73,18 @@ function KeyPanel({ state, onChange }) {
   }
 
   async function remove() {
-    if (!window.confirm("Remove the saved key? Searches will stop being scored until you add one.")) return;
+    const answer = await ask({
+      tone: "clay",
+      title: "Remove the saved key?",
+      points: [
+        "Searches will stop running until you add one — Fundworthy has nothing to read "
+          + "funders' pages with.",
+        "Nothing you have already found is deleted.",
+        "You can paste the same key back at any time.",
+      ],
+      confirmLabel: "Remove it",
+    });
+    if (!answer) return;
     setDoing("remove");
     try {
       await api.settings.deleteKey();
@@ -87,6 +99,7 @@ function KeyPanel({ state, onChange }) {
 
   return (
     <section className="panel raised">
+      {dialog}
       <h2>Your AI key</h2>
       <p className="settings-lede">
         The key is what pays for the reading and scoring — think of it as the researcher's

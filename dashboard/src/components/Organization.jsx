@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useConfirm } from "./Confirm";
 import Spinner, { Busy } from "./Spinner";
 import { api, pacificStamp, usd } from "../api";
 
@@ -49,6 +50,7 @@ function Meter({ spend }) {
 }
 
 export default function Organization({ spend, onChange }) {
+  const [dialog, ask] = useConfirm();
   const [org, setOrg] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -86,11 +88,18 @@ export default function Organization({ spend, onChange }) {
   // from the funders, the findings and the API key at once; handing the org over cannot
   // be taken back by the person doing it.
   async function drop(member) {
-    if (!window.confirm(
-      `Remove ${member.email} from your organization?\n\n` +
-      "They lose access to your funders, your findings and your saved API key " +
-      "immediately. Next time they sign in they get a fresh, empty organization of " +
-      "their own.\n\nThis cannot be undone — you would have to invite them back.")) return;
+    const answer = await ask({
+      tone: "clay",
+      title: `Remove ${member.email} from your organization?`,
+      points: [
+        "They lose access to your funders, your findings and your saved API key "
+          + "immediately.",
+        "Next time they sign in they get a fresh, empty organization of their own.",
+        "This cannot be undone — you would have to invite them back.",
+      ],
+      confirmLabel: "Remove them",
+    });
+    if (!answer) return;
     setActing(`drop:${member.uid}`);
     setError(null);
     try {
@@ -105,11 +114,17 @@ export default function Organization({ spend, onChange }) {
   }
 
   async function handOver(member) {
-    if (!window.confirm(
-      `Make ${member.email} the admin of your organization?\n\n` +
-      "They will be able to remove people, including you. You stay a member and can " +
-      "carry on as normal, but you will not be able to take this back yourself — only " +
-      "they can hand it on again.")) return;
+    const answer = await ask({
+      title: `Make ${member.email} the admin of your organization?`,
+      points: [
+        "They will be able to remove people, including you.",
+        "You stay a member and can carry on as normal.",
+        "You will not be able to take this back yourself — only they can hand it on "
+          + "again.",
+      ],
+      confirmLabel: "Hand it over",
+    });
+    if (!answer) return;
     setActing(`give:${member.uid}`);
     setError(null);
     try {
@@ -146,6 +161,7 @@ export default function Organization({ spend, onChange }) {
 
   return (
     <section className="card">
+      {dialog}
       <h2>Your organization</h2>
 
       {spend && <Meter spend={spend} />}

@@ -104,6 +104,31 @@ def test_there_are_jsx_files_to_check():
     assert len(_sources()) > 10, f"expected the dashboard's components under {SRC}"
 
 
+# `useThing(` — hooks are the other identifier that is used bare, throws at render when
+# it is missing, and builds perfectly happily without an import.
+_HOOK_CALL = re.compile(r"\b(use[A-Z][A-Za-z0-9_]*)\s*\(")
+
+
+@pytest.mark.parametrize("path", _sources(), ids=lambda p: p.name)
+def test_every_hook_a_file_calls_is_actually_in_scope(path: Path):
+    """The same white-page failure as below, one identifier shape over.
+
+    Caught in the wild: `Settings.jsx` gained `const [dialog, ask] = useConfirm()` while
+    its import line still read `import Confirm from "../components/Confirm"`. The build
+    was clean and the JSX-tag check above saw nothing wrong, because `useConfirm` is a
+    call and not a tag — the page would simply have thrown on open.
+    """
+    source = _without_comments(path.read_text(encoding="utf-8"))
+    in_scope = _names_in_scope(path.read_text(encoding="utf-8"))
+    # A hook defined in this file is declared here too, so _DECLARED already has it.
+    missing = sorted({h for h in _HOOK_CALL.findall(source)} - in_scope)
+    assert not missing, (
+        f"{path.relative_to(SRC.parent.parent)} calls {', '.join(missing)} but nothing "
+        "imports or defines it. React hooks fail the same way a missing component does: "
+        "clean build, ReferenceError on render, blank page."
+    )
+
+
 @pytest.mark.parametrize("path", _sources(), ids=lambda p: p.name)
 def test_every_component_a_file_renders_is_actually_in_scope(path: Path):
     """The white-page check.
