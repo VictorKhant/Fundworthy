@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import repo
+from agent.score import SPEND_MARKER
 from .db import db_path, dumps, session
 from .secrets import SOURCE_ENVIRONMENT, resolve_api_key
 
@@ -181,6 +182,21 @@ def drain_notice() -> str:
 
 # Lines from the child that mean something to a non-technical reader. Everything else
 # (httpx chatter, robots.txt fetches) is kept in the buffer but not surfaced as status.
+def _spend_from(line: str) -> float | None:
+    """Pull the running total out of a `::spend 0.041234` marker, or return None.
+
+    Tolerant on purpose — a malformed marker is a cosmetic loss, and raising here would
+    take down the thread draining the child's output.
+    """
+    marker = SPEND_MARKER.strip()
+    if marker not in line:
+        return None
+    try:
+        return float(line.rsplit(marker, 1)[1].strip().split()[0])
+    except (IndexError, ValueError):
+        return None
+
+
 _INTERESTING = ("✓", "✗", "⚠", "scored", "Crawling", "candidates survived",
                 "Archive", "Sources", "dropped", "Budget", "Wrote", "RUN SUMMARY")
 
@@ -410,6 +426,13 @@ class RunManager:
                 line = raw.rstrip()
                 if not line:
                     continue
+                # The running spend total, emitted by Budget.record after every call.
+                # Consumed and dropped: it is machine chatter, and a log full of
+                # "::spend 0.0421" is worse than the delay it fixes.
+                spend = _spend_from(line)
+                if spend is not None:
+                    self._write_spend(slot.run_id, spend)
+                    continue
                 slot.lines.append(line)
                 if any(token in line for token in _INTERESTING):
                     self._write_progress(slot.run_id, line)
@@ -421,6 +444,18 @@ class RunManager:
             with self._lock:
                 if self._slots.get(slot.org_id) is slot:
                     del self._slots[slot.org_id]
+
+    def _write_spend(self, run_id: str, spent: float) -> None:
+        """The live figure the status strip reads, written straight onto the run row.
+
+        Best-effort like `_write_progress`: a search must not die because one cosmetic
+        write lost a race with the sink.
+        """
+        try:
+            with session() as conn:
+                repo.update_run(conn, run_id, usd_spent=round(spent, 6))
+        except Exception as exc:  # noqa: BLE001
+            log.debug("could not write live spend for %s: %s", run_id, exc)
 
     def _write_progress(self, run_id: str, message: str) -> None:
         try:

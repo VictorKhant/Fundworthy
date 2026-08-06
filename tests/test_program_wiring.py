@@ -321,3 +321,44 @@ def test_an_unknown_stored_model_falls_back_instead_of_killing_the_run(tmp_path,
 
     cfg = load_from_db(org_id=DEFAULT_ORG_ID)
     assert cfg.scoring_model == SCORING_MODEL, "an unusable setting must not be obeyed"
+
+
+# --- live spend during a run ---------------------------------------------------
+
+def test_the_budget_emits_a_running_total(caplog):
+    """`usd_spent` is otherwise only written when a run finishes, so the status strip
+    read $0.0000 for ten minutes and then jumped — on the one number §8 asks the user to
+    trust."""
+    import logging
+
+    from agent.score import SPEND_MARKER, Budget
+
+    budget = Budget(ceiling_usd=1.0)
+    with caplog.at_level(logging.INFO, logger="agent.score"):
+        budget.record("anthropic:claude-haiku-4-5", 10_000, 1_000)
+        budget.record("anthropic:claude-haiku-4-5", 10_000, 1_000)
+
+    markers = [r.getMessage() for r in caplog.records if SPEND_MARKER.strip() in r.getMessage()]
+    assert len(markers) == 2, "one running total per call"
+    # Cumulative, not per-call: the strip shows spend-so-far.
+    totals = [float(m.split()[-1]) for m in markers]
+    assert totals[1] > totals[0]
+    assert abs(totals[-1] - budget.spent_usd) < 1e-9
+
+
+def test_the_runner_reads_the_marker_and_ignores_everything_else():
+    from app.runner import _spend_from
+
+    assert _spend_from("::spend 0.041234") == pytest.approx(0.041234)
+    assert _spend_from("INFO:agent.score:::spend 1.5") == pytest.approx(1.5)
+    assert _spend_from("  scored  84  The Parker Foundation") is None
+    assert _spend_from("") is None
+
+
+def test_a_malformed_marker_does_not_take_down_the_output_thread():
+    """`_pump` is the only thing draining the child's stdout. An exception there stalls
+    the pipe and the search hangs, so a cosmetic parse must never raise."""
+    from app.runner import _spend_from
+
+    for junk in ("::spend", "::spend abc", "::spend  ", "::spend NaNsense"):
+        assert _spend_from(junk) is None or isinstance(_spend_from(junk), float)

@@ -128,6 +128,10 @@ SCORING_MAX_TOKENS = 8_000  # headroom: max_tokens caps thinking + response on S
 SONNET_CACHE_MIN_TOKENS = 2048
 
 
+# Recognised by app/runner.py and stripped from the visible log.
+SPEND_MARKER = "::spend "
+
+
 class BudgetExceeded(RuntimeError):
     """Raised instead of making a call that would breach the ceiling."""
 
@@ -159,6 +163,16 @@ class Budget:
         self.spent_usd += cost
         self.calls += 1
         self.by_model[model] = self.by_model.get(model, 0.0) + cost
+        # The running total, for the status strip. `usd_spent` is otherwise only written
+        # when the run finishes, so the strip read $0.0000 for the whole of a ten-minute
+        # search and then jumped to the final figure — on the one number the app asks to
+        # be trusted with.
+        #
+        # A marker line on stdout rather than a database write per call: the runner is
+        # already reading every line the child prints, so this costs one string, and the
+        # child writing the run row mid-run would race the sink that owns it. `_pump`
+        # recognises the prefix and keeps it out of the log people read.
+        log.info("%s%.6f", SPEND_MARKER, self.spent_usd)
         return cost
 
 
