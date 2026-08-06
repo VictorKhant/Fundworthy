@@ -113,6 +113,9 @@ export default function App() {
   // even if a step is technically incomplete — clicking Finish is a decision, and
   // re-imposing the guide after it would be nagging.
   const [tutorialDone, setTutorialDone] = useState(false);
+  // Whether the walkthrough is on screen, kept separately from whether it is *needed* —
+  // see the note by `setupIncomplete` below.
+  const [tutorialOpen, setTutorialOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -138,6 +141,35 @@ export default function App() {
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
+
+  // Is this account set up enough to be useful. Funders are in the test now that the
+  // walkthrough has a step for them: every new org is given the starter lists, so it
+  // rarely fires — but an org that removed every funder has an app that can do nothing,
+  // and the dashboard is the wrong place to discover that.
+  //
+  // Up here with the other hooks, not down beside the render that uses it. Every `return`
+  // between this point and there is conditional, so a hook below them runs on some
+  // renders and not others — which React ends in error #310 and the user sees as a white
+  // page. That is exactly what happened when this was first written in the obvious place.
+  const setupIncomplete =
+    Boolean(state) &&
+    (!state.key_available ||
+      !(state.programs || []).some((p) => p.active) ||
+      !(state.funders || []).some((f) => f.active));
+
+  // **Opening the walkthrough and closing it are different events.** This used to be one
+  // expression — show the guide exactly while setup is incomplete — and that quietly
+  // capped it at however many steps the condition covered. On a new account funders are
+  // seeded, so the moment the program card saved in step 2 all three conditions were
+  // satisfied, `needsTutorial` went false, the component unmounted, and the dashboard
+  // appeared. Steps 3 and 4 were unreachable: not skipped, never rendered.
+  //
+  // So incompleteness opens it, and only finishing it closes it. Clicking through to the
+  // end is two more clicks for someone who was already set up, and it is the difference
+  // between a walkthrough and a gate that happens to look like one.
+  useEffect(() => {
+    if (setupIncomplete) setTutorialOpen(true);
+  }, [setupIncomplete]);
 
   // Signing in successfully leaves you standing on the sign-in page, so move on. In an
   // effect rather than in the render path — pushing history while rendering is how you
@@ -198,15 +230,7 @@ export default function App() {
   // Read from the account, not from a flag we store: whether you still need setting up
   // *is* whether you have a key and a ticked program. Nothing to drift out of sync, and
   // doing a step elsewhere in the app counts.
-  // Funders are in this test now that the walkthrough has a step for them. Every new org
-  // is given the starter lists, so it rarely fires — but an org that removed every funder
-  // has an app that can do nothing, and the dashboard is the wrong place to discover that.
-  const needsTutorial =
-    Boolean(state) &&
-    !tutorialDone &&
-    (!state.key_available ||
-      !(state.programs || []).some((p) => p.active) ||
-      !(state.funders || []).some((f) => f.active));
+  const needsTutorial = Boolean(state) && tutorialOpen && !tutorialDone;
 
   const untouched =
     authEnabled() &&
