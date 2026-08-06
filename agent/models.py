@@ -9,7 +9,7 @@ Accuracy rules enforced here rather than left to convention:
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timezone
 from enum import Enum
 
@@ -312,6 +312,35 @@ class SourceHealth:
 
 
 @dataclass
+class Reject:
+    """One candidate, and why this run stopped considering it.
+
+    `rejected_by_filter` counts reasons and has done for a long time. A count answers
+    "how many did the free tier kill?" and nothing else — the question people actually
+    ask about their own funder list is *which* ones, and the answer used to be logged at
+    DEBUG and thrown away. Tier 2 was worse: `triage()` returns the model's fifteen-word
+    reason, and that string was formatted into a log line and dropped.
+
+    `stage` matches the tiers in CLAUDE.md §5: 1 free, 2 Haiku, 3 Sonnet.
+    """
+
+    stage: int
+    reason: str            # the machine key, e.g. "award_below_floor" — grouped on
+    funder: str
+    title: str
+    url: str
+    detail: str = ""       # the specific fact, e.g. "$4,000 < $10,000"
+
+
+# A run over 60 funders that rejects nearly everything is a real shape, and every reject
+# is a row on a page nobody scrolls past the first screen of. Capped so one pathological
+# run cannot write a megabyte of JSON into the runs table; the counts in
+# `rejected_by_filter` stay complete either way, so the totals never lie even when the
+# list is truncated.
+MAX_REJECTS = 400
+
+
+@dataclass
 class RunLog:
     """One row of the Runs tab, and the unit of evidence for 'experiments run'."""
 
@@ -322,6 +351,10 @@ class RunLog:
     sources_failed: int = 0
     candidates_parsed: int = 0
     rejected_by_filter: dict[str, int] = field(default_factory=dict)
+    rejects: list[Reject] = field(default_factory=list)
+    triaged: int = 0              # reached tier 2 (Haiku)
+    scored: int = 0               # reached tier 3 (Sonnet)
+    usd_by_stage: dict[str, float] = field(default_factory=dict)
     opportunities_scored: int = 0
     opportunities_not_stated: int = 0
     usd_spent: float = 0.0
@@ -330,6 +363,19 @@ class RunLog:
     purged_rows: int = 0          # archive rows deleted at run start
     duplicates_skipped: int = 0   # already shown this month, killed for free
     source_health: list[SourceHealth] = field(default_factory=list)
+
+    def reject(self, stage: int, reason: str, *, funder: str = "", title: str = "",
+               url: str = "", detail: str = "") -> None:
+        """Count it, and keep the row if there is still room for one.
+
+        The count is unconditional and the row is not, which is the whole point of
+        splitting them: a truncated list is a UI limitation, while a wrong total would
+        be a lie about what the run did.
+        """
+        self.rejected_by_filter[reason] = self.rejected_by_filter.get(reason, 0) + 1
+        if len(self.rejects) < MAX_REJECTS:
+            self.rejects.append(Reject(stage=stage, reason=reason, funder=funder,
+                                       title=title, url=url, detail=detail))
 
     def record(self, health: SourceHealth) -> None:
         """Log one source's outcome and keep the aggregate counters in step."""
@@ -397,6 +443,10 @@ class RunLog:
             "sources_failed": self.sources_failed,
             "candidates_parsed": self.candidates_parsed,
             "rejected_by_filter": dict(self.rejected_by_filter),
+            "rejects": [asdict(r) for r in self.rejects],
+            "triaged": self.triaged,
+            "scored": self.scored,
+            "usd_by_stage": {k: round(v, 4) for k, v in self.usd_by_stage.items()},
             "opportunities_scored": self.opportunities_scored,
             "opportunities_not_stated": self.opportunities_not_stated,
             "usd_spent": round(self.usd_spent, 4),

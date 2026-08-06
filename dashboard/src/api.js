@@ -135,6 +135,13 @@ export const api = {
     current: () => get("/api/runs/current"),
     start: (opts) => post("/api/runs", opts),
     stop: () => post("/api/runs/stop"),
+    // Which candidates a search set aside. Fetched when a stage box is opened, not with
+    // the dashboard — there can be hundreds of rows and nobody reads them by default.
+    rejects: (runId, { reason, limit = 60, offset = 0 } = {}) => {
+      const q = new URLSearchParams({ limit, offset });
+      if (reason) q.set("reason", reason);
+      return get(`/api/runs/${runId}/rejects?${q}`);
+    },
   },
 
   // Public and unauthenticated on purpose: somebody who is not signed in should still

@@ -49,6 +49,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from agent.models import MAX_REJECTS
 from . import archive, auth, export, repo, scheduler, secrets
 from .db import (DEFAULT_ORG_ID, SECTORS, InviteError, create_invite, import_starter_list,
                  init_db, list_invites, month_key, org_for_user, org_members, org_owner,
@@ -703,6 +704,70 @@ def list_runs(limit: int = 20, org: str = Depends(current_org)) -> dict:
         return {"runs": repo.list_runs(conn, limit=limit, org_id=org)}
 
 
+def _run_summary(run: dict | None) -> dict | None:
+    """A run row without its reject list. See the note at the /api/state call site."""
+    if run is None:
+        return None
+    return {k: v for k, v in run.items() if k != "rejects"}
+
+
+@api.get("/runs/{run_id}/rejects")
+def run_rejects(run_id: str, reason: str | None = None, limit: int = 60,
+                offset: int = 0, org: str = Depends(current_org)) -> dict:
+    """Which candidates a run set aside, and why. Behind the stage boxes.
+
+    Its own endpoint rather than a field on `/api/state`, because this is up to
+    `models.MAX_REJECTS` rows of detail that nobody sees until they open a stage — and
+    `/api/state` is fetched on every dashboard load. Putting it there would make the
+    common path pay for the rare one.
+
+    Grouped counts come back whole (they are small and the boxes need all of them); the
+    rows themselves page, which is the "paginate server-side if a run ever exceeds it"
+    the roadmap asks for.
+    """
+    with session() as conn:
+        run = repo.get_run(conn, run_id, org_id=org)
+    if run is None:
+        raise HTTPException(404, "No such search.")
+
+    rows = run.get("rejects") or []
+    # Every reason present, with its true total from `rejected_by_filter` where we have
+    # one. The two can legitimately disagree: the row list is capped, and the API
+    # adapters report counts with no rows at all.
+    counts = dict(run.get("rejected_by_filter") or {})
+    by_reason: dict[str, dict] = {}
+    for row in rows:
+        g = by_reason.setdefault(row["reason"], {"reason": row["reason"],
+                                                 "stage": row["stage"], "rows": 0})
+        g["rows"] += 1
+    groups = [{**g, "total": counts.get(g["reason"], g["rows"])}
+              for g in by_reason.values()]
+    # Reasons that were counted but produced no rows — the indexed databases aggregate
+    # their own rejects. Shown, so the totals add up, and labelled as detail-free rather
+    # than silently missing.
+    #
+    # NB the loop variable is `key`, not `reason`: `reason` is this function's filter
+    # parameter, and rebinding it here left it holding the last counted reason, so every
+    # unfiltered request came back filtered to whatever that happened to be. The groups
+    # were right and the rows were one row, which is a confusing way to find out.
+    for key, total in counts.items():
+        if key not in by_reason:
+            groups.append({"reason": key, "stage": 1, "rows": 0, "total": total})
+    groups.sort(key=lambda g: (g["stage"], -g["total"]))
+
+    if reason:
+        rows = [r for r in rows if r["reason"] == reason]
+    return {
+        "groups": groups,
+        "rejects": rows[offset:offset + limit],
+        "shown": len(rows[offset:offset + limit]),
+        "matching": len(rows),
+        # True when the pipeline stopped recording rows but kept counting. The UI says
+        # so rather than letting the numbers quietly disagree.
+        "truncated": len(run.get("rejects") or []) >= MAX_REJECTS,
+    }
+
+
 @api.get("/runs/current")
 def current_run(org: str = Depends(current_org)) -> dict:
     """This org's current run — or its last one if nothing is going.
@@ -766,7 +831,10 @@ def state(org: str = Depends(current_org)) -> dict:
             "month": month_key(),
             "clear": [r for r in rows if not r["needs_human_check"]],
             "needs_check": [r for r in rows if r["needs_human_check"]],
-            "latest_run": repo.latest_run(conn, org_id=org),
+            # Without the reject rows: they can be hundreds, they are only read when
+            # somebody opens a stage box, and /api/state is fetched on every load.
+            # GET /api/runs/{id}/rejects serves them.
+            "latest_run": _run_summary(repo.latest_run(conn, org_id=org)),
             "running": bool(MANAGER.current_run_id_for(org)),
             "spend": repo.spend_summary(conn, org_id=org),
             # Why a search would not work, if it would not. Same list, same wording, as

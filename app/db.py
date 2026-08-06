@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path("data/rise.db")
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 # The org that owns everything written before tenancy existed. A single-tenant install
 # (and every row in the pilot's live database) belongs to it, so adding org scoping is a
@@ -269,6 +269,17 @@ CREATE TABLE IF NOT EXISTS runs (
     -- Per-source outcome. Without this a broken funder and a genuinely quiet week
     -- look identical on the dashboard, which is the one ambiguity that costs trust.
     source_health      TEXT NOT NULL DEFAULT '[]',
+    -- Per-candidate rejects: which pages each tier set aside and why. `rejected_by_filter`
+    -- above counts reasons, which answers "how many" and never "which ones" — the only
+    -- question somebody asks about their own funder list. Capped at models.MAX_REJECTS
+    -- rows, so the counts stay complete when the list does not.
+    rejects            TEXT NOT NULL DEFAULT '[]',
+    -- How many candidates reached tiers 2 and 3, and what each tier cost. Derived from
+    -- Budget.by_model at the end of the run rather than recomputed here, because the
+    -- price table lives with the models.
+    triaged            INTEGER NOT NULL DEFAULT 0,
+    scored             INTEGER NOT NULL DEFAULT 0,
+    usd_by_stage       TEXT NOT NULL DEFAULT '{}',
     progress           TEXT NOT NULL DEFAULT '{}'
 );
 """
@@ -740,6 +751,23 @@ def _migrate(conn: sqlite3.Connection) -> None:
                              table, col, exc)
                     conn.execute(f"UPDATE {table} SET {col}=NULL")
         current = 12
+
+    if current < 13:
+        # v13 adds the per-candidate reject log behind the stage boxes, plus the two
+        # tier counts and the per-tier cost split.
+        #
+        # Nothing backfills. A run that finished before this existed genuinely has no
+        # per-candidate record — the detail was logged at DEBUG and thrown away — and
+        # inventing rows from `rejected_by_filter` counts would put funder names on a
+        # page that were never checked against anything.
+        run_cols = {r["name"] for r in conn.execute("PRAGMA table_info(runs)")}
+        for col, decl in (("rejects", "TEXT NOT NULL DEFAULT '[]'"),
+                          ("triaged", "INTEGER NOT NULL DEFAULT 0"),
+                          ("scored", "INTEGER NOT NULL DEFAULT 0"),
+                          ("usd_by_stage", "TEXT NOT NULL DEFAULT '{}'")):
+            if col not in run_cols:
+                conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {decl}")
+        current = 13
 
     conn.execute(
         "INSERT INTO meta(key, value) VALUES('schema_version', ?) "

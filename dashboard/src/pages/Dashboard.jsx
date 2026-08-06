@@ -4,6 +4,7 @@ import DownloadCsv from "../components/DownloadCsv";
 import Findings from "../components/Findings";
 import Programs from "../components/Programs";
 import RunLog from "../components/RunLog";
+import Stages from "../components/Stages";
 import SearchSettings from "../components/SearchSettings";
 import { Busy } from "../components/Spinner";
 import StatusStrip from "../components/StatusStrip";
@@ -285,8 +286,23 @@ export default function Dashboard({ state, onChange, onGoto }) {
         />
       )}
 
+      {/* What the search did, as three boxes — the cost order, which is also the
+          argument: free, cheap, expensive. Hidden while a run is going, because the
+          numbers are the *finished* run's and showing last week's funnel above a live
+          log reads as this run's progress. */}
+      {!isRunning && state.latest_run && (
+        <Stages run={state.latest_run} />
+      )}
+
+      {/* The log is kept verbatim and moved behind a disclosure. It is still the only
+          thing that explains a run that died halfway, so it stays reachable — and it
+          opens automatically while a run is going, because during a run it is the only
+          thing there is to watch. */}
       {(isRunning || live.log?.length > 0) && (
-        <RunLog isRunning={isRunning} log={live.log} />
+        <details className="runlog-details" open={isRunning}>
+          <summary>Show the technical log</summary>
+          <RunLog isRunning={isRunning} log={live.log} />
+        </details>
       )}
 
       {/* "Nothing to review" has several very different causes and used to have one
