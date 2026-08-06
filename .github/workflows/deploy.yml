@@ -27,15 +27,16 @@ name: Deploy
 on:
   push:
     branches: [main]
+  # The tests have to run *before* the merge, not after it. Without this the sequence was:
+  # merge, push to main, test, fail, roll back — the broken commit already on main and the
+  # deploy reverting it on the VM. That happened, over a favicon. A pull_request run is
+  # also the only way GitHub learns a check called `test` exists, which is what branch
+  # protection's "require status checks" selects from.
+  pull_request:
+    branches: [main]
   # So a failed deploy can be retried, and so the first one can be run deliberately
   # rather than by pushing something.
   workflow_dispatch:
-
-concurrency:
-  # Two deploys at once would race on the same working tree and the same service. Newer
-  # wins; the older is cancelled rather than queued, since it is about to be superseded.
-  group: deploy-production
-  cancel-in-progress: true
 
 jobs:
   test:
@@ -71,7 +72,19 @@ jobs:
 
   deploy:
     needs: test
+    # Never from a pull request. Both jobs run on every trigger, so without this the
+    # moment PRs started the workflow every open branch would SSH into the production VM
+    # and deploy itself over the live site.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    # Moved down from the top of the file, where it covered every run. Two deploys at once
+    # would race on the same working tree and the same service, so newer wins and the
+    # older is cancelled rather than queued — but scoped to the whole workflow, opening a
+    # pull request would join this group and cancel a production deploy already halfway
+    # through on the box. On the job, only real deploys can cancel each other.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: true
     steps:
       - name: Is deployment configured?
         id: check

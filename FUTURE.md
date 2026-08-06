@@ -488,6 +488,114 @@ rewrite.
 
 ---
 
+## 9b. Page speed and accessibility — open
+
+Measured 5 Aug 2026 against the live site with Lighthouse 12, the engine PageSpeed
+Insights runs. PageSpeed itself could not be read directly — its report page is a
+JavaScript shell with no data in the HTML, and the public API was out of daily quota — so
+these are local runs against `https://fundworthy.duckdns.org`, and every server-side
+finding below was re-checked by hand with `curl` rather than taken from the audit label.
+
+| | mobile | desktop |
+|---|---|---|
+| Performance | **57** | 91 |
+| Accessibility | 93 | 93 |
+| Best practices | 100 | 100 |
+| SEO | 100 | 100 |
+| Largest Contentful Paint | 9.0 s | 1.5 s |
+| First Contentful Paint | 8.4 s | 1.3 s |
+| Total Blocking Time | 0 ms | 0 ms |
+| Cumulative Layout Shift | 0.002 | 0.001 |
+
+The gap between 57 and 91 is not the app. Blocking time is zero and layout shift is
+nil — the JavaScript is not the problem and neither is the design. Mobile is scored on a
+throttled connection, and on a slow connection **what we ship uncompressed is what hurts**.
+Three nginx settings account for most of it, and none of them require touching the code.
+
+**1. gzip covers HTML but not JavaScript or CSS.** The biggest single win.
+
+```bash
+curl -H "Accept-Encoding: gzip" -I https://fundworthy.duckdns.org/assets/index-Cg-fzf0Y.js
+# no Content-Encoding; 218,769 bytes on the wire
+curl -H "Accept-Encoding: gzip" -I https://fundworthy.duckdns.org/
+# Content-Encoding: gzip
+```
+
+nginx's default `gzip_types` is `text/html` and nothing else, so the HTML compresses and
+the 490 KB of JavaScript and CSS behind it does not. Est. **357 KiB / ~2.6 s** on mobile.
+Add to the server block:
+
+```nginx
+gzip on;
+gzip_min_length 1024;
+gzip_types application/javascript text/css application/json image/svg+xml application/xml;
+gzip_vary on;
+```
+
+**2. Hashed assets are served with no `Cache-Control` at all** (`cacheLifetimeMs=0` on
+every one). Vite already puts a content hash in each filename — `index-Cg-fzf0Y.js`
+changes name whenever its contents change — so they are safe to cache for a year, and a
+returning visitor currently re-downloads all of it. Est. **565 KiB**.
+
+```nginx
+location /assets/ { add_header Cache-Control "public, max-age=31536000, immutable"; }
+```
+
+Do **not** extend this to `index.html`, `robots.txt` or `sitemap.xml`. Those keep their
+names across deploys, and caching them for a year is how a deploy stops being visible.
+
+**3. HTTP/1.1 only.** `curl --http2` still negotiates 1.1, so the eight asset requests
+queue instead of multiplexing. Est. **~370 ms** on mobile. nginx 1.18 wants it on the
+listen directive (`http2 on;` is 1.25.1+):
+
+```nginx
+listen 443 ssl http2;
+```
+
+Then the code-side items, in descending order of payoff:
+
+- **222 KiB of unused JavaScript**, most of it Firebase, on a landing page that needs none
+  of it. `dashboard/src/auth.js` imports Firebase dynamically so a local install never
+  loads it — but on the deployed site sign-in *is* on, so it loads eagerly for a visitor
+  who is only reading the page. Defer it until the person clicks **Sign in** or **Create
+  an account**.
+- **Render-blocking CSS: 2,280 ms on mobile**, of which the Google Fonts stylesheet is
+  855 ms — a blocking request to a third-party host before anything paints. Self-host
+  Albert Sans, or at minimum `preconnect` and set `font-display: swap`.
+- **83 KiB of unminified JavaScript**, both chunks Firebase ESM builds (`index.esm-*.js`).
+  Worth a look at why Vite is passing them through unminified; it may be a one-line
+  config change.
+- **The LCP element is `p.lp-lede`** — the hero paragraph, plain text with no image
+  behind it. It takes 9 s on mobile only because it waits on the CSS above. Fix the
+  blocking chain and the LCP number follows; there is nothing to optimise in the element
+  itself. TTFB is 609 ms, 7% of the total — the server is not the problem.
+
+**Accessibility — 15 nodes fail colour contrast, and almost all are one token.**
+`--muted: #8A8578` in `dashboard/src/styles.css:27` gives 3.68:1 on white, 3.38:1 on
+`#f7f5f1` and 3.20:1 on `#f1efea`. WCAG AA wants **4.5:1** for text this size. It is used
+in ~40 places, so this is one line for most of the fix:
+
+| | on `#fff` | on `#f7f5f1` | on `#f1efea` |
+|---|---|---|---|
+| `#8A8578` (today) | 3.68 | 3.38 | 3.20 |
+| `#6E6A5C` | 5.41 | 4.97 | 4.71 |
+
+`#6E6A5C` is about the lightest value that clears 4.5:1 on all three backgrounds, so it
+passes without flattening the palette. Separately, `.lp-step` uses `#a06b4f` at 4.46:1 —
+failing by four hundredths — and `#9C6749` (4.72) fixes it.
+
+This matters more than a score: the users are nonprofit administrators, a population
+skewing older, reading 12.5–13.5 px grey text. It is also the one item here with a legal
+dimension, since a nonprofit's own funders may ask about WCAG conformance.
+
+**What not to bother with.** Mobile 57 looks alarming next to desktop 91 and is mostly an
+artefact of Lighthouse's simulated slow connection. Fix the three nginx settings and the
+same measurement improves without a line of application code changing. There is no
+evidence any real user is experiencing this — the Chrome UX Report has no field data for
+the site, which is simply what "not enough visitors yet" looks like.
+
+---
+
 ## 10. Still-open product questions
 
 - Can the org meet a 1:1 **match requirement**? Currently flagged, not filtered.

@@ -98,7 +98,12 @@ python3.11 --version && node --version
 
 ```bash
 cd ~
-git clone https://github.com/VictorKhant/Rise-Fund-Finder.git
+# The repository is called Fundworthy; the directory is deliberately not. Every path in
+# this guide, the systemd unit, and scripts/deploy.sh says `~/Rise-Fund-Finder`, and the
+# box already running this has that directory — so the clone is named to match rather
+# than renaming a live deployment to tidy up a URL. `FUNDWORTHY_DIR` overrides it if you
+# ever do move.
+git clone https://github.com/VictorKhant/Fundworthy.git Rise-Fund-Finder
 cd Rise-Fund-Finder
 
 python3.11 -m venv .venv

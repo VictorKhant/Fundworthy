@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 
 USER_AGENT = (
     "Fundworthy/0.1 "
-    "(+https://github.com/VictorKhant/Rise-Fund-Finder; nonprofit grant research)"
+    "(+https://github.com/VictorKhant/Fundworthy; nonprofit grant research)"
 )
 
 REQUEST_TIMEOUT = httpx.Timeout(20.0, connect=10.0)
