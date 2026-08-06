@@ -51,8 +51,8 @@ from pydantic import BaseModel, Field
 
 from . import archive, auth, export, repo, scheduler, secrets
 from .db import (DEFAULT_ORG_ID, SECTORS, InviteError, create_invite, import_starter_list,
-                 init_db, list_invites, month_key, org_for_user, org_members,
-                 redeem_invite, revoke_invite, session)
+                 init_db, list_invites, month_key, org_for_user, org_members, org_owner,
+                 redeem_invite, remove_member, revoke_invite, session, set_org_owner)
 from .runner import MANAGER, preflight
 
 log = logging.getLogger(__name__)
@@ -96,6 +96,10 @@ class SettingsIn(BaseModel):
     max_opportunities: int | None = Field(None, ge=1, le=100)
     run_budget_usd: float | None = Field(None, gt=0, le=20)
     enabled: bool | None = None
+    # Set once, when somebody finishes the first-run walkthrough. Writable like any other
+    # setting rather than through its own endpoint — it is a fact about the account, and
+    # the settings table is where facts about the account live.
+    onboarding_done: bool | None = None
     sectors_active: list[str] | None = None
     search_beyond_partners: bool | None = None
     org_name: str | None = Field(None, max_length=200)
@@ -161,6 +165,24 @@ class RunIn(BaseModel):
     no_llm: bool = False
     budget: float | None = Field(None, gt=0, le=20)
     max_opportunities: int | None = Field(None, ge=1, le=100)
+
+
+def _same_page(a: str, b: str) -> bool:
+    """Do these two links point at the same page, as a person would judge it.
+
+    Case, a trailing slash and a leading `www.` are not differences anybody means, and
+    treating them as differences would let the duplicate check be defeated by pasting the
+    same link with one character changed. Query strings and fragments are kept: `?id=7`
+    genuinely is a different programme.
+    """
+    def norm(u: str) -> str:
+        u = u.strip().rstrip("/").casefold()
+        for prefix in ("https://", "http://"):
+            if u.startswith(prefix):
+                u = u[len(prefix):]
+        return u.removeprefix("www.")
+
+    return bool(a) and bool(b) and norm(a) == norm(b)
 
 
 def _set(model: BaseModel) -> dict[str, Any]:
@@ -311,10 +333,28 @@ async def draft_program(body: DraftIn, org: str = Depends(current_org)) -> dict:
     """The assistant. Returns a draft for the user to review — saves nothing."""
     from .assistant import AssistantError, draft_program_card
 
+    url = body.url.strip()
     with session() as conn:
+        # Refuse a page this org has already turned into a card. Reading it again would
+        # cost a Sonnet call to produce a second copy of a programme they have, and the
+        # duplicate then splits the search: two cards, both ticked, both querying for the
+        # same work. Cheaper and clearer to say so before spending anything.
+        #
+        # Compared on the URL as stored, ignoring case, a trailing slash and a `www.`,
+        # because those are the same page and nobody pasting a link thinks otherwise.
+        existing = next(
+            (p for p in repo.list_programs(conn, org_id=org)
+             if p.get("source_url") and _same_page(p["source_url"], url)),
+            None)
+        if existing:
+            raise HTTPException(
+                409,
+                f'You already have a program from that page — "{existing["name"]}". '
+                "Edit that card instead, or paste a different page.")
+
         key = secrets.effective_api_key(conn, org_id=org)
     try:
-        return {"draft": await draft_program_card(body.url.strip(), key)}
+        return {"draft": await draft_program_card(url, key)}
     except AssistantError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
@@ -603,17 +643,137 @@ def auth_config() -> dict:
 
 # --- your organization --------------------------------------------------------
 
+def _require_admin(conn, org: str, user) -> str:
+    """The uid of the caller, having established they administer this org.
+
+    Server-side and unconditional. The dashboard hides Manage from everyone but the
+    admin, which is courtesy — this is the part that decides, because a hidden button is
+    not a permission check and removing a colleague is not undoable.
+    """
+    if user is None:
+        # A local install has one org, no accounts, and nobody to be an admin over. The
+        # person at the keyboard already owns the database file.
+        return ""
+    owner = org_owner(conn, org)
+    if owner != user.uid:
+        raise HTTPException(
+            403, "Only your organization's admin can do that. Ask them to make the "
+                 "change, or to hand the organization over to you.")
+    return user.uid
+
+
 @api.get("/org")
-def read_org(org: str = Depends(current_org)) -> dict:
+def read_org(org: str = Depends(current_org),
+             user=Depends(auth.require_user)) -> dict:
     """Who is in your org, and the outstanding invitations."""
     with session() as conn:
         row = conn.execute("SELECT name FROM orgs WHERE id=?", (org,)).fetchone()
+        owner = org_owner(conn, org)
         return {
             "org_id": org,
             "name": (row["name"] if row else "") or "",
             "members": org_members(conn, org),
             "invites": [i for i in list_invites(conn, org) if not i["redeemed_at"]],
+            # Who *you* are, so the page can show the admin controls to one person and
+            # not pretend the other three are one click from removing each other. On a
+            # local install there is nobody to authenticate and one org, so the person at
+            # the keyboard is the admin by definition.
+            "you": user.uid if user else "",
+            "you_are_admin": (user is None) or (owner == user.uid),
         }
+
+
+class MemberIn(BaseModel):
+    uid: str = Field(min_length=1, max_length=128)
+
+
+@api.delete("/org/members/{uid}")
+def remove_org_member(uid: str, org: str = Depends(current_org),
+                      user=Depends(auth.require_user)) -> dict:
+    """Take a colleague out of this organization. Admin only.
+
+    They lose everything of this org's at once — findings, funders, and the saved API
+    key — because every route resolves their org from the `users` row this deletes. Their
+    next sign-in provisions a fresh empty org and they are walked through onboarding like
+    anybody new.
+    """
+    with session() as conn:
+        me = _require_admin(conn, org, user)
+        if uid == me:
+            raise HTTPException(
+                400, "You cannot remove yourself. Hand the organization to somebody "
+                     "else first, or delete your account from the bottom of Settings.")
+        target = conn.execute("SELECT email FROM users WHERE uid=? AND org_id=?",
+                              (uid, org)).fetchone()
+        if target is None:
+            raise HTTPException(404, "That person is not in your organization.")
+        remove_member(conn, uid, org)
+    log.info("%s removed %s from org %s",
+             user.email if user else "local", target["email"], org)
+    return {"removed": target["email"]}
+
+
+@api.post("/org/transfer")
+def transfer_org(body: MemberIn, org: str = Depends(current_org),
+                 user=Depends(auth.require_user)) -> dict:
+    """Hand the organization to another member. Admin only, and one-way.
+
+    The old admin stays a member and keeps working; they simply cannot remove people any
+    more. That is the point of transferring rather than deleting: somebody leaving a
+    nonprofit should be able to pass the keys on before they go.
+    """
+    with session() as conn:
+        _require_admin(conn, org, user)
+        try:
+            set_org_owner(conn, org, body.uid)
+        except ValueError as exc:
+            raise HTTPException(404, "That person is not in your organization.") from exc
+        new_owner = conn.execute("SELECT email FROM users WHERE uid=?",
+                                 (body.uid,)).fetchone()
+    log.info("org %s handed from %s to %s", org,
+             user.email if user else "local", new_owner["email"])
+    return {"admin": new_owner["email"]}
+
+
+@api.delete("/account")
+def delete_own_account(org: str = Depends(current_org),
+                       user=Depends(auth.require_user)) -> dict:
+    """Delete your own account and leave your organization.
+
+    Two refusals, both about not stranding other people:
+
+      - The admin of an org with colleagues in it must hand it over first. Otherwise the
+        org's last admin walks out and nobody left can remove anyone or invite anyone.
+        (An admin who is the *only* member is fine — there is nobody to strand.)
+      - A local install has no accounts to delete.
+
+    If you are the last one out, `strand_org` clears the findings, the run log and the
+    saved API key, and deliberately keeps the funder list — see its docstring for why
+    that asymmetry is the point rather than an oversight.
+    """
+    if user is None:
+        raise HTTPException(
+            400, "This install has no accounts, so there is nothing to delete. Your data "
+                 "is the database file on this computer.")
+
+    with session() as conn:
+        others = conn.execute(
+            "SELECT COUNT(*) AS n FROM users WHERE org_id=? AND uid<>?",
+            (org, user.uid)).fetchone()["n"]
+        if others and org_owner(conn, org) == user.uid:
+            raise HTTPException(
+                409,
+                "You are this organization's admin and other people are still in it. "
+                "Hand the organization to one of them first, then delete your account.")
+
+        cleared = {}
+        remove_member(conn, user.uid, org)
+        if not others:
+            cleared = {"findings_and_runs_deleted": True, "funders_kept": True}
+
+    log.info("account deleted: %s (org %s, %d other member(s) remain)",
+             user.email, org, others)
+    return {"deleted": user.email, **cleared}
 
 
 @api.post("/org/invites", status_code=201)

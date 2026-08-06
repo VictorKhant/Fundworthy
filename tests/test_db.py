@@ -575,3 +575,59 @@ def test_seeding_is_idempotent_and_does_not_duplicate_names(db):
     dupes = [n for n, c in Counter(names).items() if c > 1]
     # Grants.gov and SAM.gov legitimately share a funder name; nothing else may.
     assert dupes == ["U.S. Federal Government"], f"unexpected duplicates: {dupes}"
+
+
+# --- who counts as new ---------------------------------------------------------
+
+def test_a_brand_new_install_has_not_been_onboarded(db):
+    """The walkthrough has to happen at least once, and a fresh database is the one case
+    where it definitely should.
+
+    Nearly got this wrong: the v9 backfill first marked every row in `orgs`, and the v7
+    migration creates `DEFAULT_ORG_ID` itself moments earlier — so a first-ever boot
+    declared its own default org an experienced user and nobody ever saw onboarding.
+    """
+    with session(db) as conn:
+        assert repo.get_settings(conn, org_id=DEFAULT_ORG_ID)["onboarding_done"] is False
+
+
+def test_an_install_that_was_already_in_use_is_never_shown_onboarding(db):
+    """The other direction, and the reported bug. Whether somebody is new is a stored
+    fact; it used to be re-derived from "do you have a key, a program and a funder", so
+    unticking the last programme threw an established account back to step one."""
+    from app import secrets
+    from app.db import init_db
+
+    with session(db) as conn:
+        # A database as it looked before this flag existed, with real use on it.
+        secrets.store_api_key(conn, "sk-ant-months-of-use", org_id=DEFAULT_ORG_ID)
+        conn.execute("DELETE FROM settings WHERE key='onboarding_done'")
+        conn.execute("UPDATE meta SET value='8' WHERE key='schema_version'")
+
+    init_db(db)          # the upgrade runs
+
+    with session(db) as conn:
+        assert repo.get_settings(conn, org_id=DEFAULT_ORG_ID)["onboarding_done"] is True
+
+
+def test_unticking_every_program_does_not_make_an_account_new_again(db):
+    """The exact sequence that was reported: untick everything, reload, and the app has
+    apparently forgotten you."""
+    from app.db import init_db
+
+    with session(db) as conn:
+        conn.execute("DELETE FROM settings WHERE key='onboarding_done'")
+        conn.execute("UPDATE meta SET value='8' WHERE key='schema_version'")
+        repo.create_run(conn, "r1", org_id=DEFAULT_ORG_ID)   # evidence of use
+
+    init_db(db)
+
+    with session(db) as conn:
+        for p in repo.list_programs(conn, org_id=DEFAULT_ORG_ID):
+            repo.update_program(conn, p["id"], {"active": False}, org_id=DEFAULT_ORG_ID)
+        settings = repo.get_settings(conn, org_id=DEFAULT_ORG_ID)
+        active = [p for p in repo.list_programs(conn, org_id=DEFAULT_ORG_ID) if p["active"]]
+
+    assert active == [], "the precondition: nothing is ticked"
+    assert settings["onboarding_done"] is True, \
+        "a ticked checkbox is not what makes somebody a new user"

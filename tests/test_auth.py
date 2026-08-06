@@ -735,3 +735,149 @@ def test_an_empty_admin_list_means_nobody(signed_in, token_for):
     res = signed_in.get("/api/admin/stats",
                         headers={"Authorization": f"Bearer {token_for()}"})
     assert res.status_code == 404
+
+
+# --- who administers an organization ------------------------------------------
+#
+# Removing a colleague cuts them off from the funders, the findings and the API key in
+# one request, and none of it is undoable. The dashboard hides Manage from everyone but
+# the admin; these tests are about the half that actually decides, because a hidden
+# button is not a permission check.
+
+SECOND = "someone.else@example.org"
+
+
+def _sign_in(client, token_for, **claims):
+    """Sign somebody in for the first time, which is what provisions their org."""
+    return client.get("/api/state", headers=auth_header(token_for(**claims)))
+
+
+def test_whoever_creates_an_org_administers_it(signed_in, token_for):
+    _sign_in(signed_in, token_for)
+    body = signed_in.get("/api/org", headers=auth_header(token_for())).json()
+
+    assert body["you_are_admin"] is True
+    assert [m["is_admin"] for m in body["members"]] == [True]
+
+
+def test_a_colleague_who_joins_is_not_an_admin(signed_in, token_for):
+    _sign_in(signed_in, token_for)
+    code = signed_in.post("/api/org/invites",
+                          headers=auth_header(token_for())).json()["invite"]["code"]
+
+    joiner = auth_header(token_for(sub="uid-999", email=SECOND))
+    assert signed_in.post("/api/org/join", json={"code": code},
+                          headers=joiner).status_code == 200
+
+    seen_by_joiner = signed_in.get("/api/org", headers=joiner).json()
+    assert seen_by_joiner["you_are_admin"] is False
+    admins = {m["email"]: m["is_admin"] for m in seen_by_joiner["members"]}
+    assert admins == {ALLOWED: True, SECOND: False}
+
+
+def test_only_the_admin_may_remove_anybody(signed_in, token_for):
+    """The check that matters. A member who can remove the admin can take the
+    organization, its funders and its saved API key from the people who built it."""
+    _sign_in(signed_in, token_for)
+    code = signed_in.post("/api/org/invites",
+                          headers=auth_header(token_for())).json()["invite"]["code"]
+    joiner = auth_header(token_for(sub="uid-999", email=SECOND))
+    signed_in.post("/api/org/join", json={"code": code}, headers=joiner)
+
+    r = signed_in.delete("/api/org/members/uid-123", headers=joiner)
+    assert r.status_code == 403
+    assert "admin" in r.json()["detail"]
+
+    # And the admin is still there.
+    members = signed_in.get("/api/org", headers=joiner).json()["members"]
+    assert ALLOWED in {m["email"] for m in members}
+
+
+def test_only_the_admin_may_hand_the_organization_on(signed_in, token_for):
+    _sign_in(signed_in, token_for)
+    code = signed_in.post("/api/org/invites",
+                          headers=auth_header(token_for())).json()["invite"]["code"]
+    joiner = auth_header(token_for(sub="uid-999", email=SECOND))
+    signed_in.post("/api/org/join", json={"code": code}, headers=joiner)
+
+    grab = signed_in.post("/api/org/transfer", json={"uid": "uid-999"}, headers=joiner)
+    assert grab.status_code == 403, "a member must not be able to promote themselves"
+
+
+def test_the_admin_can_remove_a_colleague_and_they_land_somewhere_new(signed_in, token_for):
+    _sign_in(signed_in, token_for)
+    code = signed_in.post("/api/org/invites",
+                          headers=auth_header(token_for())).json()["invite"]["code"]
+    joiner = auth_header(token_for(sub="uid-999", email=SECOND))
+    signed_in.post("/api/org/join", json={"code": code}, headers=joiner)
+    signed_in.post("/api/settings/api-key", json={"api_key": "sk-ant-" + "x" * 20},
+                   headers=auth_header(token_for()))
+
+    r = signed_in.delete("/api/org/members/uid-999", headers=auth_header(token_for()))
+    assert r.status_code == 200 and r.json()["removed"] == SECOND
+
+    # They can still sign in — they simply are not here any more, and arrive somewhere
+    # with no key and the walkthrough waiting, exactly like a new account.
+    after = signed_in.get("/api/state", headers=joiner).json()
+    assert after["has_api_key"] is False
+    assert after["settings"]["onboarding_done"] is False
+
+
+def test_transferring_hands_over_the_controls_both_ways(signed_in, token_for):
+    _sign_in(signed_in, token_for)
+    code = signed_in.post("/api/org/invites",
+                          headers=auth_header(token_for())).json()["invite"]["code"]
+    joiner = auth_header(token_for(sub="uid-999", email=SECOND))
+    signed_in.post("/api/org/join", json={"code": code}, headers=joiner)
+
+    handed = signed_in.post("/api/org/transfer", json={"uid": "uid-999"},
+                            headers=auth_header(token_for()))
+    assert handed.status_code == 200 and handed.json()["admin"] == SECOND
+
+    assert signed_in.get("/api/org", headers=joiner).json()["you_are_admin"] is True
+    assert signed_in.get("/api/org",
+                         headers=auth_header(token_for())).json()["you_are_admin"] is False
+    # The old admin stays a member — transferring is not leaving.
+    assert ALLOWED in {m["email"] for m in
+                       signed_in.get("/api/org", headers=joiner).json()["members"]}
+
+
+def test_an_admin_cannot_remove_themselves_by_the_back_door(signed_in, token_for):
+    _sign_in(signed_in, token_for)
+    r = signed_in.delete("/api/org/members/uid-123", headers=auth_header(token_for()))
+    assert r.status_code == 400
+    assert "cannot remove yourself" in r.json()["detail"]
+
+
+def test_an_admin_with_colleagues_must_hand_over_before_deleting_their_account(
+        signed_in, token_for):
+    """Otherwise the last admin walks out and nobody left can invite or remove anyone."""
+    _sign_in(signed_in, token_for)
+    code = signed_in.post("/api/org/invites",
+                          headers=auth_header(token_for())).json()["invite"]["code"]
+    signed_in.post("/api/org/join", json={"code": code},
+                   headers=auth_header(token_for(sub="uid-999", email=SECOND)))
+
+    r = signed_in.delete("/api/account", headers=auth_header(token_for()))
+    assert r.status_code == 409
+    assert "Hand the organization" in r.json()["detail"]
+
+
+def test_the_only_member_may_delete_their_account(signed_in, token_for):
+    """Nobody to strand, so no hand-over to demand."""
+    _sign_in(signed_in, token_for)
+    r = signed_in.delete("/api/account", headers=auth_header(token_for()))
+    assert r.status_code == 200 and r.json()["deleted"] == ALLOWED
+    assert r.json()["funders_kept"] is True
+
+
+def test_deleting_an_account_is_refused_on_an_install_with_no_accounts(local):
+    r = local.delete("/api/account")
+    assert r.status_code == 400
+    assert "no accounts" in r.json()["detail"]
+
+
+def test_the_member_routes_are_closed_without_a_token(signed_in):
+    assert signed_in.delete("/api/org/members/uid-123").status_code == 401
+    assert signed_in.post("/api/org/transfer", json={"uid": "x"}).status_code == 401
+    assert signed_in.delete("/api/account").status_code == 401

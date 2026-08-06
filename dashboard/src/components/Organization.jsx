@@ -52,6 +52,9 @@ export default function Organization({ spend, onChange }) {
   const [org, setOrg] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  // Which member row is mid-action, so the spinner lands on the button that was pressed
+  // rather than on all of them.
+  const [acting, setActing] = useState(null);
   const [copied, setCopied] = useState(null);
 
   const load = useCallback(async () => {
@@ -75,6 +78,47 @@ export default function Organization({ spend, onChange }) {
       setError(e.message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  // Both of these are confirmed first and neither is undoable, so the confirmation says
+  // what actually happens rather than "are you sure?". Removing somebody cuts them off
+  // from the funders, the findings and the API key at once; handing the org over cannot
+  // be taken back by the person doing it.
+  async function drop(member) {
+    if (!window.confirm(
+      `Remove ${member.email} from your organization?\n\n` +
+      "They lose access to your funders, your findings and your saved API key " +
+      "immediately. Next time they sign in they get a fresh, empty organization of " +
+      "their own.\n\nThis cannot be undone — you would have to invite them back.")) return;
+    setActing(`drop:${member.uid}`);
+    setError(null);
+    try {
+      await api.org.removeMember(member.uid);
+      await load();
+      await onChange?.();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setActing(null);
+    }
+  }
+
+  async function handOver(member) {
+    if (!window.confirm(
+      `Make ${member.email} the admin of your organization?\n\n` +
+      "They will be able to remove people, including you. You stay a member and can " +
+      "carry on as normal, but you will not be able to take this back yourself — only " +
+      "they can hand it on again.")) return;
+    setActing(`give:${member.uid}`);
+    setError(null);
+    try {
+      await api.org.transfer(member.uid);
+      await load();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setActing(null);
     }
   }
 
@@ -118,13 +162,40 @@ export default function Organization({ spend, onChange }) {
         <ul className="plain">
           {org.members.map((m) => (
             <li key={m.email} className="member">
-              <span>{m.email}</span>
+              <span>
+                {m.email}
+                {m.uid === org.you && <span className="muted small"> (you)</span>}
+                {m.is_admin && <span className="chip">Admin</span>}
+              </span>
               <span className="muted small">
                 last seen {pacificStamp(m.last_seen_at)}
               </span>
+              {/* Manage shows for the admin, and never on their own row: removing
+                  yourself is what Delete account is for, and handing the org to yourself
+                  is not a thing. The server checks all of this again — a hidden button is
+                  not a permission. */}
+              {org.you_are_admin && m.uid !== org.you && (
+                <span className="row">
+                  <Busy className="text" busy={acting === `give:${m.uid}`}
+                        busyLabel="Handing over" onClick={() => handOver(m)}>
+                    Make admin
+                  </Busy>
+                  <Busy className="text danger" busy={acting === `drop:${m.uid}`}
+                        busyLabel="Removing" onClick={() => drop(m)}>
+                    Remove
+                  </Busy>
+                </span>
+              )}
             </li>
           ))}
         </ul>
+      )}
+
+      {org && !org.you_are_admin && (
+        <p className="muted small">
+          Your organization's admin can add and remove people. Ask them if you need a
+          colleague added.
+        </p>
       )}
 
       <h3 className="sub">Invite a colleague</h3>

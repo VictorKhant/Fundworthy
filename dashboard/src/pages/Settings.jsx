@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import Organization from "../components/Organization";
 import { Busy } from "../components/Spinner";
 import { api } from "../api";
+import { authEnabled, signOutNow } from "../auth";
 
 // The API key page.
 //
@@ -260,6 +261,125 @@ function OrgPanel({ settings, onChange }) {
   );
 }
 
+// Closing your account, at the bottom, behind typing your own address.
+//
+// The confirm step is a typed email rather than an "Are you sure?" because this is not
+// reversible and the two buttons of a browser confirm are three pixels apart. Typing the
+// address is a few seconds that cannot be done by accident.
+//
+// What it does is spelled out rather than summarised, because the honest answer is
+// asymmetric and people should not have to guess at the asymmetry: the findings and the
+// key go, the funder list stays. That is deliberate — a funder is a name and a grants
+// page, not private research, and the intent is to fold hand-added ones into the shared
+// directory so the next nonprofit in that city does not start from nothing.
+function DeleteAccount() {
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [me, setMe] = useState(null);
+  const [alone, setAlone] = useState(true);
+
+  useEffect(() => {
+    api.org.read()
+      .then((org) => {
+        const you = (org.members || []).find((m) => m.uid === org.you);
+        setMe(you?.email || "");
+        setAlone((org.members || []).length <= 1);
+      })
+      .catch(() => setMe(""));
+  }, []);
+
+  async function remove() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.deleteAccount();
+      // Signing out is what actually ends the session in this browser. Without it the
+      // page sits there holding a token for an account the server no longer knows,
+      // 401ing on every request — which looks like a bug rather than a goodbye.
+      await signOutNow();
+      window.location.assign("/welcome");
+    } catch (e) {
+      setError(e.message);
+      setBusy(false);
+    }
+  }
+
+  // Nothing to delete on a local install: there are no accounts, and the data is a file
+  // on this computer. Offering the button would be offering to do nothing.
+  if (!authEnabled()) return null;
+
+  return (
+    <section className="panel danger-zone">
+      <h2>Close your account</h2>
+      {!open ? (
+        <>
+          <p className="settings-lede">
+            Removes you from {alone ? "this organization" : "your organization"} and
+            deletes your sign-in. {alone
+              ? "Since you are the only person here, this organization's findings and "
+                + "saved API key are deleted with it."
+              : "Your colleagues keep working; nothing of theirs is touched."}
+          </p>
+          <button className="danger" onClick={() => setOpen(true)}>
+            Close my account…
+          </button>
+        </>
+      ) : (
+        <>
+          <p className="settings-lede">This cannot be undone. Here is exactly what happens:</p>
+          <ul className="tut-sub">
+            <li>Your sign-in is deleted and you leave this organization.</li>
+            {alone ? (
+              <>
+                <li>
+                  <strong>Deleted:</strong> this month's findings, the search history, and
+                  the saved Claude API key.
+                </li>
+                <li>
+                  <strong>Kept:</strong> the funder list. Those are names and grants pages,
+                  not private research — keeping them is how the next nonprofit in your
+                  city starts with something rather than nothing.
+                </li>
+              </>
+            ) : (
+              <li>
+                Your colleagues keep the funders, the findings and the key. Nothing of
+                theirs is deleted.
+              </li>
+            )}
+            <li>
+              Your Claude account and its billing are Anthropic's, not ours — close that
+              separately if you want to.
+            </li>
+          </ul>
+
+          <label className="field">
+            <span>Type <strong>{me || "your email address"}</strong> to confirm</span>
+            <input value={typed} autoComplete="off" placeholder={me || ""}
+                   onChange={(e) => setTyped(e.target.value)} />
+          </label>
+
+          {error && <div className="notice error">{error}</div>}
+
+          <div className="row">
+            <Busy className="danger" busy={busy} busyLabel="Closing your account"
+                  disabled={!me || typed.trim().toLowerCase() !== me.toLowerCase()}
+                  onClick={remove}>
+              Delete my account permanently
+            </Busy>
+            <button className="text" onClick={() => { setOpen(false); setTyped(""); }}
+                    disabled={busy}>
+              Cancel
+            </button>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 export default function Settings({ state, onChange }) {
   return (
     <>
@@ -282,6 +402,8 @@ export default function Settings({ state, onChange }) {
           don't need to ask anyone.
         </p>
       </section>
+
+      <DeleteAccount />
 
       <section className="panel">
         <h2>Where your data lives</h2>
