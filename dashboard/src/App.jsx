@@ -112,6 +112,9 @@ export default function App() {
   // Lets someone who has finished the walkthrough keep using the app in the same session
   // even if a step is technically incomplete — clicking Finish is a decision, and
   // re-imposing the guide after it would be nagging.
+  // Optimistic: flipped the instant they press Finish so the dashboard appears without
+  // waiting on the round trip that persists `onboarding_done`. The stored flag is what
+  // survives a reload; this only covers the second in between.
   const [tutorialDone, setTutorialDone] = useState(false);
   // Whether the walkthrough is on screen, kept separately from whether it is *needed* —
   // see the note by `setupIncomplete` below.
@@ -142,34 +145,28 @@ export default function App() {
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
-  // Is this account set up enough to be useful. Funders are in the test now that the
-  // walkthrough has a step for them: every new org is given the starter lists, so it
-  // rarely fires — but an org that removed every funder has an app that can do nothing,
-  // and the dashboard is the wrong place to discover that.
+  // **Whether the walkthrough has ever been finished is a stored fact, not a deduction.**
+  //
+  // It used to be computed live from "do you have a key, a ticked program and a funder",
+  // which is a fine way to open the guide on the right step and a terrible way to decide
+  // whether somebody is new. An established org that unticked its last programme for an
+  // afternoon was thrown back to step one of onboarding on an account it had been using
+  // for months — the app apparently having forgotten them over a checkbox. Setup being
+  // incomplete and the person being new are different questions, and only one of them
+  // can be answered by looking at the data.
+  //
+  // `onboarding_done` is the answer to the second, written once when they press Finish,
+  // and backfilled to true for every org that existed before it (schema v9).
   //
   // Up here with the other hooks, not down beside the render that uses it. Every `return`
   // between this point and there is conditional, so a hook below them runs on some
   // renders and not others — which React ends in error #310 and the user sees as a white
   // page. That is exactly what happened when this was first written in the obvious place.
-  const setupIncomplete =
-    Boolean(state) &&
-    (!state.key_available ||
-      !(state.programs || []).some((p) => p.active) ||
-      !(state.funders || []).some((f) => f.active));
+  const neverOnboarded = Boolean(state) && !state.settings?.onboarding_done;
 
-  // **Opening the walkthrough and closing it are different events.** This used to be one
-  // expression — show the guide exactly while setup is incomplete — and that quietly
-  // capped it at however many steps the condition covered. On a new account funders are
-  // seeded, so the moment the program card saved in step 2 all three conditions were
-  // satisfied, `needsTutorial` went false, the component unmounted, and the dashboard
-  // appeared. Steps 3 and 4 were unreachable: not skipped, never rendered.
-  //
-  // So incompleteness opens it, and only finishing it closes it. Clicking through to the
-  // end is two more clicks for someone who was already set up, and it is the difference
-  // between a walkthrough and a gate that happens to look like one.
   useEffect(() => {
-    if (setupIncomplete) setTutorialOpen(true);
-  }, [setupIncomplete]);
+    if (neverOnboarded) setTutorialOpen(true);
+  }, [neverOnboarded]);
 
   // Signing in successfully leaves you standing on the sign-in page, so move on. In an
   // effect rather than in the render path — pushing history while rendering is how you
@@ -292,7 +289,16 @@ export default function App() {
             anyway, since it would be a Re-run button with nothing to search for. */}
         {state && page === "dashboard" && needsTutorial && (
           <Tutorial state={state} onChange={refresh}
-                    onDone={() => setTutorialDone(true)} />
+                    onDone={async () => {
+                      setTutorialDone(true);
+                      // Recorded, so it does not come back. Failing to write it is not
+                      // worth blocking them on — they still reach the dashboard, and the
+                      // worst case is being offered the walkthrough once more.
+                      try {
+                        await api.settings.save({ onboarding_done: true });
+                        await refresh();
+                      } catch { /* they are through either way */ }
+                    }} />
         )}
 
         {state && page === "dashboard" && !needsTutorial && (

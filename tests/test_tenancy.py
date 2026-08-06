@@ -744,3 +744,137 @@ def test_the_starter_lists_include_the_grant_databases(db):
         adapters = {f["adapter"] for f in repo.list_funders(conn, org_id=newcomer)}
 
     assert {"grants_gov", "ca_grants_portal"} <= adapters
+
+
+# --- leaving an organization --------------------------------------------------
+#
+# Two ways a person stops belonging to an org — the admin removes them, or they close
+# their own account — and both have to end in the same place: no route can resolve them
+# to that org again, so its findings, its funders and its encrypted API key are all
+# equally out of reach. The `users` row is the whole mechanism, which is why these tests
+# check the consequence rather than the row.
+
+def _member(conn, uid, email, org_id):
+    from app.db import now_iso
+    conn.execute(
+        "INSERT INTO users(uid, email, org_id, created_at, last_seen_at) "
+        "VALUES(?,?,?,?,?)", (uid, email, org_id, now_iso(), now_iso()))
+
+
+def test_the_first_person_in_an_org_administers_it(db):
+    from app.db import org_members, org_owner
+
+    with session(db) as conn:
+        _member(conn, "u1", "founder@a.org", B)
+        _member(conn, "u2", "colleague@a.org", B)
+        conn.execute("UPDATE orgs SET owner_uid='u1' WHERE id=?", (B,))
+
+        assert org_owner(conn, B) == "u1"
+        badges = {m["email"]: m["is_admin"] for m in org_members(conn, B)}
+        assert badges == {"founder@a.org": True, "colleague@a.org": False}
+
+
+def test_an_org_whose_owner_vanished_promotes_somebody_rather_than_locking_up(db):
+    """An org with members and no valid owner can never remove anyone or hand itself on
+    again. Pre-ownership orgs and a deleted owner both produce exactly that, so a
+    dangling `owner_uid` falls through to the earliest remaining member."""
+    from app.db import org_owner
+
+    with session(db) as conn:
+        _member(conn, "u1", "first@a.org", B)
+        _member(conn, "u2", "second@a.org", B)
+        conn.execute("UPDATE orgs SET owner_uid='ghost' WHERE id=?", (B,))
+
+        assert org_owner(conn, B) == "u1"
+        # And it healed the row rather than recomputing it every time.
+        assert conn.execute("SELECT owner_uid FROM orgs WHERE id=?",
+                            (B,)).fetchone()["owner_uid"] == "u1"
+
+
+def test_a_removed_member_can_no_longer_resolve_to_that_org(db):
+    """The removal *is* the revocation. Every /api route resolves the caller's org from
+    this row, so with it gone there is no path back to the funders, the findings or the
+    key — and the next sign-in provisions a fresh empty org, which is the "they see
+    onboarding like a new user" the removal is supposed to produce."""
+    from app.db import remove_member
+
+    with session(db) as conn:
+        _member(conn, "u1", "boss@a.org", B)
+        _member(conn, "u2", "leaver@a.org", B)
+        secrets.store_api_key(conn, "sk-ant-ORG-B-KEY", org_id=B)
+
+        assert remove_member(conn, "u2", B) is True
+
+    with session(db) as conn:
+        landed = org_for_user(conn, "u2", "leaver@a.org")
+        assert landed != B, "signing in again must not put them back where they were"
+        assert secrets.read_api_key(conn, org_id=landed) is None, "no key comes with them"
+        assert repo.get_settings(conn, org_id=landed)["onboarding_done"] is False, \
+            "a fresh org means the walkthrough, like any new account"
+        # And the org they left is untouched.
+        assert secrets.read_api_key(conn, org_id=B) == "sk-ant-ORG-B-KEY"
+
+
+def test_the_last_one_out_loses_the_findings_and_the_key_but_not_the_funders(db):
+    """The asymmetry is the point, not an oversight.
+
+    Findings are one nonprofit's private research and nobody can ever ask for them again.
+    A funder is a name, a grants page and a sector — somebody's hand-added research that
+    is useful to the next nonprofit in that city, and the reason for keeping it.
+    """
+    from app.db import remove_member
+
+    with session(db) as conn:
+        _member(conn, "solo", "only@b.org", B)
+        secrets.store_api_key(conn, "sk-ant-DOOMED", org_id=B)
+        repo.create_funder(conn, {"name": "Hand Added Trust",
+                                  "url": "https://example.invalid/g"}, org_id=B)
+        repo.create_run(conn, "run_b", org_id=B)
+        repo.save_opportunity(conn, _opp(), run_id="run_b", org_id=B)
+        before = len(repo.list_funders(conn, org_id=B))
+        assert before and repo.list_opportunities(conn, org_id=B, month=month_key())
+
+        remove_member(conn, "solo", B)
+
+    with session(db) as conn:
+        assert repo.list_opportunities(conn, org_id=B, month=month_key()) == []
+        assert repo.list_runs(conn, org_id=B) == []
+        assert secrets.read_api_key(conn, org_id=B) is None, \
+            "a live credential must not outlive the account it belonged to"
+        assert len(repo.list_funders(conn, org_id=B)) == before, \
+            "the funder list is the one thing worth keeping"
+        assert conn.execute("SELECT 1 FROM orgs WHERE id=?", (B,)).fetchone(), \
+            "the org row stays — the kept funders point at it"
+
+
+def test_one_member_leaving_takes_nothing_from_the_ones_who_stay(db):
+    from app.db import remove_member
+
+    with session(db) as conn:
+        _member(conn, "u1", "stays@b.org", B)
+        _member(conn, "u2", "goes@b.org", B)
+        secrets.store_api_key(conn, "sk-ant-SHARED", org_id=B)
+        repo.create_run(conn, "run_b", org_id=B)
+        repo.save_opportunity(conn, _opp(), run_id="run_b", org_id=B)
+
+        remove_member(conn, "u2", B)
+
+        assert repo.list_opportunities(conn, org_id=B, month=month_key())
+        assert secrets.read_api_key(conn, org_id=B) == "sk-ant-SHARED"
+
+
+def test_removing_somebody_never_touches_another_org(db):
+    """The shape every test in this file uses: act on B, assert A is untouched."""
+    from app.db import remove_member
+
+    with session(db) as conn:
+        _member(conn, "u_b", "solo@b.org", B)
+        secrets.store_api_key(conn, "sk-ant-A-KEY", org_id=A)
+        repo.create_run(conn, "run_a", org_id=A)
+        repo.save_opportunity(conn, _opp(), run_id="run_a", org_id=A)
+
+        remove_member(conn, "u_b", B)          # strands B entirely
+
+        assert secrets.read_api_key(conn, org_id=A) == "sk-ant-A-KEY"
+        assert repo.list_opportunities(conn, org_id=A, month=month_key())
+        assert repo.list_runs(conn, org_id=A)

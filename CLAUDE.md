@@ -56,8 +56,12 @@ design constraint:
   spreadsheet.
 - A five-step first-run walkthrough (`dashboard/src/components/Tutorial.jsx`): key,
   program card, funder list, the weekly schedule (optional — skipping is a real answer),
-  and what to expect. Each step's done-ness is read from the account, never from a flag
-  we set, so closing the tab resumes where you stopped.
+  and what to expect. Which step it opens on is read from the account, so closing the tab
+  resumes where you stopped; *whether it appears at all* is the stored `onboarding_done`
+  flag, so finishing it once is final.
+- **Accounts and roles**: an Admin badge on whoever created the org, member removal and
+  ownership transfer for them alone, and account deletion for anybody. What leaving takes
+  with it — and what it deliberately leaves behind — is under "Leaving one" below.
 - **Search preflight** (`app/runner.py: preflight`): a search that could not have worked
   is refused with a sentence naming the one page that fixes it — see §5.
 - **Sign-in** (`app/auth.py`): Google via Firebase Authentication, the ID token verified
@@ -81,7 +85,7 @@ That is safe in a way it would not have been before per-org keys: a new account 
 the server crawl on the free tier, which `FUNDWORTHY_MAX_RUNS_PER_DAY` can bound if one
 account ever misbehaves.
 
-**Multi-tenant storage** (schema v8). Every row has an owner. `orgs` and `users` tables;
+**Multi-tenant storage** (schema v9). Every row has an owner. `orgs` and `users` tables;
 `org_id` on `settings`, `programs`, `funders`, `opportunities` and `runs`; and each org
 holds **its own encrypted Anthropic key**, so one nonprofit can never spend another's.
 
@@ -105,6 +109,38 @@ single-use code (`POST /api/org/invites`) and shares it through a channel they a
 trust; the colleague redeems it (`POST /api/org/join`) and lands in that org with its
 funders, cards and findings. Sending mail would need a provider, a domain reputation and
 a bounce story — and §8 rules out the app sending mail on anyone's behalf.
+
+**Leaving one** has two doors, and both end in the same place. `orgs.owner_uid` records
+who created the org; that person is the **admin**, and only they can remove a member
+(`DELETE /api/org/members/{uid}`) or hand the org on (`POST /api/org/transfer`). Anyone
+can close their own account (`DELETE /api/account`), behind typing their own address.
+
+- **Deleting the `users` row is the revocation, and it is complete.** Every `/api` route
+  resolves the caller's org through `org_for_user`, so with no row there is no org to
+  resolve: findings, funders and the encrypted key all become unreachable in one write.
+  Their next sign-in provisions a fresh empty org with `onboarding_done` unset, which is
+  the "they start over like a new user" the removal is for.
+- **An admin with colleagues must transfer before deleting themselves**, or the last
+  person who can invite or remove anyone walks out and the org is frozen.
+- **A dangling owner heals** to the earliest remaining member (`org_owner`). An org with
+  members and no valid owner could otherwise never remove anybody or hand itself on.
+- **Last one out strands the org rather than deleting it** (`strand_org`): the findings,
+  the run log, unused invites and the **encrypted API key** go — a live credential must
+  not outlive the account it belonged to — and the **funder list stays**. That asymmetry
+  is the point. Findings are one nonprofit's private research and nobody can ever ask for
+  them again; a funder is a name, a grants page and a sector, and hand-added ones are
+  exactly the researched work that should feed the shared directory so the next nonprofit
+  in that city starts with something. Settings stay too, `org_name` above all, because
+  attributing that list later needs to know whose it was.
+
+**Whether somebody is new is a stored fact** (`onboarding_done`), not a deduction. It was
+re-derived from "do you have a key, a ticked program and a funder", so an established org
+that unticked its last programme for an afternoon was thrown back to step one of
+onboarding on an account it had used for months. Schema v9 backfills it for every org
+with **evidence of use** — a member, a run, a finding or a saved key — deliberately not
+"every org that exists", because the v7 migration creates `DEFAULT_ORG_ID` itself and a
+first-ever boot would otherwise mark its own default org as experienced and never show
+onboarding to anyone.
 
 Otherwise the first person to sign in adopts the pre-tenancy data and everyone after gets
 their own **empty** org: working settings, no funders, no program cards. A new nonprofit

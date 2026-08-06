@@ -159,7 +159,14 @@ export const api = {
     invite: () => post("/api/org/invites"),
     revokeInvite: (code) => del(`/api/org/invites/${encodeURIComponent(code)}`),
     join: (code) => post("/api/org/join", { code }),
+    removeMember: (uid) => del(`/api/org/members/${encodeURIComponent(uid)}`),
+    transfer: (uid) => post("/api/org/transfer", { uid }),
   },
+
+  // Deleting your own account. Not under `org` — it is the one action that is about the
+  // person rather than the organization, and it can end the organization as a side
+  // effect rather than as its purpose.
+  deleteAccount: () => del("/api/account"),
 };
 
 // --- money ---------------------------------------------------------------------

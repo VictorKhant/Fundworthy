@@ -217,10 +217,55 @@ def test_per_program_floor_lowers_the_crawl_filter(client):
 
 
 def test_draft_without_a_key_says_so_in_plain_language(client):
+    # A page no seeded card already points at, on a host that resolves. Both matter: the
+    # duplicate guard below would answer a seeded URL first, and the SSRF guard answers a
+    # domain that does not exist first — either way the key check never runs.
     r = client.post("/api/programs/draft",
-                    json={"url": "https://www.risesandiego.org/programs/ilia"})
+                    json={"url": "https://www.risesandiego.org/programs/not-seeded-yet"})
     assert r.status_code == 400
     assert "API key" in r.json()["detail"]
+
+
+# --- reading the same page twice ----------------------------------------------
+#
+# Drafting is a Sonnet call against somebody's website, and doing it again for a page
+# they have already turned into a card buys them a second copy of a programme they have.
+# Worse than the waste: two cards for one programme both get ticked, and the search then
+# runs the same queries twice and pays for both.
+
+DUPE = "https://www.risesandiego.org/programs/ilia"
+
+
+def test_a_page_already_saved_as_a_card_is_refused_before_anything_is_spent(client):
+    client.post("/api/settings/api-key", json={"api_key": FAKE_KEY})
+    r = client.post("/api/programs/draft", json={"url": DUPE})
+
+    assert r.status_code == 409
+    detail = r.json()["detail"]
+    assert "already have a program" in detail
+    assert "ILIA" in detail or "Ilia" in detail, "name the card so they can go find it"
+
+
+@pytest.mark.parametrize("variant", [
+    DUPE + "/",
+    DUPE.upper(),
+    DUPE.replace("https://www.", "https://"),
+    DUPE.replace("https://", "http://"),
+    "  " + DUPE + "  ",
+])
+def test_the_same_page_wearing_a_different_hat_is_still_the_same_page(client, variant):
+    """Otherwise the guard is defeated by a trailing slash, which is not a thing anybody
+    would do on purpose but is very much a thing that happens when you copy a link."""
+    client.post("/api/settings/api-key", json={"api_key": FAKE_KEY})
+    assert client.post("/api/programs/draft", json={"url": variant}).status_code == 409
+
+
+def test_a_genuinely_different_page_on_the_same_site_is_allowed(client):
+    """The check must not be so eager that it blocks the second programme a nonprofit
+    describes. Reaches the key check, which is as far as an offline test can go."""
+    r = client.post("/api/programs/draft",
+                    json={"url": "https://www.risesandiego.org/programs/something-else"})
+    assert r.status_code == 400 and "API key" in r.json()["detail"]
 
 
 def test_draft_rejects_a_non_url(client):

@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path("data/rise.db")
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # The org that owns everything written before tenancy existed. A single-tenant install
 # (and every row in the pilot's live database) belongs to it, so adding org scoping is a
@@ -68,6 +68,12 @@ CREATE TABLE IF NOT EXISTS meta (
 CREATE TABLE IF NOT EXISTS orgs (
     id         TEXT PRIMARY KEY,
     name       TEXT NOT NULL DEFAULT '',
+    -- Who administers this org: the uid of whoever created it, or of whoever it was
+    -- handed to. Nullable, because a local install has no users at all and an org whose
+    -- last member left keeps existing (see `strand_org`) with nobody to own it.
+    --
+    -- A uid rather than an email: emails are the thing a person changes.
+    owner_uid  TEXT,
     created_at TEXT NOT NULL
 );
 
@@ -293,6 +299,20 @@ DEFAULT_SETTINGS: dict[str, str] = {
     # been asserting.
     "org_name": "",
     "org_location": "",
+    # Has anybody here been walked through setting this up. **A fact that is recorded,
+    # not one that is re-derived**, and that distinction is the whole point.
+    #
+    # Whether to show the walkthrough used to be computed live from "do you have a key,
+    # a ticked program and a funder". That is a fine way to *open* the guide on the right
+    # step and a terrible way to decide whether somebody is new: an established org that
+    # unticked its last programme for an afternoon was thrown back to step one of
+    # onboarding, on the account they had been using for months, as though it had
+    # forgotten them. Setup being incomplete and the person being new are different
+    # questions and only one of them can be answered by looking at the data.
+    #
+    # Set when they finish the walkthrough. Schema v9 backfills every org that already
+    # existed to `1`, because they are self-evidently not new.
+    "onboarding_done": "0",
     # When the weekly search runs, per org. It used to be "Wednesday 11pm PT" written
     # into a config dataclass that nothing read and a sentence in the UI that nothing
     # enforced — there was no scheduler at all, so the only way a search happened was
@@ -565,6 +585,57 @@ def _migrate(conn: sqlite3.Connection) -> None:
             )
         current = 8
 
+    if current < 9:
+        # v9 lands two things that both answer "who is this account, really".
+        #
+        # `orgs.owner_uid` — somebody has to be able to remove a colleague and hand the
+        # org on, and until now nobody could, because nothing recorded who created it.
+        # Backfilled to the earliest member, which is the person who made it in every
+        # case that exists: an org is created by its first user signing in.
+        org_cols = {r["name"] for r in conn.execute("PRAGMA table_info(orgs)")}
+        if "owner_uid" not in org_cols:
+            conn.execute("ALTER TABLE orgs ADD COLUMN owner_uid TEXT")
+        conn.execute(
+            "UPDATE orgs SET owner_uid = ("
+            "  SELECT uid FROM users WHERE users.org_id = orgs.id "
+            "  ORDER BY created_at LIMIT 1) "
+            "WHERE owner_uid IS NULL")
+
+        # `onboarding_done` — an org that has already been used is not new, whatever its
+        # settings happen to look like today. Without this backfill the flag lands as 0
+        # and every established account is shown the first-run walkthrough on its next
+        # visit, which is a worse version of the bug it was added to fix.
+        #
+        # **"Has been used", not "exists".** The obvious version of this marked every row
+        # in `orgs`, and on a brand-new install that is wrong: the v7 migration above
+        # creates `DEFAULT_ORG_ID` itself, seconds earlier, so a first-ever boot marked
+        # its own default org as an experienced user and nobody ever saw onboarding at
+        # all. Evidence of use is a member, a finding, or a saved API key — the pilot org
+        # has all three, a long-running local install has the latter two, and a database
+        # created thirty milliseconds ago has none.
+        #
+        # Runs before `seed_settings`, whose INSERT ... ON CONFLICT DO NOTHING then leaves
+        # these values alone. Orgs created after this migration get the 0 default and see
+        # the walkthrough once, which is the point.
+        stamp = now_iso()
+        used = conn.execute(
+            "SELECT id FROM orgs WHERE"
+            "  EXISTS (SELECT 1 FROM users WHERE users.org_id = orgs.id)"
+            "  OR EXISTS (SELECT 1 FROM runs WHERE runs.org_id = orgs.id)"
+            "  OR EXISTS (SELECT 1 FROM opportunities WHERE opportunities.org_id = orgs.id)"
+            "  OR EXISTS (SELECT 1 FROM settings s WHERE s.org_id = orgs.id"
+            "             AND s.key = 'anthropic_api_key' AND s.value IS NOT NULL)"
+        ).fetchall()
+        for row in used:
+            conn.execute(
+                "INSERT INTO settings(org_id, key, value, updated_at) VALUES(?,?,?,?) "
+                "ON CONFLICT(org_id, key) DO NOTHING",
+                (row["id"], "onboarding_done", "1", stamp))
+        if used:
+            log.info("v9: %d org(s) already in use — not showing them onboarding",
+                     len(used))
+        current = 9
+
     conn.execute(
         "INSERT INTO meta(key, value) VALUES('schema_version', ?) "
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -746,6 +817,11 @@ def org_for_user(conn: sqlite3.Connection, uid: str, email: str) -> str:
         "INSERT INTO users(uid, email, org_id, created_at, last_seen_at) VALUES(?,?,?,?,?)",
         (uid, email, org_id, now_iso(), now_iso()),
     )
+    # You administer what you created. Claimed rather than assigned, so adopting the
+    # pre-tenancy org (which may already have an owner from the v9 backfill) does not
+    # quietly depose whoever holds it.
+    conn.execute("UPDATE orgs SET owner_uid=? WHERE id=? AND owner_uid IS NULL",
+                 (uid, org_id))
     if org_id != DEFAULT_ORG_ID:
         # The same provisioning the default org gets, so "what do I start with" has one
         # answer rather than depending on which door you came through. Settings, and the
@@ -836,9 +912,109 @@ def redeem_invite(conn: sqlite3.Connection, code: str, uid: str, email: str) -> 
 
 
 def org_members(conn: sqlite3.Connection, org_id: str) -> list[dict]:
-    return [dict(r) for r in conn.execute(
-        "SELECT email, created_at, last_seen_at FROM users WHERE org_id=? "
-        "ORDER BY created_at", (org_id,))]
+    owner = org_owner(conn, org_id)
+    return [{**dict(r), "is_admin": bool(owner) and r["uid"] == owner}
+            for r in conn.execute(
+                "SELECT uid, email, created_at, last_seen_at FROM users WHERE org_id=? "
+                "ORDER BY created_at", (org_id,))]
+
+
+def org_owner(conn: sqlite3.Connection, org_id: str) -> str | None:
+    """The uid who administers this org, healing the record if it has gone stale.
+
+    Self-healing matters more than it looks. An owner who deletes their own account, or
+    an org migrated in from before ownership existed, leaves `owner_uid` pointing at
+    nobody — and an org with members but no owner can never remove anybody or hand
+    itself on again. So a dangling owner falls through to the earliest remaining member,
+    which is the same rule the v9 backfill used and the same person a human would pick.
+    """
+    row = conn.execute("SELECT owner_uid FROM orgs WHERE id=?", (org_id,)).fetchone()
+    owner = row["owner_uid"] if row else None
+    if owner and conn.execute(
+            "SELECT 1 FROM users WHERE uid=? AND org_id=?", (owner, org_id)).fetchone():
+        return owner
+
+    heir = conn.execute(
+        "SELECT uid FROM users WHERE org_id=? ORDER BY created_at LIMIT 1",
+        (org_id,)).fetchone()
+    if heir is None:
+        return None
+    conn.execute("UPDATE orgs SET owner_uid=? WHERE id=?", (heir["uid"], org_id))
+    log.info("org %s had no valid owner — %s inherits it", org_id, heir["uid"])
+    return heir["uid"]
+
+
+def set_org_owner(conn: sqlite3.Connection, org_id: str, uid: str) -> None:
+    """Hand the org to another of its members. Caller checks who is asking."""
+    if not conn.execute("SELECT 1 FROM users WHERE uid=? AND org_id=?",
+                        (uid, org_id)).fetchone():
+        raise ValueError("that person is not in this organization")
+    conn.execute("UPDATE orgs SET owner_uid=? WHERE id=?", (uid, org_id))
+    log.info("org %s handed to %s", org_id, uid)
+
+
+def remove_member(conn: sqlite3.Connection, uid: str, org_id: str) -> bool:
+    """Take one person out of an org. Returns False if they were not in it.
+
+    Deleting the `users` row *is* the revocation, and it is complete: every `/api` route
+    resolves the caller's org through `org_for_user`, so with no row there is no org to
+    resolve and nothing of this org's — findings, funders, the encrypted API key — is
+    reachable by them again. Their next sign-in provisions a fresh empty org, which is
+    the "they see onboarding like a new user" the removal is supposed to produce.
+
+    If they were the last one out, the org is stranded rather than deleted — see
+    `strand_org` for what that keeps and what it does not.
+    """
+    cur = conn.execute("DELETE FROM users WHERE uid=? AND org_id=?", (uid, org_id))
+    if not cur.rowcount:
+        return False
+    if not conn.execute("SELECT 1 FROM users WHERE org_id=? LIMIT 1",
+                        (org_id,)).fetchone():
+        strand_org(conn, org_id)
+    else:
+        org_owner(conn, org_id)      # re-seat the owner if that was them
+    return True
+
+
+def strand_org(conn: sqlite3.Connection, org_id: str) -> dict[str, int]:
+    """Nobody is left in this org. Throw away what is theirs; keep what is not.
+
+    **Deleted** — the month's findings, the run log, and any unused invitations, because
+    they are one nonprofit's private research and nobody can ever ask for them again. And
+    the encrypted API key, which is the part that would otherwise be a live credential
+    sitting in a table attached to an account with no owner.
+
+    **Kept — deliberately** — the funder list. A funder is not private: it is a name, a
+    grants page and a sector, and it is the researched work that makes this product worth
+    using. Somebody added those by hand, and the intent is to fold them into the shared
+    directory so the next nonprofit in that city does not start from nothing. Deleting
+    them would throw away the only part of a departing org's data that has any value to
+    anyone else.
+
+    Settings stay too, `org_name` above all, because attributing that funder list later
+    needs to know whose it was.
+
+    The org row itself is not deleted: `funders.org_id` and `settings.org_id` point at
+    it, and an orphan row costs nothing next to losing the reason for keeping them.
+    """
+    counts = {}
+    for table in ("opportunities", "runs"):
+        counts[table] = conn.execute(
+            f"DELETE FROM {table} WHERE org_id=?", (org_id,)).rowcount
+    counts["invites"] = conn.execute(
+        "DELETE FROM invites WHERE org_id=? AND redeemed_at IS NULL",
+        (org_id,)).rowcount
+    counts["api_key"] = conn.execute(
+        "DELETE FROM settings WHERE org_id=? AND key='anthropic_api_key'",
+        (org_id,)).rowcount
+    conn.execute("UPDATE orgs SET owner_uid=NULL WHERE id=?", (org_id,))
+
+    kept = conn.execute("SELECT COUNT(*) AS n FROM funders WHERE org_id=?",
+                        (org_id,)).fetchone()["n"]
+    log.info("org %s has no members left — cleared %s, kept %d funder(s)",
+             org_id, counts, kept)
+    counts["funders_kept"] = kept
+    return counts
 
 
 # --- helpers ------------------------------------------------------------------

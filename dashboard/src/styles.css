@@ -1017,3 +1017,18 @@ button[aria-busy="true"] { display: inline-flex; align-items: center; gap: 8px; 
 .blocker button:hover:not(:disabled) { border-color: #C9B27E; }
 
 .runlog-head { display: flex; align-items: center; gap: 8px; }
+
+/* --- closing your account --------------------------------------------------- */
+/* Bottom of Settings, and styled to look like the end of the page rather than another
+   thing to try. Clay border, not a red alarm: this is a legitimate action somebody may
+   genuinely want, and frightening them out of it is not the job. The guard is the typed
+   address, not the colour. */
+.danger-zone { border-color: var(--clay-line); }
+.danger-zone h2 { color: var(--clay-deep); }
+.danger-zone .tut-sub { margin: 0 0 16px; padding-left: 20px; font-size: 13.5px; }
+.danger-zone .tut-sub li { margin-bottom: 7px; }
+
+/* A member row now carries an Admin chip and, for the admin, two actions. */
+.member { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.member > span:first-child { display: inline-flex; align-items: center; gap: 8px; }
+.member .row { margin-left: auto; gap: 4px; }
