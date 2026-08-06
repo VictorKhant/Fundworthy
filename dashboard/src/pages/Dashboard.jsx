@@ -79,6 +79,10 @@ export default function Dashboard({ state, onChange, onGoto }) {
   // What "nothing here" means this week, which depends entirely on what happened. The
   // three cases read almost identically on screen and could not be more different: not
   // set up, ran and found nothing, never run.
+  //
+  // Deliberately does NOT restate how the run ended — the outcome line above the list
+  // says that now, and says it in a colour. This is the part the outcome line cannot
+  // carry: how much was looked at, and the one knob that would widen it.
   function emptyBody() {
     if (blocked) return pending[0].message;
     if (!state.latest_run) {
@@ -88,14 +92,13 @@ export default function Dashboard({ state, onChange, onGoto }) {
     const rejected = state.latest_run.rejected_by_filter || {};
     const count = Object.values(rejected).reduce((a, b) => a + b, 0);
     if (count > 0) {
-      return `The last search read the funders on your list and set aside ${count} `
-        + `page${count === 1 ? "" : "s"} — below your ${money(state.settings.min_award)} `
-        + "floor, past their deadline, or already shown to you this month. Nothing "
-        + "cleared the bar, which is a normal week. Lower the floor under \"Adjust "
-        + "search settings\" to see more.";
+      return `${count} page${count === 1 ? " was" : "s were"} set aside — below your `
+        + `${money(state.settings.min_award)} floor, past their deadline, or already `
+        + "shown to you this month. Nothing cleared the bar, which is a normal week. "
+        + 'Lower the floor under "Adjust search settings" to see more.';
     }
-    return "The last search found nothing new above your floor. That is a normal week — "
-      + "Fundworthy would rather show you six worth applying for than sixty that are not.";
+    return "Nothing new cleared your floor. That is a normal week — Fundworthy would "
+      + "rather show you six worth applying for than sixty that are not.";
   }
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(state.settings);
@@ -187,8 +190,9 @@ export default function Dashboard({ state, onChange, onGoto }) {
 
       {!draft.enabled && (
         <div className="notice plain">
-          The researcher is switched off. Turn it back on under "Adjust search settings"
-          before running a search.
+          Fundworthy is paused, so nothing runs and nothing is spent — by hand or on a
+          schedule. Untick "Pause Fundworthy entirely" under "Adjust search settings" to
+          start again.
         </div>
       )}
 
@@ -212,6 +216,11 @@ export default function Dashboard({ state, onChange, onGoto }) {
 
       <StatusStrip
         enabled={draft.enabled}
+        schedule={{
+          enabled: draft.schedule_enabled,
+          day: draft.schedule_day,
+          hour: draft.schedule_hour,
+        }}
         run={run}
         ceiling={draft.run_budget_usd || 1}
         knobsOpen={knobsOpen}

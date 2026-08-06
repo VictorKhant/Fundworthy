@@ -103,6 +103,11 @@ class SettingsIn(BaseModel):
     # The weekly schedule. Validated here rather than trusted: `schedule_hour` reaches a
     # `.replace(hour=...)` in the scheduler, and the timezone reaches ZoneInfo — which
     # handles a bad name gracefully, but there is no reason to make it.
+    # The weekly automation, separate from `enabled`. `enabled` is the kill switch and
+    # gates everything including the Search button; this only decides whether a search
+    # also happens unattended. Conflating them meant switching off automation switched
+    # off the manual button too.
+    schedule_enabled: bool | None = None
     schedule_day: str | None = Field(None, pattern="^(monday|tuesday|wednesday|thursday|"
                                                    "friday|saturday|sunday)$")
     schedule_hour: int | None = Field(None, ge=0, le=23)
@@ -454,11 +459,13 @@ def export_opportunities(month: str | None = None, run_id: str | None = None,
     key = month or month_key()
     with session() as conn:
         rows = repo.list_opportunities(conn, org_id=org, month=key, run_id=run_id)
+        org_name = repo.get_settings(conn, org_id=org)["org_name"]
     return Response(
         content=export.to_csv(rows),
         media_type="text/csv; charset=utf-8",
         # Without this the browser renders the CSV as text instead of saving it.
-        headers={"Content-Disposition": f'attachment; filename="{export.filename(key)}"'},
+        headers={"Content-Disposition":
+                 f'attachment; filename="{export.filename(key, org_name)}"'},
     )
 
 

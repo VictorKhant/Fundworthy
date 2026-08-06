@@ -329,7 +329,106 @@ function FunderStep({ state, onChange, ...rest }) {
   );
 }
 
-// Step 4. Where the results come from, said once, plainly, before the first search.
+// Step 4, and the only optional one. Skipping is a real answer, so the button says so
+// rather than pretending everybody wants this.
+//
+// The weekly search is **off** until someone ticks it here. It used to be on for every
+// new account, at Wednesday 11pm — which was the pilot organisation's answer to a
+// question no other org had been asked, and it meant an unattended job spending a
+// nonprofit's own Anthropic credit on a schedule they never chose. A default that spends
+// somebody's money has to be opted into.
+function ScheduleStep({ state, onChange, ...rest }) {
+  const s = state.settings || {};
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const on = Boolean(s.schedule_enabled);
+
+  async function write(changes) {
+    setSaving(true);
+    setError(null);
+    try {
+      await api.settings.save(changes);
+      await onChange();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Step {...rest} done nextLabel={on ? "Next" : "Skip this — I'll search by hand"}>
+      <p>
+        Fundworthy can run your search on its own, once a week, and have the results
+        waiting when you next open it. It uses your Claude key when it does, so this is
+        entirely your call — <strong>it is off unless you turn it on</strong>.
+      </p>
+      <p className="muted small">
+        Either way the <strong>Search again now</strong> button always works. Skipping
+        here does not switch anything off.
+      </p>
+
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={on}
+          disabled={saving}
+          onChange={(e) => write({ schedule_enabled: e.target.checked })}
+        />
+        Search automatically every week
+      </label>
+
+      {on && (
+        <div className="schedule">
+          <span className="muted small">Every</span>
+          <select value={s.schedule_day} disabled={saving}
+                  onChange={(e) => write({ schedule_day: e.target.value })}>
+            {["monday", "tuesday", "wednesday", "thursday", "friday",
+              "saturday", "sunday"].map((d) => (
+              <option key={d} value={d}>{d[0].toUpperCase() + d.slice(1)}</option>
+            ))}
+          </select>
+          <span className="muted small">at</span>
+          <select value={String(s.schedule_hour)} disabled={saving}
+                  onChange={(e) => write({ schedule_hour: Number(e.target.value) })}>
+            {Array.from({ length: 24 }, (_, h) => (
+              <option key={h} value={h}>
+                {h === 0 ? "12 midnight" : h < 12 ? `${h} am`
+                  : h === 12 ? "12 noon" : `${h - 12} pm`}
+              </option>
+            ))}
+          </select>
+          <select value={s.schedule_timezone} disabled={saving}
+                  onChange={(e) => write({ schedule_timezone: e.target.value })}>
+            {[
+              ["America/Los_Angeles", "Pacific"],
+              ["America/Denver", "Mountain"],
+              ["America/Chicago", "Central"],
+              ["America/New_York", "Eastern"],
+              ["America/Anchorage", "Alaska"],
+              ["Pacific/Honolulu", "Hawaii"],
+            ].map(([tz, label]) => <option key={tz} value={tz}>{label}</option>)}
+          </select>
+          <p className="muted small">
+            Pick the evening before you want to read them. If the server is down at that
+            hour the search runs as soon as it is back — you get the week's search either
+            way, and never two of them.
+          </p>
+        </div>
+      )}
+
+      {saving && (
+        <p className="loading-line"><Spinner label="Saving" />Saving…</p>
+      )}
+      {error && <div className="notice error">{error}</div>}
+      <p className="muted small">
+        You can change this any time under "Adjust search settings" on This week.
+      </p>
+    </Step>
+  );
+}
+
+// Step 5. Where the results come from, said once, plainly, before the first search.
 //
 // It is the only step with nothing to do, and it earns its place: everything it says was
 // previously discoverable only by running a search and reasoning backwards from what came
@@ -341,6 +440,12 @@ function ReadyStep({ state, ...rest }) {
   const floor = money(state.settings?.min_award);
   // Stored lowercase ("wednesday") because the scheduler matches on it; capitalised here
   // because it is being read in a sentence, not parsed.
+  //
+  // Only spoken aloud if they actually chose it in the previous step. This line used to
+  // read "It runs once a week, on Wednesday" to every new account — stating a schedule
+  // nobody had set as though it were a fact about their account, when in truth nothing
+  // was scheduled at all and Wednesday was just the value the column shipped with.
+  const scheduled = Boolean(state.settings?.schedule_enabled);
   const stored = state.settings?.schedule_day || "";
   const day = stored ? stored[0].toUpperCase() + stored.slice(1) : "";
 
@@ -355,8 +460,18 @@ function ReadyStep({ state, ...rest }) {
           {programs} ticked program{programs === 1 ? "" : "s"}.
         </li>
         <li>
-          <strong>It runs once a week{day ? `, on ${day}` : ""}</strong>, and you can
-          press "Search again now" whenever you like.
+          {scheduled ? (
+            <>
+              <strong>It searches on its own every {day}</strong>, and you can press
+              "Search again now" whenever you like as well.
+            </>
+          ) : (
+            <>
+              <strong>It searches when you press "Search again now"</strong> — nothing
+              runs on its own. You can switch on a weekly search, and pick the day and
+              time, any time under "Adjust search settings".
+            </>
+          )}
         </li>
         <li>
           <strong>Expect a short list.</strong> Anything under {floor} is dropped before
@@ -382,7 +497,8 @@ export default function Tutorial({ state, onChange, onDone }) {
     { key: "key", Component: KeyStep, title: "Add your Claude key" },
     { key: "program", Component: ProgramStep, title: "Describe what you do" },
     { key: "funders", Component: FunderStep, title: "Choose who it watches" },
-    { key: "ready", Component: ReadyStep, title: "How your weekly search works" },
+    { key: "schedule", Component: ScheduleStep, title: "Search on its own? (optional)" },
+    { key: "ready", Component: ReadyStep, title: "How your search works" },
   ], []);
 
   // Open on the first unfinished step rather than always at one. Someone who saved a key
@@ -391,7 +507,10 @@ export default function Tutorial({ state, onChange, onDone }) {
     Boolean(state.key_available),
     (state.programs || []).some((p) => p.active),
     (state.funders || []).some((f) => f.active),
-    false,          // the last step is a read, so it is never "already done"
+    // The schedule step is optional, so it is never "already done" — landing on it and
+    // pressing Skip is the expected path, not a step to be jumped over.
+    false,
+    false,          // the last step is a read, so it is never "already done" either
   ];
   const firstUnfinished = doneness.findIndex((d) => !d);
   const [at, setAt] = useState(firstUnfinished === -1 ? 0 : firstUnfinished);

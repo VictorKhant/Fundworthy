@@ -299,8 +299,21 @@ DEFAULT_SETTINGS: dict[str, str] = {
     # somebody pressing Re-run.
     #
     # A day and an hour in the org's own timezone, because "Thursday morning, before her
-    # Thursday meeting" is the actual requirement and that is a local-time statement. The
-    # `enabled` setting above stays the kill switch: off means nothing is scheduled.
+    # Thursday meeting" is the actual requirement and that is a local-time statement.
+    #
+    # **Off by default, and the day below is a starting point rather than a decision.**
+    # `enabled` used to be the only switch, which made it two things at once: the §8 kill
+    # switch *and* whether the weekly search happens. That conflation had a visible cost —
+    # turning off automation greyed out "Search again now", so an org that just wanted to
+    # run searches by hand could not run one at all.
+    #
+    # They are separate now. `enabled` stays the kill switch, default on, and gates
+    # everything. `schedule_enabled` is the weekly automation alone, default **off**,
+    # because an unattended job that spends an org's own API credit on a schedule they
+    # never chose is not a sensible thing to opt somebody into. Wednesday 11pm was the
+    # pilot's answer to a question no new org has been asked; onboarding asks it, and
+    # skipping is a real answer.
+    "schedule_enabled": "0",
     "schedule_day": "wednesday",
     "schedule_hour": "23",
     "schedule_timezone": "America/Los_Angeles",

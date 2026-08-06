@@ -64,8 +64,28 @@ def test_an_unknown_day_falls_back_rather_than_never_running():
 
 # --- who is due ---------------------------------------------------------------
 
+def schedule_on(conn, org_id=DEFAULT_ORG_ID):
+    """Opt this org into the weekly search.
+
+    Needed by almost everything below, and that is the point rather than an annoyance:
+    the schedule is **off** until somebody asks for it. It used to be on for every new
+    account at Wednesday 11pm — the pilot's answer to a question no other org had been
+    asked — which meant an unattended job spending a nonprofit's own Anthropic credit on
+    a schedule they never chose.
+    """
+    repo.update_settings(conn, {"schedule_enabled": True}, org_id=org_id)
+
+
+def test_a_new_org_is_not_scheduled_for_anything(db):
+    """The opt-in, asserted first because it is the default everything else overrides."""
+    with session(db) as conn:
+        assert repo.get_settings(conn, org_id=DEFAULT_ORG_ID)["schedule_enabled"] is False
+        assert due_orgs(conn) == [], "nobody is due until they ask to be"
+
+
 def test_an_org_that_has_never_run_is_due(db):
     with session(db) as conn:
+        schedule_on(conn)
         assert DEFAULT_ORG_ID in due_orgs(conn)
 
 
@@ -73,6 +93,7 @@ def test_an_org_that_already_ran_this_slot_is_not_due_again(db):
     """The expensive mistake. A second run in one slot spends the org's own credit on
     results they already have."""
     with session(db) as conn:
+        schedule_on(conn)
         repo.create_run(conn, "r1", org_id=DEFAULT_ORG_ID)
         assert due_orgs(conn) == []
 
@@ -81,6 +102,7 @@ def test_a_run_from_before_the_slot_does_not_count(db):
     """Last week's run must not satisfy this week's slot, or an org gets one search and
     then silence."""
     with session(db) as conn:
+        schedule_on(conn)
         repo.create_run(conn, "old", org_id=DEFAULT_ORG_ID)
         stale = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
         conn.execute("UPDATE runs SET started_at=? WHERE id='old'", (stale,))
@@ -91,13 +113,35 @@ def test_the_kill_switch_stops_scheduling(db):
     """`enabled` is documented as "nothing runs and nothing is spent". A scheduler that
     ignored it would make the switch a lie in the one case it exists for."""
     with session(db) as conn:
+        schedule_on(conn)
         repo.update_settings(conn, {"enabled": False}, org_id=DEFAULT_ORG_ID)
         assert due_orgs(conn) == []
 
 
+def test_switching_off_the_weekly_search_leaves_the_kill_switch_alone(db):
+    """Two switches, and the difference is what the manual button can still do.
+
+    One checkbox used to be both, so an org that only wanted to stop the Wednesday job
+    also greyed out "Search again now" and could not search at all. `enabled` still gates
+    everything; `schedule_enabled` gates only the unattended run.
+    """
+    with session(db) as conn:
+        schedule_on(conn)
+        repo.update_settings(conn, {"schedule_enabled": False}, org_id=DEFAULT_ORG_ID)
+        assert due_orgs(conn) == []
+        assert repo.get_settings(conn, org_id=DEFAULT_ORG_ID)["enabled"] is True
+
+    from app.runner import preflight
+    with session(db) as conn:
+        codes = [b["code"] for b in preflight(conn, org_id=DEFAULT_ORG_ID, no_llm=True)]
+    assert "disabled" not in codes, "a paused schedule must not block a search by hand"
+
+
 def test_each_org_is_judged_on_its_own_schedule(db):
     with session(db) as conn:
+        schedule_on(conn)
         ensure_org(conn, "org_b", "Second")
+        schedule_on(conn, "org_b")
         repo.update_settings(conn, {"enabled": False}, org_id="org_b")
         due = due_orgs(conn)
 
@@ -108,7 +152,9 @@ def test_each_org_is_judged_on_its_own_schedule(db):
 def test_an_unknown_timezone_does_not_stop_everyone_else(db):
     """A typo in one org's settings field must not take scheduling down for the install."""
     with session(db) as conn:
+        schedule_on(conn)
         ensure_org(conn, "org_b", "Second")
+        schedule_on(conn, "org_b")
         repo.update_settings(conn, {"schedule_timezone": "Mars/Olympus"}, org_id="org_b")
         due = due_orgs(conn)
 

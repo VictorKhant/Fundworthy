@@ -51,10 +51,13 @@ design constraint:
   funder list, a monthly archive, a Re-run button with a live streaming log, a real Stop.
 - Settings page storing the Anthropic API key **encrypted at rest, write-only** (no
   endpoint ever returns it).
-- CSV export of the week's findings.
-- A four-step first-run walkthrough (`dashboard/src/components/Tutorial.jsx`): key,
-  program card, funder list, and what to expect. Each step's done-ness is read from the
-  account, never from a flag we set, so closing the tab resumes where you stopped.
+- CSV export of the week's findings, named after the org that downloaded it — it was
+  `rise-funding-…` for everybody, which put the pilot's name on another nonprofit's
+  spreadsheet.
+- A five-step first-run walkthrough (`dashboard/src/components/Tutorial.jsx`): key,
+  program card, funder list, the weekly schedule (optional — skipping is a real answer),
+  and what to expect. Each step's done-ness is read from the account, never from a flag
+  we set, so closing the tab resumes where you stopped.
 - **Search preflight** (`app/runner.py: preflight`): a search that could not have worked
   is refused with a sentence naming the one page that fixes it — see §5.
 - **Sign-in** (`app/auth.py`): Google via Firebase Authentication, the ID token verified
@@ -306,6 +309,24 @@ and still works.
 **Kill switch.** The `enabled` setting. If off, a run exits before any network call. In
 `FUNDWORTHY_STRICT_CONFIG` mode a config that can't be read is a refusal to run, so an
 outage can't silently re-enable a switched-off agent.
+
+**The weekly search is a separate switch, and it is off by default.** `schedule_enabled`
+(read only by `app/scheduler.py`) decides whether a search happens unattended;
+`enabled` decides whether anything happens at all. They were one setting, which cost
+twice:
+
+- **Turning off automation greyed out "Search again now".** An org that only wanted to
+  stop the Wednesday job could not run a search by hand at all, and nothing on the
+  checkbox said it would do that.
+- **Every new account was scheduled for Wednesday 11pm.** That was the pilot's answer to
+  a question no other org had been asked, and it meant an unattended job spending a
+  nonprofit's own Anthropic credit on a schedule they never chose. A default that spends
+  somebody's money has to be opted into, so onboarding asks — as an optional step where
+  skipping is a real answer — and `schedule_day` is now just the value the picker opens
+  on, not a decision anybody made.
+
+The manual button is gated by the kill switch and by `runner.preflight`, never by the
+schedule.
 
 Never send a full HTML page to a model.
 

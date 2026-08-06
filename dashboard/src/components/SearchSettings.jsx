@@ -102,13 +102,22 @@ export default function SearchSettings({
       </label>
 
       <div className="searchpanel-foot">
+        {/* Two switches, and separating them was the point.
+
+            One checkbox used to be both the §8 kill switch and "does a search happen on
+            a schedule". Unticking it to stop the weekly job also greyed out "Search again
+            now" — so an org that simply wanted to run searches by hand, when they felt
+            like it, could not run one at all. Nobody would guess that from the label. */}
         <label className="check">
           <input
             type="checkbox"
-            checked={draft.enabled}
-            onChange={(e) => set("enabled", e.target.checked)}
+            checked={draft.schedule_enabled}
+            onChange={(e) => set("schedule_enabled", e.target.checked)}
           />
-          The researcher is switched on
+          Search automatically every week
+          <small className="muted">
+            {" "}— off by default. You can always search by hand with the button above.
+          </small>
         </label>
 
         {/* This used to read "it searches every Wednesday night", which was a sentence
@@ -116,7 +125,7 @@ export default function SearchSettings({
             happened was somebody pressing Re-run. Now it is three controls and there is
             a scheduler behind them. Local time, because "before the Thursday meeting" is
             what people actually mean. */}
-        {draft.enabled && (
+        {draft.schedule_enabled && (
           <div className="schedule">
             <span className="muted small">Search automatically every</span>
             <select value={draft.schedule_day}
@@ -160,6 +169,23 @@ export default function SearchSettings({
             </p>
           </div>
         )}
+
+        {/* The kill switch, kept and kept separate. It is the one control that stops
+            *everything*, including the button, so it is not something to reach for when
+            you only meant "don't search on Wednesdays" — which is exactly what the single
+            combined checkbox made people do. Deliberately the quieter of the two. */}
+        <label className="check pause">
+          <input
+            type="checkbox"
+            checked={!draft.enabled}
+            onChange={(e) => set("enabled", !e.target.checked)}
+          />
+          Pause Fundworthy entirely
+          <small className="muted">
+            {" "}— nothing runs and nothing is spent, by hand or on a schedule, until you
+            untick this.
+          </small>
+        </label>
 
         <div className="row">
           {dirty && (
