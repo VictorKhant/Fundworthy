@@ -1158,3 +1158,67 @@ body[data-fw-theme="dark"] {
   background: var(--card); color: var(--fg); box-shadow: 0 1px 2px rgba(0, 0, 0, .10);
 }
 .themetoggle svg { width: 14px; height: 14px; flex-shrink: 0; }
+
+/* --- the confirm dialog ----------------------------------------------------- */
+/*
+   Replaces window.confirm and window.prompt everywhere (components/Confirm.jsx).
+   `.dialog-points` is the reason it exists: the browser can only ask "are you sure?",
+   and this can say what will actually happen before somebody decides.
+*/
+
+.dialog-scrim {
+  position: fixed; inset: 0; z-index: 40;
+  background: var(--scrim);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+
+.dialog {
+  background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: var(--shadow);
+  padding: 22px 24px; width: 100%; max-width: 460px;
+  max-height: 86vh; overflow-y: auto;
+}
+.dialog.clay { border-color: var(--clay-line); }
+
+.dialog h2 {
+  font-family: var(--display); font-size: 20px; font-weight: 500;
+  letter-spacing: -.01em; margin: 0 0 8px;
+}
+.dialog.clay h2 { color: var(--clay-deep); }
+
+.dialog-body { margin: 0 0 12px; color: var(--body); font-size: 14px; }
+
+/* What will happen, in plain sentences. Not a warning list — a description. */
+.dialog-points {
+  margin: 0 0 16px; padding: 12px 14px 12px 30px;
+  background: var(--panel); border-radius: 10px;
+  font-size: 13.5px; color: var(--body);
+}
+.dialog.clay .dialog-points { background: var(--clay-soft); }
+.dialog-points li { margin-bottom: 6px; }
+.dialog-points li:last-child { margin-bottom: 0; }
+
+.dialog-field { display: block; font-size: 13.5px; color: var(--body); margin-bottom: 16px; }
+.dialog-field input { width: 100%; margin-top: 6px; }
+
+.dialog-actions {
+  display: flex; align-items: center; justify-content: flex-end; gap: 10px;
+  margin-top: 4px;
+}
+
+@media (max-width: 620px) {
+  .dialog { max-width: none; padding: 18px 16px; }
+  .dialog-actions { flex-direction: column-reverse; align-items: stretch; }
+  .dialog-actions button { width: 100%; }
+}
+
+/* The "already using Fundworthy?" prompt at the top of walkthrough step 1. Set apart
+   from the key copy below it, because it is a different question — not a sub-step of
+   adding a key, but the alternative to doing any of this. */
+.tut-join {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 12px 14px; margin-bottom: 18px;
+}
+.tut-join p { margin: 0; color: var(--body); }
+.tut-join .join { margin: 10px 0 6px; }

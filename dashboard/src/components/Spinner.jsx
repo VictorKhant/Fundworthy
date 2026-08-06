@@ -1,3 +1,5 @@
+import { forwardRef } from "react";
+
 // Everything that waits, waiting visibly.
 //
 // The app is full of operations that take real time and used to show nothing but a
@@ -39,11 +41,18 @@ export default function Spinner({ label = "Working", size }) {
 // label, and being disabled — because getting two of the three right is how you end up
 // with a button that looks busy and can still be pressed four more times. Each of those
 // presses was a Sonnet call.
-export function Busy({ busy, children, busyLabel, disabled, ...rest }) {
+//
+// forwardRef because <Confirm> has to put focus on its confirm button when the dialog
+// opens. On React 18 a `ref` passed to a plain function component is silently null —
+// no error, just a dialog that never takes focus, which is exactly the kind of
+// accessibility bug that ships because nothing complains about it.
+export const Busy = forwardRef(function Busy(
+  { busy, children, busyLabel, disabled, ...rest }, ref
+) {
   return (
-    <button {...rest} disabled={busy || disabled} aria-busy={busy || undefined}>
+    <button {...rest} ref={ref} disabled={busy || disabled} aria-busy={busy || undefined}>
       {busy && <Spinner label={busyLabel || "Working"} size={13} />}
       {busy ? busyLabel || children : children}
     </button>
   );
-}
+});

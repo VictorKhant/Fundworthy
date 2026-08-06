@@ -80,6 +80,21 @@ def _names_in_scope(source: str) -> set[str]:
     return names
 
 
+def _without_comments(source: str) -> str:
+    """Strip `/* … */` and `// …` before looking for rendered tags.
+
+    Comments in this codebase are prose, and prose about components names them the way
+    you would say them out loud — "forwardRef because <Confirm> needs focus". Scanning
+    the raw text turns every one of those into a phantom missing import, which is the
+    kind of false alarm that gets a test deleted rather than fixed.
+
+    Blank lines are kept so the file's shape is unchanged; nothing here depends on line
+    numbers today, but a future check reporting one should not be lied to.
+    """
+    source = re.sub(r"/\*.*?\*/", lambda m: "\n" * m.group(0).count("\n"), source, flags=re.S)
+    return re.sub(r"(?<![:/])//[^\n]*", "", source)
+
+
 def _sources() -> list[Path]:
     return sorted(p for p in SRC.rglob("*.jsx"))
 
@@ -98,7 +113,9 @@ def test_every_component_a_file_renders_is_actually_in_scope(path: Path):
     """
     source = path.read_text(encoding="utf-8")
     in_scope = _names_in_scope(source)
-    used = {tag.split(".")[0] for tag in _JSX_TAG.findall(source)}
+    # Imports are read from the whole file; tags only from the code, since a component
+    # mentioned in a comment is not rendered.
+    used = {tag.split(".")[0] for tag in _JSX_TAG.findall(_without_comments(source))}
 
     missing = sorted(used - in_scope)
     assert not missing, (

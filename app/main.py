@@ -996,16 +996,22 @@ def join_org(body: JoinIn, user=Depends(auth.require_user)) -> dict:
 
     Note this deliberately does **not** depend on `current_org`: resolving the caller's
     current org would create an empty one for them a moment before they leave it.
+
+    Joining **moves** somebody, so it is a leave as much as a join, and `redeem_invite`
+    applies the same two rules as closing an account: an admin with colleagues has to
+    hand the org over first, and an org left with nobody in it is stranded rather than
+    abandoned with a live API key in it. The response says which of those happened,
+    because "you also just wiped the org you were in" is not something to discover later.
     """
     if user is None:
         raise HTTPException(
             400, "Joining an organization needs sign-in, which this install has off.")
     try:
         with session() as conn:
-            org_id = redeem_invite(conn, body.code, user.uid, user.email)
+            result = redeem_invite(conn, body.code, user.uid, user.email)
     except InviteError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return {"org_id": org_id, "joined": True}
+    return {"joined": True, **result}
 
 
 @api.get("/auth/me")

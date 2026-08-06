@@ -986,13 +986,34 @@ class InviteError(ValueError):
     """The code cannot be redeemed, with a reason safe to show the person holding it."""
 
 
-def redeem_invite(conn: sqlite3.Connection, code: str, uid: str, email: str) -> str:
-    """Move (or place) this person into the org the code belongs to. Returns the org id.
+def redeem_invite(conn: sqlite3.Connection, code: str, uid: str, email: str) -> dict:
+    """Move (or place) this person into the org the code belongs to.
 
     Redeeming is idempotent per person but single-use per code: the second person to try
     the same code is told to ask for their own. The error messages deliberately do not
     distinguish "no such code" from "already used" beyond what the holder needs to act —
     there is nothing to enumerate here, but there is also no reason to be chatty.
+
+    **Joining MOVES you, so leaving is governed by the same rules as closing an account**
+    (`main.delete_own_account`), and for the same reasons. This used to be a bare
+    `UPDATE users SET org_id`, which walked straight past both of them:
+
+      - An admin with colleagues could leave, and the last person who could invite or
+        remove anybody was gone. The org was frozen with no way to unfreeze it.
+      - Somebody leaving an org they were alone in left it with no members and everything
+        still in it — findings, and an encrypted API key that is a live credential
+        attached to an account nobody can sign into.
+
+    So the caller goes out through `remove_member`, which strands a now-empty org (see
+    `strand_org`: findings, run log and key deleted; hand-added funders kept) and re-seats
+    the owner if it was them. The refusal is the only case where nothing happens at all.
+
+    Ordering matters: everything that can refuse is checked BEFORE the code is marked
+    redeemed. Marking first and raising after would burn a single-use invitation on an
+    attempt that did nothing, and the holder would have to ask for another one.
+
+    Returns what happened, because the caller has to be told: {org_id, left_org,
+    stranded}. `stranded` true means their previous org's findings and key are gone.
     """
     code = code.strip().upper()
     row = conn.execute("SELECT * FROM invites WHERE code=?", (code,)).fetchone()
@@ -1005,21 +1026,41 @@ def redeem_invite(conn: sqlite3.Connection, code: str, uid: str, email: str) -> 
         raise InviteError("That invitation has expired. Ask for a new one.")
 
     org_id = row["org_id"]
+    existing = conn.execute("SELECT uid, org_id FROM users WHERE uid=? OR email=?",
+                            (uid, email)).fetchone()
+    old_org = existing["org_id"] if existing else None
+
+    # Already there. Not an error — somebody re-pasting a code they have used should be
+    # told they are in, not told off — but the invitation is not spent on it either.
+    if old_org == org_id:
+        return {"org_id": org_id, "left_org": None, "stranded": False}
+
+    stranded = False
+    if old_org:
+        others = conn.execute(
+            "SELECT COUNT(*) AS n FROM users WHERE org_id=? AND uid<>?",
+            (old_org, existing["uid"])).fetchone()["n"]
+        if others and org_owner(conn, old_org) == existing["uid"]:
+            raise InviteError(
+                "You are the admin of the organization you are in now, and other people "
+                "are still in it. Hand it over to one of them from Settings first — "
+                "otherwise nobody left could invite or remove anyone.")
+        stranded = not others
+
     now = now_iso()
     conn.execute("UPDATE invites SET redeemed_at=?, redeemed_by=? WHERE code=?",
                  (now, email, code))
 
-    existing = conn.execute("SELECT uid, org_id FROM users WHERE uid=? OR email=?",
-                            (uid, email)).fetchone()
     if existing:
-        conn.execute("UPDATE users SET uid=?, org_id=?, last_seen_at=? WHERE uid=?",
-                     (uid, org_id, now, existing["uid"]))
-    else:
-        conn.execute(
-            "INSERT INTO users(uid, email, org_id, created_at, last_seen_at) "
-            "VALUES(?,?,?,?,?)", (uid, email, org_id, now, now))
-    log.info("%s joined org %s by invitation", email, org_id)
-    return org_id
+        # Out through the same door as closing an account, rather than a bare reassign.
+        remove_member(conn, existing["uid"], old_org)
+    conn.execute(
+        "INSERT INTO users(uid, email, org_id, created_at, last_seen_at) "
+        "VALUES(?,?,?,?,?)", (uid, email, org_id, now, now))
+
+    log.info("%s joined org %s by invitation (left %s, stranded=%s)",
+             email, org_id, old_org or "no org", stranded)
+    return {"org_id": org_id, "left_org": old_org, "stranded": stranded}
 
 
 def org_members(conn: sqlite3.Connection, org_id: str) -> list[dict]:

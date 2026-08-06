@@ -447,7 +447,9 @@ def test_an_invite_moves_the_joiner_into_the_inviters_org(db):
 
         joined = redeem_invite(conn, invite["code"], "uid-new", "colleague@example.org")
 
-    assert joined == owner
+    assert joined["org_id"] == owner
+    assert joined["left_org"] is None, "a brand-new person left nothing behind"
+    assert joined["stranded"] is False
 
 
 def test_an_invite_is_single_use(db):
@@ -487,7 +489,7 @@ def test_joining_by_invite_gives_access_to_that_orgs_data(db):
         code = create_invite(conn, owner)["code"]
 
         joined = redeem_invite(conn, code, "uid-new", "colleague@example.org")
-        names = [p["name"] for p in repo.list_programs(conn, org_id=joined)]
+        names = [p["name"] for p in repo.list_programs(conn, org_id=joined["org_id"])]
 
     assert "Shared Program" in names
 
@@ -502,6 +504,112 @@ def test_a_revoked_invite_cannot_be_used(db):
 
         with pytest.raises(InviteError, match="not valid"):
             redeem_invite(conn, code, "uid-2", "two@example.org")
+
+
+# --- joining is also leaving ---------------------------------------------------
+#
+# `redeem_invite` MOVES somebody, so it has to answer the same two questions closing an
+# account does. It used to be a bare `UPDATE users SET org_id`, which answered neither:
+# an admin could walk out of an org with colleagues still in it and freeze it, and a
+# sole member could leave their org behind with a live encrypted API key in it.
+
+def test_the_last_person_out_strands_the_org_they_left(db):
+    """Same rule as closing an account: findings and the key go, hand-added funders stay.
+
+    A key left behind is the part that actually matters — it is a live credential in an
+    org that now has nobody who can sign in to remove it.
+    """
+    from app import secrets
+    from app.db import create_invite, redeem_invite
+
+    with session(db) as conn:
+        # The first signer-in adopts the pre-tenancy org and its 60-odd seeded funders,
+        # so the person under test has to be the second. Otherwise "the funders they
+        # added by hand" is the whole starter list and the test passes for the wrong
+        # reason — or fails for one.
+        org_for_user(conn, "uid-pilot", "pilot@example.org")
+        old = org_for_user(conn, "uid-mover", "mover@example.org")
+        secrets.store_api_key(conn, "sk-ant-leftbehind", org_id=old)
+        repo.create_funder(conn, {"name": "Their Own Find",
+                                  "url": "https://own.example/grants"}, org_id=old)
+        repo.create_run(conn, "r-old", org_id=old)
+
+        other = org_for_user(conn, "uid-host", "host@example.org")
+        code = create_invite(conn, other)["code"]
+
+        result = redeem_invite(conn, code, "uid-mover", "mover@example.org")
+
+        assert result["org_id"] == other
+        assert result["left_org"] == old
+        assert result["stranded"] is True
+
+        key, _source = secrets.resolve_api_key(conn, org_id=old)
+        assert not key, "a live credential outlived the account it belonged to"
+        assert repo.list_runs(conn, org_id=old) == []
+        kept = [f["name"] for f in repo.list_funders(conn, org_id=old)]
+        assert kept == ["Their Own Find"], "hand-added funders are the part worth keeping"
+
+
+def test_an_admin_with_colleagues_cannot_join_their_way_out(db):
+    """Otherwise the only person who can invite or remove anybody leaves, and the org is
+    frozen with no way to unfreeze it. Closing an account already refuses this."""
+    from app.db import InviteError, create_invite, redeem_invite
+
+    with session(db) as conn:
+        home = org_for_user(conn, "uid-boss", "boss@example.org")
+        colleague_code = create_invite(conn, home)["code"]
+        redeem_invite(conn, colleague_code, "uid-staff", "staff@example.org")
+
+        elsewhere = org_for_user(conn, "uid-other", "other@example.org")
+        code = create_invite(conn, elsewhere)["code"]
+
+        with pytest.raises(InviteError, match="[Hh]and it over"):
+            redeem_invite(conn, code, "uid-boss", "boss@example.org")
+
+        # And nothing happened: not the move, and not the invitation either.
+        assert org_for_user(conn, "uid-boss", "boss@example.org") == home
+        row = conn.execute("SELECT redeemed_at FROM invites WHERE code=?",
+                           (code,)).fetchone()
+        assert row["redeemed_at"] is None, \
+            "a refused attempt burned a single-use code"
+
+
+def test_a_colleague_who_is_not_the_admin_may_leave_freely(db):
+    """The other side of the rule. Somebody who is not holding the keys is not trapped,
+    and the org they leave keeps everything because it still has members."""
+    from app.db import create_invite, redeem_invite
+
+    with session(db) as conn:
+        org_for_user(conn, "uid-pilot", "pilot@example.org")   # adopts the seeded org
+        home = org_for_user(conn, "uid-boss", "boss@example.org")
+        repo.create_funder(conn, {"name": "Stays Put",
+                                  "url": "https://stays.example/grants"}, org_id=home)
+        redeem_invite(conn, create_invite(conn, home)["code"],
+                      "uid-staff", "staff@example.org")
+
+        elsewhere = org_for_user(conn, "uid-other", "other@example.org")
+        result = redeem_invite(conn, create_invite(conn, elsewhere)["code"],
+                               "uid-staff", "staff@example.org")
+
+        assert result["stranded"] is False
+        assert [f["name"] for f in repo.list_funders(conn, org_id=home)] == ["Stays Put"]
+
+
+def test_redeeming_a_code_for_the_org_you_are_already_in_is_a_no_op(db):
+    """Re-pasting a code you have used should say "you are in", not throw — and must not
+    take you out through `remove_member` and straight back in, which on a one-person org
+    would strand it and delete the findings you are looking at."""
+    from app.db import create_invite, redeem_invite
+
+    with session(db) as conn:
+        home = org_for_user(conn, "uid-boss", "boss@example.org")
+        repo.create_run(conn, "r-keep", org_id=home)
+        code = create_invite(conn, home)["code"]
+
+        result = redeem_invite(conn, code, "uid-boss", "boss@example.org")
+
+        assert result == {"org_id": home, "left_org": None, "stranded": False}
+        assert len(repo.list_runs(conn, org_id=home)) == 1, "it deleted its own org"
 
 
 # --- a new org starts clean ---------------------------------------------------
