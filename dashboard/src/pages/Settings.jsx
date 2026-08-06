@@ -406,14 +406,19 @@ function ShareFunders({ settings, onChange }) {
 // one person's mistake would be indistinguishable from moderation.
 function ReportQueue() {
   const [reports, setReports] = useState(null);
+  // Whether the endpoint answered at all, which is the only honest test of "am I an
+  // operator" — the route is gated by `FUNDWORTHY_ADMIN_EMAILS` and 404s otherwise, so
+  // a 200 is the permission and there is no second copy of the rule to drift.
+  const [amAdmin, setAmAdmin] = useState(false);
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
 
   const load = useCallback(async () => {
     try {
       setReports((await api.admin.reports()).reports);
+      setAmAdmin(true);
     } catch {
-      setReports([]);          // not an admin, or the route is not there: show nothing
+      setAmAdmin(false);       // not an operator: this whole panel is not for them
     }
   }, []);
   useEffect(() => { load(); }, [load]);
@@ -431,18 +436,36 @@ function ReportQueue() {
     }
   }
 
-  if (!reports || reports.length === 0) return null;
+  // Shown to an operator even with nothing queued, and that is the point rather than
+  // clutter. An empty queue and "FUNDWORTHY_ADMIN_EMAILS never took" look identical from
+  // the outside — and they cannot be told apart by curl either, because the router's
+  // sign-in gate answers an anonymous request long before the admin list is consulted.
+  // Seeing this panel at all is the confirmation that the variable is set and names you.
+  if (!amAdmin) return null;
+
+  const queue = reports || [];
 
   return (
-    <section className="panel danger-zone">
-      <h2>Reported funders — {reports.length}</h2>
+    <section className={`panel ${queue.length ? "danger-zone" : ""}`}>
+      <h2>Reported funders{queue.length ? ` — ${queue.length}` : ""}</h2>
+      {queue.length === 0 ? (
+        <p className="settings-lede">
+          Nothing reported. When another nonprofit reports a shared funder it is hidden
+          from everyone straight away and appears here for you to take down or restore.
+          <br />
+          <span className="muted small">
+            You are seeing this because your address is in FUNDWORTHY_ADMIN_EMAILS.
+          </span>
+        </p>
+      ) : (
       <p className="settings-lede">
         Each of these is hidden from everyone until you decide. Open the page before you
         do; the person who reported it is not shown, and neither is the org that added it.
       </p>
+      )}
       {error && <div className="notice error">{error}</div>}
       <ul className="plain">
-        {reports.map((r) => (
+        {queue.map((r) => (
           <li key={r.id} className="member">
             <span>
               <strong>{r.name || "(funder since deleted)"}</strong>
