@@ -527,7 +527,19 @@ function DeleteAccount() {
     setBusy(true);
     setError(null);
     try {
-      await api.deleteAccount();
+      const out = await api.deleteAccount();
+      // The data is gone either way. Whether the Firebase sign-in went with it is a
+      // separate outcome, and saying "deleted" when the sign-in survived would be a
+      // claim we cannot stand behind — so a stale session gets told what to do instead
+      // of a cheerful goodbye.
+      if (out.sign_in === "stale" || out.sign_in === "failed") {
+        window.alert(
+          "Your organization's data has been deleted.\n\n" +
+          "Your sign-in could not be removed — Firebase refuses that when you last " +
+          "signed in a while ago. Sign in once more and close your account again to " +
+          "remove it, or leave it: it now opens onto an empty account with nothing in it."
+        );
+      }
       // Signing out is what actually ends the session in this browser. Without it the
       // page sits there holding a token for an account the server no longer knows,
       // 401ing on every request — which looks like a bug rather than a goodbye.
@@ -563,7 +575,7 @@ function DeleteAccount() {
         <>
           <p className="settings-lede">This cannot be undone. Here is exactly what happens:</p>
           <ul className="tut-sub">
-            <li>Your sign-in is deleted and you leave this organization.</li>
+            <li>You leave this organization.</li>
             {alone ? (
               <>
                 <li>
@@ -582,6 +594,11 @@ function DeleteAccount() {
                 theirs is deleted.
               </li>
             )}
+            <li>
+              <strong>Your sign-in is removed</strong> so your email address is not kept
+              here either. This does not touch your Google account — only the way you
+              sign in to Fundworthy.
+            </li>
             <li>
               Your Claude account and its billing are Anthropic's, not ours — close that
               separately if you want to.

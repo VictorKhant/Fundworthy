@@ -54,6 +54,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
+from enum import Enum
 
 from fastapi import Header, HTTPException
 
@@ -98,6 +99,11 @@ class User:
     email: str
     name: str
     uid: str
+    # The bearer token this request arrived with, kept because deleting somebody's
+    # Firebase sign-in needs it (see `delete_firebase_account`) and it is the only place
+    # the server ever holds one. Deliberately never logged, never stored, and never
+    # returned by any endpoint — `/api/auth/me` reports the three fields above and stops.
+    token: str = ""
 
 
 _config: Config | None = None
@@ -292,7 +298,8 @@ def verify(token: str) -> User:
             403, f"{email} is not on this install's allow-list. Ask whoever set "
                  "Fundworthy up to add you.")
 
-    return User(email=email, name=(claims.get("name") or email), uid=claims["sub"])
+    return User(email=email, name=(claims.get("name") or email), uid=claims["sub"],
+                token=token)
 
 
 def require_user(authorization: str | None = Header(default=None)) -> User | None:
@@ -312,3 +319,79 @@ def require_user(authorization: str | None = Header(default=None)) -> User | Non
             headers={"WWW-Authenticate": "Bearer"},
         )
     return verify(token.strip())
+
+
+# --- deleting somebody's sign-in ------------------------------------------------
+
+# Identity Toolkit, the same endpoint the browser SDK calls. Deliberately not
+# `firebase-admin`: that would want a service-account JSON sitting on the VM, which is
+# one more live credential to protect and rotate, and CLAUDE.md rejected the dependency
+# for exactly that reason. This needs only the person's own ID token and the public web
+# API key we already serve to the browser.
+_DELETE_URL = "https://identitytoolkit.googleapis.com/v1/accounts:delete"
+
+# What Firebase says when the *sign-in* is too old to authorise something this
+# destructive. Not about token freshness — refreshing the token does not help, because
+# it is `auth_time` that matters — so the only honest answer is to say sign in again.
+_STALE = "CREDENTIAL_TOO_OLD_LOGIN_AGAIN"
+
+
+class DeletionOutcome(str, Enum):
+    """What happened to the Firebase record. Three states, and they are told apart
+    because the person needs to do something different in each."""
+
+    REMOVED = "removed"          # gone
+    NOT_APPLICABLE = "n/a"       # no sign-in on this install; nothing to remove
+    NEEDS_RECENT_LOGIN = "stale"  # sign out and back in, then try again
+    FAILED = "failed"            # Firebase said no, or could not be reached
+
+
+def delete_firebase_account(token: str) -> DeletionOutcome:
+    """Delete the Firebase sign-in the given ID token belongs to.
+
+    **Called after the app data is already gone, never before.** The ordering is the
+    whole safety property: if this fails, the person can still sign in and lands in a
+    fresh empty org, which is harmless and retryable. Reversed, a failure here would
+    leave somebody locked out of an account whose data is still on the box.
+
+    Never raises. Every failure is an outcome the caller reports honestly, because the
+    one thing worse than not deleting the record is saying it was deleted.
+    """
+    if _config is None:
+        return DeletionOutcome.NOT_APPLICABLE
+    if not token:
+        return DeletionOutcome.FAILED
+
+    import httpx
+
+    try:
+        response = httpx.post(
+            _DELETE_URL,
+            params={"key": _config.web_api_key},
+            json={"idToken": token},
+            timeout=10.0,
+        )
+    except httpx.HTTPError as exc:
+        log.warning("could not reach Firebase to delete a sign-in: %s", type(exc).__name__)
+        return DeletionOutcome.FAILED
+
+    if response.status_code == 200:
+        return DeletionOutcome.REMOVED
+
+    # The body carries a machine-readable reason. It may also echo the token back in an
+    # error payload, so only the code is read and nothing here is logged verbatim.
+    try:
+        reason = str(response.json().get("error", {}).get("message", ""))
+    except ValueError:
+        reason = ""
+
+    if _STALE in reason:
+        return DeletionOutcome.NEEDS_RECENT_LOGIN
+    if "USER_NOT_FOUND" in reason or "INVALID_ID_TOKEN" in reason:
+        # Already gone, or the token no longer resolves to anybody. Either way there is
+        # no Firebase record left to worry about, which is the outcome we wanted.
+        return DeletionOutcome.REMOVED
+
+    log.warning("Firebase refused to delete a sign-in (%s): %s",
+                response.status_code, reason or "no reason given")
+    return DeletionOutcome.FAILED

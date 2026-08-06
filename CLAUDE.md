@@ -85,7 +85,7 @@ That is safe in a way it would not have been before per-org keys: a new account 
 the server crawl on the free tier, which `FUNDWORTHY_MAX_RUNS_PER_DAY` can bound if one
 account ever misbehaves.
 
-**Multi-tenant storage** (schema v10). Every row has an owner. `orgs` and `users` tables;
+**Multi-tenant storage** (schema v11). Every row has an owner. `orgs` and `users` tables;
 `org_id` on `settings`, `programs`, `funders`, `opportunities` and `runs`; and each org
 holds **its own encrypted Anthropic key**, so one nonprofit can never spend another's.
 
@@ -120,6 +120,15 @@ can close their own account (`DELETE /api/account`), behind typing their own add
   resolve: findings, funders and the encrypted key all become unreachable in one write.
   Their next sign-in provisions a fresh empty org with `onboarding_done` unset, which is
   the "they start over like a new user" the removal is for.
+- **Closing your own account removes the Firebase sign-in too**, so it does not quietly
+  mean "your data goes and we keep your email address". Done with Identity Toolkit's
+  `accounts:delete` and the caller's own ID token — **not** `firebase-admin`, which would
+  want a service-account file on the box (§3). **Data first, sign-in second**, always: a
+  failure that way round leaves somebody able to sign in to a fresh empty org, where the
+  reverse would lock them out of an account whose data is still here. Firebase refuses to
+  delete on a stale sign-in (`CREDENTIAL_TOO_OLD_LOGIN_AGAIN`, about `auth_time` — a
+  token refresh does not help), so the outcome is reported separately and the UI says
+  "sign in once more and try again" rather than claiming both are gone.
 - **An admin with colleagues must transfer before deleting themselves**, or the last
   person who can invite or remove anyone walks out and the org is frozen.
 - **A dangling owner heals** to the earliest remaining member (`org_owner`). An org with

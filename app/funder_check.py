@@ -37,6 +37,51 @@ _GRANTY = re.compile(
 
 MIN_TEXT = 400        # below this there is no page to judge, only a shell
 
+# How much evidence before we will call it a grants page.
+PASS_MARK = 3
+
+
+def _stem(word: str) -> str:
+    """grant/grants, award/awards, application/applications → one term.
+
+    The first version counted distinct *surface forms* and wanted three of them, which
+    rejected the MacArthur Foundation's grant-search page: 3,116 characters of text whose
+    grant vocabulary was "grant" and "grants". Two strings, one word, and a page titled
+    "Grant Search" was told it did not look like it was about grants. Counting plurals as
+    separate concepts also rewarded rambling pages over focused ones, which is backwards.
+    """
+    return word.lower().rstrip("s") if len(word) > 3 else word.lower()
+
+
+def _grant_evidence(page, url: str) -> tuple[int, bool]:
+    """(how strongly this reads as a grants page, is it plausibly a homepage).
+
+    A weighted read rather than a word count, because the three strongest signals are
+    not in the body text at all — the page title, the address, and whether the parser
+    could pull a real award amount or deadline off it. A page called "Grant Search" at
+    `/grants` that states a figure is a grants page whatever its prose does.
+    """
+    title = (page.title or "").lower()
+    terms = {_stem(m.group(0)) for m in _GRANTY.finditer(page.text)}
+    hits = len(_GRANTY.findall(page.text))
+
+    score = 0
+    if _GRANTY.search(title):
+        score += 2                       # they named the page after it
+    if re.search(r"grant|funding|apply|rfp|solicitation", url, re.IGNORECASE):
+        score += 2                       # and the address agrees
+    score += min(len(terms), 3)          # vocabulary breadth, capped
+    if hits >= 5:
+        score += 1                       # and it keeps coming up
+    if page.award_max is not None or page.earliest_deadline is not None:
+        score += 2                       # the parser found a real figure or date
+
+    # A funder's front door: their name in the title, little grant vocabulary, no
+    # numbers. Worth its own message — the fix is to link the grants page, not to give up.
+    homepage = score < PASS_MARK and bool(terms) and not re.search(
+        r"grant|funding|apply|rfp|solicitation", url, re.IGNORECASE)
+    return score, homepage
+
 
 def _why_it_failed(error: str | None, status: int | None) -> str:
     """A reason a nonprofit administrator can act on.
@@ -112,8 +157,11 @@ async def check_page(url: str | None) -> tuple[bool, str]:
     if len(page.text) < MIN_TEXT:
         return False, "That page has almost nothing on it."
 
-    hits = len(set(m.group(0).lower() for m in _GRANTY.finditer(page.text)))
-    if hits < 3:
+    score, looks_like_a_homepage = _grant_evidence(page, result.final_url or url)
+    if score < PASS_MARK:
+        if looks_like_a_homepage:
+            return False, ("That looks like the funder's front page rather than their "
+                           "grants page. Link the page that lists what they fund.")
         return False, "That page does not look like it is about grants."
 
     # What we can honestly say, in the order somebody would want to hear it.

@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path("data/rise.db")
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 # The org that owns everything written before tenancy existed. A single-tenant install
 # (and every row in the pilot's live database) belongs to it, so adding org scoping is a
@@ -700,6 +700,25 @@ def _migrate(conn: sqlite3.Connection) -> None:
                 tuple(shipped)).rowcount
             log.info("v10: %d funder row(s) came from a shipped list", n)
         current = 10
+
+    if current < 11:
+        # v11 forgets every *failed* check so the new rule gets to look again.
+        #
+        # The old one counted distinct surface forms of grant vocabulary and wanted
+        # three, which rejected the MacArthur Foundation's grant-search page: real text,
+        # a page titled "Grant Search", a stated figure, and a vocabulary of "grant" and
+        # "grants" — two strings, one word. Anything turned away by that verdict deserves
+        # a second look rather than being marked unshareable for good.
+        #
+        # Only failures are cleared. A funder that passed is still fine, and re-fetching
+        # every page on every heuristic tweak would be a lot of somebody else's bandwidth
+        # for no new information.
+        cleared = conn.execute(
+            "UPDATE funders SET check_ok=NULL, check_note='', checked_at=NULL "
+            "WHERE check_ok=0").rowcount
+        if cleared:
+            log.info("v11: %d funder(s) will be checked again under the new rule", cleared)
+        current = 11
 
     conn.execute(
         "INSERT INTO meta(key, value) VALUES('schema_version', ?) "
