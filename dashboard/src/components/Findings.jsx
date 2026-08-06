@@ -214,15 +214,6 @@ export function Finding({ o }) {
             <a href={o.source_url} target="_blank" rel="noopener noreferrer" className="strong-link">
               Open the funder's page ↗
             </a>
-            {/* Shown as data, never scored — the COO's own call. It is here so a funder
-                that reads big on its own website can be checked against what it files. */}
-            {o.form_990_url && (
-              <a className="muted-link" href={o.form_990_url} target="_blank" rel="noopener noreferrer">
-                {o.form_990_total_expenses
-                  ? `Their 990: ${money(o.form_990_total_expenses)} spent in ${o.form_990_year} ↗`
-                  : "Their latest 990 filing ↗"}
-              </a>
-            )}
             {/* Flagged rows already carry this on the collapsed footer, next to the
                 link they exist to push you towards. */}
             {!flagged && <span className="muted">Found {o.found_on}</span>}

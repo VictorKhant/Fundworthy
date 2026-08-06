@@ -238,7 +238,6 @@ def test_save_and_read_back_every_new_attribute(db):
         funder_type=FunderType.COMMUNITY,
         service_areas=["Arts", "Equity"],
         geography="San Diego and Imperial Counties",
-        form_990_available=True,
         confidence_pct=68,
         contact_note="grants@example.invalid",
     )
@@ -251,7 +250,6 @@ def test_save_and_read_back_every_new_attribute(db):
     assert got["funder_type"] == "community"
     assert got["service_areas"] == ["Arts", "Equity"]
     assert got["geography"] == "San Diego and Imperial Counties"
-    assert got["form_990_available"] is True
     assert got["confidence_pct"] == 68
     assert got["contact_note"] == "grants@example.invalid"
     assert got["found_on"] == date.today().isoformat()
@@ -631,6 +629,102 @@ def test_unticking_every_program_does_not_make_an_account_new_again(db):
     assert active == [], "the precondition: nothing is ticked"
     assert settings["onboarding_done"] is True, \
         "a ticked checkbox is not what makes somebody a new user"
+
+
+# --- v12: the IRS 990 cache is gone --------------------------------------------
+
+_C990_FUNDERS = ("ein", "form_990_url", "form_990_year", "form_990_total_revenue",
+                 "form_990_total_expenses", "form_990_checked_at")
+_C990_OPPS = ("ein", "form_990_url", "form_990_year", "form_990_total_revenue",
+              "form_990_total_expenses", "form_990_available")
+
+
+def _readd_990_columns(conn) -> None:
+    """Put a live database back into its v11 shape: the 990 columns, with data in them."""
+    for table, cols in (("funders", _C990_FUNDERS), ("opportunities", _C990_OPPS)):
+        have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for col in cols:
+            if col not in have:
+                kind = "TEXT" if col in ("ein", "form_990_url", "form_990_checked_at") \
+                    else "INTEGER"
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {kind}")
+
+
+def test_the_990_columns_are_dropped_and_the_rows_survive(db):
+    """The upgrade the live box runs. Losing the cache is the point; losing a nonprofit's
+    funders or findings alongside it would not be."""
+    from app.db import init_db
+
+    with session(db) as conn:
+        _readd_990_columns(conn)
+        conn.execute(
+            "INSERT INTO funders(org_id, id, name, url, added_by, created_at, updated_at,"
+            " ein, form_990_year) VALUES(?,?,?,?,?,?,?,?,?)",
+            (DEFAULT_ORG_ID, "f990", "MacArthur Foundation",
+             "https://macfound.org/grants", "user", "2026-01-01", "2026-01-01",
+             "36-2167817", 2024))
+        conn.execute("UPDATE meta SET value='11' WHERE key='schema_version'")
+
+    init_db(db)
+
+    with session(db) as conn:
+        for table in ("funders", "opportunities"):
+            left = [r["name"] for r in conn.execute(f"PRAGMA table_info({table})")
+                    if "990" in r["name"] or r["name"] == "ein"]
+            assert left == [], f"{table} still carries {left}"
+        kept = repo.get_funder(conn, "f990", org_id=DEFAULT_ORG_ID)
+        assert kept["name"] == "MacArthur Foundation"
+        assert kept["url"] == "https://macfound.org/grants"
+
+
+def test_the_990_drop_can_run_twice(db):
+    """Migrations run on every boot. The second pass must be a no-op, not an error."""
+    from app.db import init_db
+
+    with session(db) as conn:
+        _readd_990_columns(conn)
+        conn.execute("UPDATE meta SET value='11' WHERE key='schema_version'")
+
+    init_db(db)
+    init_db(db)          # the reboot
+
+    with session(db) as conn:
+        version = conn.execute(
+            "SELECT value FROM meta WHERE key='schema_version'").fetchone()["value"]
+    assert int(version) >= 12
+
+
+def test_a_pre_tenancy_database_still_upgrades_with_the_columns_gone(db):
+    """The hazard the v7 intersect exists for.
+
+    v7 rebuilds `funders` and `opportunities` by naming every column the old table had
+    and selecting them into the new schema. A database that stopped at v5 or v6 still has
+    the six 990 columns; the current schema does not. Without intersecting the two lists
+    the INSERT fails with "table funders has no column named ein" — an upgrade that dies
+    halfway, on somebody's only copy of their data.
+    """
+    from app.db import _migrate_to_org_scoped
+
+    with session(db) as conn:
+        # Strip the tenancy column back off one table and give it the old 990 columns,
+        # which is what `_migrate_to_org_scoped` will find on a genuinely old database.
+        conn.execute("DROP TABLE IF EXISTS funders")
+        conn.execute("""CREATE TABLE funders(
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, url TEXT,
+            sector TEXT NOT NULL DEFAULT 'other', active INTEGER NOT NULL DEFAULT 1,
+            ein TEXT, form_990_url TEXT, form_990_year INTEGER,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+        conn.execute(
+            "INSERT INTO funders(id, name, url, ein, created_at, updated_at) "
+            "VALUES('old1','The Parker Foundation','https://theparkerfoundation.org',"
+            "'95-1234567','2026-01-01','2026-01-01')")
+
+        _migrate_to_org_scoped(conn)          # must not raise
+
+        row = conn.execute("SELECT org_id, name, url FROM funders WHERE id='old1'").fetchone()
+
+    assert row["org_id"] == DEFAULT_ORG_ID, "the row was adopted, not dropped"
+    assert row["name"] == "The Parker Foundation"
 
 
 def test_every_on_off_setting_is_declared_as_one(db):

@@ -163,10 +163,6 @@ Nothing else moves the score. In particular:
   relationships with and does not want to reapply, so a relationship is a reason to
   leave a funder out of the search entirely — never a reason to rank it higher. You are
   not told whether the organization knows a funder, because it must not change the score.
-- The funder's 990 filing history is shown to the COO as data next to the result. It is
-  not a scoring criterion. Where 990 context is given to you below, use it to judge
-  PROGRAM FIT better — a funder whose past grants look nothing like the organization's work is a
-  weak fit however well the page reads — not as a score of its own.
 
 On the 25 points for finishing in time: judge the application against the deadline, not
 in the abstract. A grant closing in three weeks that needs an audited financial
@@ -486,7 +482,7 @@ def triage(candidate: RawCandidate, budget: Budget,
 # --- tier 3: Sonnet scoring ---------------------------------------------------
 
 def score_one(candidate: RawCandidate, source: Source, cfg: Config,
-              budget: Budget, facts_990: dict | None = None) -> Opportunity:
+              budget: Budget) -> Opportunity:
     """Full score + rationale. The system prompt is cached across candidates."""
     system = org_context(cfg) + _SCORING_RULES
     body = _text_block(
@@ -496,11 +492,7 @@ def score_one(candidate: RawCandidate, source: Source, cfg: Config,
         # here. Removed with the warmth weight: telling the model about a relationship
         # it must not score on is just an invitation to score on it anyway.
         f"Funder: {candidate.funder}"
-        # 990 context, when we have it. Given so the model can judge PROGRAM FIT
-        # against what this funder actually is — a $500M national foundation and a
-        # $350k county fund read the same on a web page — not as a criterion of its own.
-        + (f"\nFunder's IRS filing: {_990_line(facts_990)}" if _990_line(facts_990) else "")
-        + f"\nPage title: {candidate.title}\nURL: {candidate.source_url}\n\n"
+        f"\nPage title: {candidate.title}\nURL: {candidate.source_url}\n\n"
         f"{candidate.text[:SCORING_TEXT_CAP]}"
     )
     budget.check(SCORING_MODEL, _estimate_tokens(system + body), SCORING_MAX_TOKENS)
@@ -634,14 +626,6 @@ def score_one(candidate: RawCandidate, source: Source, cfg: Config,
         # either — and both are rendered with an AI marker.
         application_lead_time_days=_bounded(data.get("application_lead_time_days"), 400),
         time_to_funds_days=_bounded(data.get("time_to_funds_days"), 800),
-        # 990 facts come from the funder lookup, not from this page, so they bypass the
-        # quote gate — nothing here is being claimed about the opportunity itself.
-        ein=(facts_990 or {}).get("ein"),
-        form_990_url=(facts_990 or {}).get("form_990_url"),
-        form_990_year=(facts_990 or {}).get("form_990_year"),
-        form_990_total_revenue=(facts_990 or {}).get("form_990_total_revenue"),
-        form_990_total_expenses=(facts_990 or {}).get("form_990_total_expenses"),
-        form_990_available=bool((facts_990 or {}).get("form_990_year")) or None,
     )
     log.info("  scored %3d  %-30s  %s  ($%.5f)",
              opp.score, opp.funder[:30], opp.title[:40], cost)
@@ -669,12 +653,6 @@ def _bounded(value, ceiling: int) -> int | None:
     except (TypeError, ValueError):
         return None
     return n if 0 <= n <= ceiling else None
-
-
-def _990_line(facts: dict | None) -> str:
-    from .irs990 import summary_line
-
-    return summary_line(facts)
 
 
 def _as_enum(enum_cls, raw, default):

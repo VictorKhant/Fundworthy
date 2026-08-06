@@ -27,11 +27,9 @@ PUBLIC_FIELDS = (
     "id", "title", "funder", "award_min", "award_max", "award_typical", "deadline",
     "deadline_type", "estimated_effort_hours", "program_match", "score",
     "score_rationale", "funder_type", "service_areas", "geography",
-    "form_990_available", "confidence_pct", "contact_note",
+    "confidence_pct", "contact_note",
     "source_url", "verified", "needs_human_check", "found_on", "section",
     "source_kind", "application_lead_time_days", "time_to_funds_days",
-    "ein", "form_990_url", "form_990_year",
-    "form_990_total_revenue", "form_990_total_expenses",
 )
 
 

@@ -35,7 +35,6 @@ HEADERS = [
     "Days to prepare",
     "Months to funds",
     "Fit %",                 # the AI's own confidence — inferred, labelled in the UI
-    "Their 990",             # shown as data, never scored — their call
     "Programs",
     "Needs a human check",
     "Link",
@@ -85,7 +84,6 @@ def _row(opp: dict) -> list[str]:
         _safe(opp.get("application_lead_time_days")),
         _safe(round(opp["time_to_funds_days"] / 30) if opp.get("time_to_funds_days") else None),
         _safe(opp.get("confidence_pct")),
-        _safe(opp.get("form_990_url")),
         _safe(opp.get("program_match")),
         "yes" if opp.get("needs_human_check") else "",
         _safe(opp.get("source_url")),
