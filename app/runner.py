@@ -70,6 +70,103 @@ def draining() -> bool:
     return (db_path().parent / DRAIN_FILE).exists()
 
 
+def preflight(conn, *, org_id: str, no_llm: bool = False) -> list[dict]:
+    """Why a search cannot usefully start right now, in words the user can act on.
+
+    Empty list means go. Everything in it is knowable *before* the first HTTP request,
+    and every entry names the page that fixes it.
+
+    Three of the four reasons a search comes back empty were previously only
+    discoverable by running one: press Search, wait five to ten minutes while the crawler
+    politely walks every funder's website, and get back a blank list with nothing on it
+    to explain itself. No key, no funders, nothing ticked — all three are a database read
+    away, and none of them is the user's fault for not knowing.
+
+    **One function, two callers, so the two can never disagree.** `RunManager.start`
+    refuses on it, and `GET /api/state` returns it so the button is disabled with the
+    same sentence rather than a differently-worded one. A disabled button that says one
+    thing and an error that says another is how a person concludes the app is broken.
+
+    Each entry is `{code, message, page}`. `page` is a dashboard section name, so the UI
+    can offer to take them there instead of describing where to go.
+    """
+    from agent.config import max_tier_for
+    from agent.sources import sources_from_db
+
+    from .secrets import resolve_api_key
+
+    out: list[dict] = []
+    settings = repo.get_settings(conn, org_id=org_id)
+
+    if not settings["enabled"]:
+        out.append({
+            "code": "disabled",
+            "message": (
+                "Fundworthy is switched off, so nothing will run and nothing will be "
+                'spent. Turn it back on under "Adjust search settings" on This week.'
+            ),
+            "page": "dashboard",
+        })
+
+    # `no_llm` is the deliberate free-crawl mode, which genuinely does not need a key.
+    # Nothing in the dashboard sends it; it exists for the CLI and for tests.
+    if not no_llm and not resolve_api_key(conn, org_id=org_id)[0]:
+        out.append({
+            "code": "no_api_key",
+            "message": (
+                "Fundworthy has no Claude API key to read funder pages with, so a "
+                "search would find nothing. Open Settings and paste your own key — a "
+                "weekly search costs about a dollar, billed to you and nobody else."
+            ),
+            "page": "settings",
+        })
+
+    if not repo.list_programs(conn, org_id=org_id, active_only=True):
+        out.append({
+            "code": "no_programs",
+            "message": (
+                "No program is ticked, so there is nothing to search for. Tick at least "
+                'one card under "Your programs" at the bottom of This week — that is '
+                "how Fundworthy knows which grants are worth your time."
+            ),
+            "page": "dashboard",
+        })
+
+    active = conn.execute(
+        "SELECT COUNT(*) AS n FROM funders WHERE org_id=? AND active=1",
+        (org_id,)).fetchone()["n"]
+    if not active:
+        out.append({
+            "code": "no_funders",
+            "message": (
+                "Your funder list is empty, and that list is the only thing Fundworthy "
+                "searches — it reads the funders you put on it and nowhere else. Open "
+                "Discover funders and add at least one; the researched lists go on with "
+                "a single click."
+            ),
+            "page": "discover",
+        })
+    else:
+        # Funders on the list, but the sector ticks or the tier may exclude every one of
+        # them. Same empty result, completely different fix, so it gets its own sentence.
+        # Asked of the same function the crawl will ask, not of a second copy of the rule.
+        sectors = list(settings["sectors_active"])
+        found = sources_from_db(max_tier_for(sectors), sectors, org_id=org_id)
+        if found is not None and not found[0]:
+            out.append({
+                "code": "no_searchable_funders",
+                "message": (
+                    f"You have {active} funder{'' if active == 1 else 's'} on your list, "
+                    "but none of them match the kinds of funding you have ticked, so "
+                    'there is nothing to fetch. Tick more kinds under "Adjust search '
+                    'settings", or add funders on Discover funders.'
+                ),
+                "page": "discover",
+            })
+
+    return out
+
+
 def drain_notice() -> str:
     """What the deploy left in the drain file, for the banner. Empty when not draining.
 
@@ -202,6 +299,15 @@ class RunManager:
                         "Raise the limit on the Settings page, or wait for next month."
                     )
 
+                # Last, and deliberately: everything above answers "may this org run
+                # now", and those answers are more specific. An org that has spent its
+                # month should be told that, not sent to Settings to add a key it may
+                # well already have. This one answers "would running accomplish
+                # anything", and it is the only refusal here that survives waiting.
+                stoppers = preflight(conn, org_id=org_id, no_llm=no_llm)
+                if stoppers:
+                    raise RuntimeError(stoppers[0]["message"])
+
                 run_id = repo.create_run(conn, org_id=org_id, started_by=started_by)
                 repo.update_run(conn, run_id, progress=dumps(
                     {"phase": "starting", "message": "Starting the search…"}))
@@ -236,14 +342,18 @@ class RunManager:
                 env.pop("ANTHROPIC_API_KEY", None)
 
             if not key:
-                opener = ("Starting the search…  (No API key saved for your "
-                          "organization, so this run will not score anything — add one "
-                          "on the Settings page.)")
+                # Only reachable when the caller asked for --no-llm on purpose:
+                # `preflight` refuses an ordinary keyless run above, rather than letting
+                # it crawl for ten minutes and score nothing.
+                opener = ("Starting the search…  (Free mode: pages will be found and "
+                          "filtered, but nothing will be read or scored.)")
             elif key_source == SOURCE_ENVIRONMENT:
-                # Say it out loud. Otherwise a .env on the machine makes the run score
-                # while the Settings page shows no key, and the two look contradictory.
-                opener = ("Starting the search…  (Using a key from a .env file on this "
-                          "computer, not one saved in Settings.)")
+                # Local installs only — see `secrets.resolve_api_key`. Said out loud even
+                # so: otherwise a .env on the machine makes the run score while the
+                # Settings page shows no key, and the two look contradictory.
+                opener = ("Starting the search…  (Local install: reading with the "
+                          "ANTHROPIC_API_KEY from this machine's .env, because none is "
+                          "saved in Settings.)")
             else:
                 opener = "Starting the search…"
 

@@ -20,12 +20,12 @@
     />
 
     <!-- `SITE_URL` is a plain token, substituted after the build by scripts/seo-urls.mjs
-         from VITE_SITE_URL. Deliberately not Vite's own `%VAR%` syntax: Vite runs those
-         through decodeURI, so an unset variable does not degrade to a warning — it fails
-         the build with "URI malformed", which would break a deploy over a missing
-         optional setting. The post-build script strips these tags instead when it has no
-         URL to put in them, because a canonical pointing at `SITE_URL/welcome` is worse
-         than no canonical at all. -->
+         from the environment variable of the same name. Deliberately not Vite's own
+         `%VAR%` syntax: Vite runs those through decodeURI, so an unset variable does not
+         degrade to a warning — it fails the build with "URI malformed", which would break
+         a deploy over a missing optional setting. The post-build script strips these tags
+         instead when it has no URL to put in them, because a canonical pointing at
+         `SITE_URL/welcome` is worse than no canonical at all. -->
     <link rel="canonical" href="SITE_URL/welcome" />
 
     <meta property="og:type" content="website" />

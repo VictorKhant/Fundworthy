@@ -274,6 +274,12 @@ class StopReason(str, Enum):
     DISABLED = "disabled"          # ENABLED=FALSE, exited at step 0
     ERROR = "error"
     PARTIAL = "partial"            # something broke mid-run; we wrote what we had
+    # The two ways a run is doomed before it starts, and they are separate reasons
+    # because they have separate fixes. Both used to be discovered the expensive way:
+    # with no key the crawl fetched every funder for five minutes and then scored
+    # nothing, and the user got an empty list with no explanation on it.
+    NO_API_KEY = "no_api_key"      # nothing to read pages with — Settings
+    NO_FUNDERS = "no_funders"      # nothing to read — Discover funders
 
 
 class SourceStatus(str, Enum):

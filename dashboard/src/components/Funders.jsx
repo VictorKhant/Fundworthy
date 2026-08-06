@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, SECTOR_LABELS } from "../api";
+import { Busy } from "./Spinner";
 
 // The partner list, editable. This used to be a hardcoded array in agent/sources.py.
 //
@@ -19,7 +20,7 @@ const BLANK = {
   notes: "",
 };
 
-function Editor({ initial, sectors, onSave, onCancel }) {
+function Editor({ initial, sectors, onSave, onCancel, saving }) {
   const [form, setForm] = useState({ ...BLANK, ...initial });
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
@@ -53,13 +54,17 @@ function Editor({ initial, sectors, onSave, onCancel }) {
         </select>
       </label>
 
+      {/* Yours to state, and nobody else's. The starter lists used to arrive with this
+          already ticked on eight funders, because the shipped registry records the pilot
+          organisation's relationships — so an account three minutes old opened this page
+          and was told it had relationships it had never had. */}
       <label className="field inline">
         <input
           type="checkbox"
           checked={!!form.warm}
           onChange={(e) => setForm({ ...form, warm: e.target.checked })}
         />
-        <span>We already have a relationship with them</span>
+        <span>We already receive funding from them</span>
       </label>
 
       <label className="field">
@@ -68,12 +73,13 @@ function Editor({ initial, sectors, onSave, onCancel }) {
       </label>
 
       <div className="row end">
-        <button className="ghost" onClick={onCancel}>
+        <button className="ghost" onClick={onCancel} disabled={saving}>
           Cancel
         </button>
-        <button className="primary" disabled={!form.name.trim()} onClick={() => onSave(form)}>
+        <Busy className="primary" busy={saving} busyLabel="Saving"
+              disabled={!form.name.trim()} onClick={() => onSave(form)}>
           Save
-        </button>
+        </Busy>
       </div>
     </div>
   );
@@ -130,6 +136,7 @@ function Row({ funder, onToggle, onEdit, onDelete }) {
 export default function Funders({ funders, sectors, onChange }) {
   const [editing, setEditing] = useState(null);
   const [error, setError] = useState(null);
+  const [saving, setSaving] = useState(false);
   const [showAll, setShowAll] = useState(false);
 
   const guard = (fn) => async (...args) => {
@@ -166,11 +173,20 @@ export default function Funders({ funders, sectors, onChange }) {
     }
     return api.funders.remove(f.id);
   });
-  const save = guard(async (form) => {
-    if (editing === "new") await api.funders.create(form);
-    else await api.funders.update(editing.id, form);
-    setEditing(null);
-  });
+  const save = async (form) => {
+    setSaving(true);
+    setError(null);
+    try {
+      if (editing === "new") await api.funders.create(form);
+      else await api.funders.update(editing.id, form);
+      setEditing(null);
+      await onChange();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   // Split on what actually changes behaviour — searched vs removed — rather than on
   // "partner vs everyone else", which no longer means anything for the search order.
@@ -196,6 +212,7 @@ export default function Funders({ funders, sectors, onChange }) {
         <Editor
           initial={BLANK}
           sectors={sectors}
+          saving={saving}
           onSave={save}
           onCancel={() => setEditing(null)}
         />
@@ -209,6 +226,7 @@ export default function Funders({ funders, sectors, onChange }) {
               key={f.id}
               initial={f}
               sectors={sectors}
+              saving={saving}
               onSave={save}
               onCancel={() => setEditing(null)}
             />
@@ -237,6 +255,7 @@ export default function Funders({ funders, sectors, onChange }) {
                 key={f.id}
                 initial={f}
                 sectors={sectors}
+                saving={saving}
                 onSave={save}
                 onCancel={() => setEditing(null)}
               />

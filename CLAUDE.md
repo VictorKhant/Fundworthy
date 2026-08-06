@@ -52,6 +52,11 @@ design constraint:
 - Settings page storing the Anthropic API key **encrypted at rest, write-only** (no
   endpoint ever returns it).
 - CSV export of the week's findings.
+- A four-step first-run walkthrough (`dashboard/src/components/Tutorial.jsx`): key,
+  program card, funder list, and what to expect. Each step's done-ness is read from the
+  account, never from a flag we set, so closing the tab resumes where you stopped.
+- **Search preflight** (`app/runner.py: preflight`): a search that could not have worked
+  is refused with a sentence naming the one page that fixes it — see §5.
 - **Sign-in** (`app/auth.py`): Google via Firebase Authentication, the ID token verified
   server-side, gated by an explicit allow-list. Off unless configured — see below.
 
@@ -73,7 +78,7 @@ That is safe in a way it would not have been before per-org keys: a new account 
 the server crawl on the free tier, which `FUNDWORTHY_MAX_RUNS_PER_DAY` can bound if one
 account ever misbehaves.
 
-**Multi-tenant storage** (schema v7). Every row has an owner. `orgs` and `users` tables;
+**Multi-tenant storage** (schema v8). Every row has an owner. `orgs` and `users` tables;
 `org_id` on `settings`, `programs`, `funders`, `opportunities` and `runs`; and each org
 holds **its own encrypted Anthropic key**, so one nonprofit can never spend another's.
 
@@ -128,7 +133,18 @@ and a Re-run with no funders does nothing at all. Everyone getting the same list
 
 The cost is that a nonprofit outside San Diego starts with 58 funders that are not near
 them. That is the lesser problem — "some of these are not mine, let me remove them" beats
-"the app did nothing" — and Discover funders is where it gets fixed.
+"the app did nothing" — and Discover funders is where it gets fixed. The onboarding
+walkthrough's third step is that page, inline, and says out loud what nothing said
+before: **the funder list is the whole search.**
+
+**What is not imported is warmth.** `Source.warm` records that the *pilot* organisation
+already receives money from that funder. Copied into every org it seeded, it printed
+"Existing relationship" on eight funders in the list of a nonprofit that had signed up
+ten minutes earlier — an assertion about them that nobody at their organisation had made.
+`import_starter_list` now imports the cold copy (and derives the sector from it, since
+`sector_for` reads warmth), and schema v8 clears the flag on rows already imported into a
+non-default org that nobody has since edited. Whether a relationship exists is theirs to
+state, on the funder editor.
 
 **Program cards are not seeded, and there is deliberately no directory for them.** A
 funder list is shared knowledge: who gives money, in this city. A program card describes
@@ -188,7 +204,7 @@ seat.
 
 | Var | Purpose |
 |---|---|
-| `ANTHROPIC_API_KEY` | Fallback key for the **default org only**. A signed-in org that has not saved its own key gets none rather than quietly billing the deployer's — see `app/secrets.py: resolve_api_key` |
+| `ANTHROPIC_API_KEY` | **Local installs only** — the default org's fallback when sign-in is off, which is what keeps `./start.sh` zero-configuration. Setting `FIREBASE_PROJECT_ID` switches it off entirely: on a deployed box every org saves its own key, including the default one, so a key left in the VM's environment is inert rather than a bill. See `app/secrets.py: resolve_api_key` |
 | `FUNDWORTHY_DB_PATH` | Override the SQLite path (default `data/rise.db`) |
 | `FUNDWORTHY_KEYFILE` | Override the Fernet key path (default `data/.fernet-key`) |
 | `FUNDWORTHY_PORT` | Port for `start.sh` (default 8000) |
@@ -203,7 +219,7 @@ seat.
 | `FUNDWORTHY_PILOT_EMAILS` | Who inherits the pre-tenancy org (its funders, findings **and saved key**). Claimed by name, never by signing in first — see `app/db.py: _claims_default_org` |
 | `FUNDWORTHY_MAX_RUNS_PER_DAY` | **Off by default.** A lever for one misbehaving account, not a ration — an org spends its own key, so how often it searches is its own business |
 | `FUNDWORTHY_ADMIN_EMAILS` | Who may read `/api/admin/stats`, the one route that crosses every tenant boundary. Its own list, never `ALLOWED_EMAILS`; **unset means nobody** |
-| `VITE_SITE_URL` | Build-time (dashboard). The public address, for the canonical link and sitemap. Unset just omits them |
+| `SITE_URL` | Build-time (dashboard). The public address, for the canonical link and sitemap. Read from the environment, then `dashboard/.env`, then the root `.env`; unset just omits them. Renamed from `VITE_SITE_URL` — the `VITE_` prefix means "expose to browser code via `import.meta.env`", and this is substituted by a plain Node script after `vite build` |
 
 ---
 
@@ -270,8 +286,22 @@ data, never scored.
 
 **Budget & stop conditions.** Default ceiling **$1.00/run**; the run aborts and logs
 `stop_reason: budget` if exceeded. A run ends on the first of: `target_met` (cap
-reached), `budget`, `sources_exhausted`, `disabled`, or `error`. It's a **cap, not a
-quota** — the agent will not pad with weak results to hit a number.
+reached), `budget`, `sources_exhausted`, `disabled`, `no_api_key`, `no_funders`, or
+`error`. It's a **cap, not a quota** — the agent will not pad with weak results to hit a
+number.
+
+**A search that cannot work is refused, not run.** `app/runner.py: preflight` is the one
+place that decides, and it answers in sentences meant for the user rather than in codes:
+no key, no ticked program, an empty funder list, or a funder list nothing in the ticked
+sectors matches. `RunManager.start` refuses on it (409) and `GET /api/state` returns the
+same list, so the greyed-out button and the error carry **the same words** — a button
+that says one thing and an error that says another is how somebody concludes the app is
+broken. The pipeline keeps its own guards for the CLI and the scheduler.
+
+The keyless case is the one that mattered. It used to shrug (`use_llm = False`), crawl
+every funder for five to ten minutes and score none of them, and hand back an empty list
+with no explanation on it. `--no-llm` is still the honest way to ask for the free tiers,
+and still works.
 
 **Kill switch.** The `enabled` setting. If off, a run exits before any network call. In
 `FUNDWORTHY_STRICT_CONFIG` mode a config that can't be read is a refusal to run, so an

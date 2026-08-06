@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, money } from "../api";
+import Spinner, { Busy } from "./Spinner";
 
 // Program cards: the thing the user ticks to say "search for this one this week".
 //
@@ -23,7 +24,7 @@ const BLANK = {
 const list = (s) =>
   s.split(/[\n,]/).map((x) => x.trim()).filter(Boolean);
 
-function Editor({ initial, onSave, onCancel, globalFloor }) {
+function Editor({ initial, onSave, onCancel, globalFloor, saving }) {
   const [form, setForm] = useState({ ...BLANK, ...initial });
   const [url, setUrl] = useState(initial?.source_url || "");
   const [drafting, setDrafting] = useState(false);
@@ -64,15 +65,27 @@ function Editor({ initial, onSave, onCancel, globalFloor }) {
             onChange={(e) => setUrl(e.target.value)}
             placeholder="https://your-organization.org/programs/…"
           />
-          <button onClick={draft} disabled={drafting || !url}>
-            {drafting ? "Reading the page…" : "Read this page for me"}
-          </button>
+          <Busy busy={drafting} busyLabel="Reading the page" onClick={draft}
+                disabled={!url}>
+            Read this page for me
+          </Busy>
         </div>
         <small className="muted">
           Paste the program's own page. The assistant reads it and fills this card in for
           you to correct — it only uses what is on that page.
         </small>
       </label>
+
+      {/* A spinning button is enough to say "something is happening"; this says how long
+          for. Reading a page is one Sonnet call against a website we do not control, so
+          it is measured in seconds, not milliseconds, and a silent five seconds is where
+          people press the button again. */}
+      {drafting && (
+        <p className="loading-line">
+          <Spinner label="Reading the page" />
+          Fetching that page and reading it. Usually five to fifteen seconds.
+        </p>
+      )}
 
       {note && <div className="notice">{note}</div>}
       {error && <div className="notice error">{error}</div>}
@@ -130,16 +143,18 @@ function Editor({ initial, onSave, onCancel, globalFloor }) {
       </label>
 
       <div className="row end">
-        <button className="ghost" onClick={onCancel}>
+        <button className="ghost" onClick={onCancel} disabled={saving}>
           Cancel
         </button>
-        <button
+        <Busy
           className="primary"
+          busy={saving}
+          busyLabel="Saving"
           disabled={!form.name.trim()}
           onClick={() => onSave({ ...form, source_url: url, reviewed_by_human: true })}
         >
           Save
-        </button>
+        </Busy>
       </div>
     </div>
   );
@@ -207,6 +222,7 @@ function Row({ program, globalFloor, onToggle, onEdit, onDelete }) {
 export default function Programs({ programs, globalFloor, onChange }) {
   const [editing, setEditing] = useState(null); // program | "new" | null
   const [error, setError] = useState(null);
+  const [saving, setSaving] = useState(false);
 
   const guard = (fn) => async (...args) => {
     setError(null);
@@ -225,11 +241,22 @@ export default function Programs({ programs, globalFloor, onChange }) {
     }
     return api.programs.remove(p.id);
   });
-  const save = guard(async (form) => {
-    if (editing === "new") await api.programs.create(form);
-    else await api.programs.update(editing.id, form);
-    setEditing(null);
-  });
+  // Saving a card is a write plus a full dashboard refresh, so it is not instant — and
+  // a Save button that stays live through it takes a second click and writes twice.
+  const save = async (form) => {
+    setSaving(true);
+    setError(null);
+    try {
+      if (editing === "new") await api.programs.create(form);
+      else await api.programs.update(editing.id, form);
+      setEditing(null);
+      await onChange();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const activeCount = programs.filter((p) => p.active).length;
 
@@ -250,6 +277,7 @@ export default function Programs({ programs, globalFloor, onChange }) {
         <Editor
           initial={BLANK}
           globalFloor={globalFloor}
+          saving={saving}
           onSave={save}
           onCancel={() => setEditing(null)}
         />
@@ -262,6 +290,7 @@ export default function Programs({ programs, globalFloor, onChange }) {
               key={p.id}
               initial={p}
               globalFloor={globalFloor}
+              saving={saving}
               onSave={save}
               onCancel={() => setEditing(null)}
             />

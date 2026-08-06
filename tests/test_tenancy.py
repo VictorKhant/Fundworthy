@@ -102,11 +102,40 @@ def test_a_new_org_does_not_inherit_the_servers_environment_key(db, monkeypatch)
         assert key_b is None
         assert source_b is None
 
-        # The default org keeps the fallback: that is the single-tenant install, and it
-        # is the only org the .env key can honestly be said to belong to.
+        # The default org keeps the fallback *on a local install*: one org, one machine,
+        # and the person who wrote the file is the person paying for the key.
         key_a, source_a = secrets.resolve_api_key(conn, org_id=A)
         assert key_a == "sk-ant-SERVER-env"
         assert source_a == secrets.SOURCE_ENVIRONMENT
+
+
+def test_the_environment_key_stops_applying_once_sign_in_is_configured(db, monkeypatch):
+    """The hole the per-org rule left open, and the only one left where somebody else
+    pays.
+
+    "Default org only" sounds like it bounds the damage, and on a laptop it does. On a
+    deployed box the default org is not a hypothetical: it is the pilot named in
+    `FUNDWORTHY_PILOT_EMAILS`, or the first person to sign in to an empty install. That
+    one account searched on the deployer's `ANTHROPIC_API_KEY` — set once, in a systemd
+    EnvironmentFile, by whoever provisioned the VM — indefinitely, while its Settings page
+    correctly reported that no key was saved.
+
+    So the variable is scoped to the shape it was written for: a single-tenant install
+    with no sign-in. A key left in a deployed box's environment is inert, which is the
+    property worth having — "remember to delete this line" is not a safeguard.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-SERVER-env")
+    monkeypatch.setenv("FIREBASE_PROJECT_ID", "fundworthy-live")
+
+    with session(db) as conn:
+        assert secrets.resolve_api_key(conn, org_id=A) == (None, None), (
+            "not even the default org, once there are accounts")
+        assert secrets.resolve_api_key(conn, org_id=B) == (None, None)
+
+        # And the org's own key is unaffected — this narrows the fallback, nothing else.
+        secrets.store_api_key(conn, "sk-ant-THEIR-OWN", org_id=A)
+        assert secrets.resolve_api_key(conn, org_id=A) == (
+            "sk-ant-THEIR-OWN", secrets.SOURCE_SETTINGS)
 
 
 def test_an_orgs_own_key_still_wins_over_the_environment(db, monkeypatch):

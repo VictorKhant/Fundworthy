@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
-import { api } from "../api";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { api, money } from "../api";
+import Spinner, { Busy } from "./Spinner";
 
 // The first-run walkthrough. It makes you do the steps rather than read about them.
 //
@@ -10,7 +11,7 @@ import { api } from "../api";
 // abandon.
 //
 // So each step here contains the thing itself — the key box, the card drafter, the
-// funder count — and the button to continue does not light up until the step is actually
+// funder lists — and the button to continue does not light up until the step is actually
 // done. Not as a discipline: because a walkthrough you can click past is a walkthrough
 // that teaches you the buttons are decorative.
 //
@@ -19,6 +20,14 @@ import { api } from "../api";
 // you do a step somewhere else in the app, this notices. There is no separate record of
 // your progress to drift out of sync with the account, because progress *is* the
 // account.
+//
+// **Four steps, and the fourth is the one this was missing.** It used to end on the
+// funder list as a fact to be told — "you already have 61, you do not need to do anything
+// now" — which is true and useless. That list is the entire search space: Fundworthy
+// reads the funders on it and nowhere else, so a nonprofit outside San Diego whose list
+// is 58 San Diego foundations has an app that will politely find them nothing every week.
+// It is now a step you act on, and the last step says out loud where the results come
+// from, because nobody had ever been told.
 
 const KEY_HELP = "https://console.claude.com/settings/keys";
 
@@ -97,9 +106,10 @@ function KeyStep({ state, onChange, ...rest }) {
               autoComplete="off"
               onChange={(e) => setKey(e.target.value)}
             />
-            <button type="submit" disabled={busy || key.trim().length < 8}>
-              {busy ? "Checking…" : "Check and save"}
-            </button>
+            <Busy type="submit" busy={busy} busyLabel="Checking your key"
+                  disabled={key.trim().length < 8}>
+              Check and save
+            </Busy>
           </form>
           {result && <div className="notice error">{result}</div>}
           <p className="muted small">
@@ -115,6 +125,7 @@ function KeyStep({ state, onChange, ...rest }) {
 function ProgramStep({ state, onChange, ...rest }) {
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [draft, setDraft] = useState(null);
   const [error, setError] = useState(null);
   const active = (state.programs || []).filter((p) => p.active);
@@ -133,7 +144,7 @@ function ProgramStep({ state, onChange, ...rest }) {
   }
 
   async function keep() {
-    setBusy(true);
+    setSaving(true);
     try {
       await api.programs.create({ ...draft, active: true, reviewed_by_human: true });
       setDraft(null);
@@ -142,7 +153,7 @@ function ProgramStep({ state, onChange, ...rest }) {
     } catch (e) {
       setError(e.message);
     } finally {
-      setBusy(false);
+      setSaving(false);
     }
   }
 
@@ -169,9 +180,10 @@ function ProgramStep({ state, onChange, ...rest }) {
             placeholder="https://your-organization.org/programs/…"
             onChange={(e) => setUrl(e.target.value)}
           />
-          <button type="submit" disabled={busy || !url.trim()}>
-            {busy ? "Reading the page…" : "Read this page"}
-          </button>
+          <Busy type="submit" busy={busy} busyLabel="Reading the page"
+                disabled={!url.trim()}>
+            Read this page
+          </Busy>
         </form>
       ) : (
         <div className="tut-draft">
@@ -194,14 +206,22 @@ function ProgramStep({ state, onChange, ...rest }) {
             />
           </label>
           <div className="row">
-            <button className="dark" onClick={keep} disabled={busy || !draft.name}>
-              {busy ? "Saving…" : "Looks right — save it"}
-            </button>
-            <button className="text" onClick={() => setDraft(null)}>
+            <Busy className="dark" busy={saving} busyLabel="Saving"
+                  onClick={keep} disabled={!draft.name}>
+              Looks right — save it
+            </Busy>
+            <button className="text" onClick={() => setDraft(null)} disabled={saving}>
               Start again
             </button>
           </div>
         </div>
+      )}
+
+      {busy && (
+        <p className="loading-line">
+          <Spinner label="Reading the page" />
+          Reading your page and writing the card. This takes a few seconds.
+        </p>
       )}
 
       {error && <div className="notice error">{error}</div>}
@@ -214,25 +234,145 @@ function ProgramStep({ state, onChange, ...rest }) {
   );
 }
 
-function FunderStep({ state, ...rest }) {
-  const count = (state.funders || []).length;
+// Step 3. The funder list, as something you do rather than something you are told.
+//
+// The version this replaces said "you already have 61 — you do not need to do anything
+// now", which was accurate and left the most important fact about the product unsaid:
+// **this list is the whole search.** Fundworthy reads the funders on it and nowhere
+// else. Someone in Chicago who is never told that has an app that finds them nothing,
+// weekly, for a reason they have no way to guess.
+function FunderStep({ state, onChange, ...rest }) {
+  const [lists, setLists] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const [error, setError] = useState(null);
+  const count = (state.funders || []).filter((f) => f.active).length;
+
+  const load = useCallback(async () => {
+    try {
+      setLists((await api.directory.read()).lists);
+    } catch (e) {
+      setError(e.message);
+    }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  async function add(key) {
+    setBusy(key);
+    setError(null);
+    try {
+      await api.directory.import(key);
+      await load();
+      await onChange();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   return (
-    <Step {...rest} done={count > 0} nextLabel="Finish">
+    <Step {...rest} done={count > 0}>
       <p>
-        These are the funders Fundworthy will check every week. You already have{" "}
-        <strong>{count}</strong> — the lists we researched, added when you signed up.
+        <strong>This list is the search.</strong> Every week Fundworthy reads the funders
+        on it, and only those — it does not search the open web. So the list is worth five
+        minutes now, and you can change it any time on <strong>Discover funders</strong>.
       </p>
-      <p>
-        You do not need to do anything now. Later, on <strong>Discover funders</strong>,
-        you can add more or take off anyone you already receive money from, so you are
-        not shown grants you would not apply for.
-      </p>
-      {count === 0 && (
-        <p className="muted small">
-          Your list is empty, which means a search would find nothing. Open{" "}
-          <strong>Discover funders</strong> and add a researched list.
+
+      {count > 0 ? (
+        <p className="tut-ok">
+          ✓ {count} funder{count === 1 ? "" : "s"} will be checked for you each week.
+        </p>
+      ) : (
+        <div className="notice error">
+          Your list is empty, so a search would read nothing at all. Add at least one
+          list below.
+        </div>
+      )}
+
+      {error && <div className="notice error">{error}</div>}
+      {!lists && (
+        <p className="loading-line">
+          <Spinner label="Loading the researched lists" />
+          Loading the lists we have researched…
         </p>
       )}
+
+      <div className="directory">
+        {(lists || []).map((l) => (
+          <div key={l.key} className="directory-row">
+            <div>
+              <strong>{l.name}</strong>{" "}
+              <span className="muted small">
+                {l.count} {l.count === 1 ? "source" : "funders"}
+              </span>
+              <p className="muted small">{l.description}</p>
+            </div>
+            {l.imported >= l.count ? (
+              <span className="muted small">On your list</span>
+            ) : (
+              <Busy className="secondary" busy={busy === l.key} busyLabel="Adding"
+                    onClick={() => add(l.key)}>
+                {l.imported ? `Add the other ${l.count - l.imported}` : "Add to my list"}
+              </Busy>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <p className="muted small">
+        Not near San Diego? Add the federal and state lists here, then take the rest off
+        on Discover funders — and add your own local funders there, one at a time. Taking
+        a funder off costs you nothing every week afterwards: it is never fetched, never
+        read, never scored.
+      </p>
+    </Step>
+  );
+}
+
+// Step 4. Where the results come from, said once, plainly, before the first search.
+//
+// It is the only step with nothing to do, and it earns its place: everything it says was
+// previously discoverable only by running a search and reasoning backwards from what came
+// out. A short list is the product working correctly, and somebody who does not know that
+// reads their first Thursday as a failure.
+function ReadyStep({ state, ...rest }) {
+  const funders = (state.funders || []).filter((f) => f.active).length;
+  const programs = (state.programs || []).filter((p) => p.active).length;
+  const floor = money(state.settings?.min_award);
+  // Stored lowercase ("wednesday") because the scheduler matches on it; capitalised here
+  // because it is being read in a sentence, not parsed.
+  const stored = state.settings?.schedule_day || "";
+  const day = stored ? stored[0].toUpperCase() + stored.slice(1) : "";
+
+  return (
+    <Step {...rest} done nextLabel="Take me to my dashboard">
+      <p>You are set up. Here is what happens now, so nothing is a surprise.</p>
+
+      <ul className="tut-sub">
+        <li>
+          <strong>It reads your {funders} funder{funders === 1 ? "" : "s"}</strong> —
+          those pages and nowhere else — and matches what it finds against your{" "}
+          {programs} ticked program{programs === 1 ? "" : "s"}.
+        </li>
+        <li>
+          <strong>It runs once a week{day ? `, on ${day}` : ""}</strong>, and you can
+          press "Search again now" whenever you like.
+        </li>
+        <li>
+          <strong>Expect a short list.</strong> Anything under {floor} is dropped before
+          it costs you anything, because an application takes hours and a small grant does
+          not repay them. Six results, all worth applying for, is a good week.
+        </li>
+        <li>
+          <strong>It stops itself.</strong> Each search has a hard spending limit, and it
+          stops rather than going over. You can turn the whole thing off from the
+          dashboard.
+        </li>
+        <li>
+          <strong>It never guesses.</strong> If a funder's page does not state an amount
+          or a deadline, you get "not stated" and a link, not a number somebody made up.
+        </li>
+      </ul>
     </Step>
   );
 }
@@ -241,7 +381,8 @@ export default function Tutorial({ state, onChange, onDone }) {
   const steps = useMemo(() => [
     { key: "key", Component: KeyStep, title: "Add your Claude key" },
     { key: "program", Component: ProgramStep, title: "Describe what you do" },
-    { key: "funders", Component: FunderStep, title: "Who we will watch" },
+    { key: "funders", Component: FunderStep, title: "Choose who it watches" },
+    { key: "ready", Component: ReadyStep, title: "How your weekly search works" },
   ], []);
 
   // Open on the first unfinished step rather than always at one. Someone who saved a key
@@ -249,17 +390,11 @@ export default function Tutorial({ state, onChange, onDone }) {
   const doneness = [
     Boolean(state.key_available),
     (state.programs || []).some((p) => p.active),
-    (state.funders || []).length > 0,
+    (state.funders || []).some((f) => f.active),
+    false,          // the last step is a read, so it is never "already done"
   ];
   const firstUnfinished = doneness.findIndex((d) => !d);
   const [at, setAt] = useState(firstUnfinished === -1 ? 0 : firstUnfinished);
-
-  // If a step completes because of something done elsewhere, do not strand the person on
-  // it — but never move them backwards mid-sentence either.
-  useEffect(() => {
-    if (doneness[at] && at < steps.length - 1) return undefined;
-    return undefined;
-  }, [at, doneness, steps.length]);
 
   const { Component, title } = steps[at];
   const last = at === steps.length - 1;

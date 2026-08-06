@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import DownloadCsv from "../components/DownloadCsv";
 import Findings from "../components/Findings";
+import Spinner from "../components/Spinner";
 
 // Archived findings.
 //
@@ -47,7 +48,14 @@ export default function Archive() {
     );
   }
 
-  if (!data) return <p className="muted">Loading…</p>;
+  if (!data) {
+    return (
+      <p className="loading-line">
+        <Spinner label="Loading the archive" />
+        Loading this month's findings…
+      </p>
+    );
+  }
 
   const rows = data.opportunities || [];
   const clear = rows.filter((o) => !o.needs_human_check);

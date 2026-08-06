@@ -3,6 +3,7 @@ import {
   authEnabled, authError, createAccountWithPassword, openSignup, passwordAuth,
   sendPasswordReset, signInWithGoogle, signInWithPassword,
 } from "../auth";
+import { Busy } from "../components/Spinner";
 
 // Sign in, and — now that it means something — create an account.
 //
@@ -170,15 +171,17 @@ export default function Login({ onHome, notice, mode: initialMode = "signin" }) 
       ) : (
         <>
           <div className="auth-oauth">
-            <button
+            <Busy
               type="button"
               className="oauth-btn"
+              busy={busy === "google"}
+              busyLabel="Opening Google"
               onClick={() => run("google", signInWithGoogle)}
               disabled={Boolean(busy)}
             >
               <span className="oauth-mark g" aria-hidden="true">G</span>
-              {busy === "google" ? "Opening Google…" : "Continue with Google"}
-            </button>
+              Continue with Google
+            </Busy>
           </div>
 
           {/* Worth saying once. With Google there is no separate account to make and no
@@ -233,22 +236,28 @@ export default function Login({ onHome, notice, mode: initialMode = "signin" }) 
                   </p>
                 ) : (
                   <div className="auth-forgot">
-                    <button
+                    <Busy
                       type="button"
                       className="text"
+                      busy={busy === "reset"}
+                      busyLabel="Sending the reset link"
                       onClick={forgot}
                       disabled={Boolean(busy)}
                     >
-                      {busy === "reset" ? "Sending…" : "Forgot your password?"}
-                    </button>
+                      Forgot your password?
+                    </Busy>
                   </div>
                 )}
 
-                <button type="submit" className="primary auth-cta" disabled={Boolean(busy)}>
-                  {busy === "password"
-                    ? (creating ? "Creating…" : "Signing in…")
-                    : (creating ? "Create account" : "Sign in")}
-                </button>
+                <Busy
+                  type="submit"
+                  className="primary auth-cta"
+                  busy={busy === "password"}
+                  busyLabel={creating ? "Creating your account" : "Signing in"}
+                  disabled={Boolean(busy)}
+                >
+                  {creating ? "Create account" : "Sign in"}
+                </Busy>
               </form>
             </>
           )}

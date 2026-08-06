@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import Organization from "../components/Organization";
+import { Busy } from "../components/Spinner";
 import { api } from "../api";
 
 // The API key page.
@@ -30,12 +31,16 @@ const STEPS = [
 
 function KeyPanel({ state, onChange }) {
   const [key, setKey] = useState("");
-  const [busy, setBusy] = useState(false);
+  // Which of the three is running, not just "something is". They take visibly different
+  // amounts of time — checking a key is a round trip to Anthropic — so the spinner has to
+  // land on the button that is actually working.
+  const [doing, setDoing] = useState(null); // "save" | "test" | "remove" | null
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const busy = doing !== null;
 
   async function save() {
-    setBusy(true);
+    setDoing("save");
     setError(null);
     setResult(null);
     try {
@@ -46,12 +51,12 @@ function KeyPanel({ state, onChange }) {
     } catch (e) {
       setError(e.message);
     } finally {
-      setBusy(false);
+      setDoing(null);
     }
   }
 
   async function test() {
-    setBusy(true);
+    setDoing("test");
     setError(null);
     setResult(null);
     try {
@@ -59,13 +64,13 @@ function KeyPanel({ state, onChange }) {
     } catch (e) {
       setError(e.message);
     } finally {
-      setBusy(false);
+      setDoing(null);
     }
   }
 
   async function remove() {
     if (!window.confirm("Remove the saved key? Searches will stop being scored until you add one.")) return;
-    setBusy(true);
+    setDoing("remove");
     try {
       await api.settings.deleteKey();
       setResult({ ok: true, message: "Removed." });
@@ -73,7 +78,7 @@ function KeyPanel({ state, onChange }) {
     } catch (e) {
       setError(e.message);
     } finally {
-      setBusy(false);
+      setDoing(null);
     }
   }
 
@@ -103,25 +108,35 @@ function KeyPanel({ state, onChange }) {
         <div className="notice">
           A key is saved: <code>{state.api_key_hint}</code> — encrypted, and never shown in
           full to anyone.{" "}
-          <button className="text notice-action" onClick={test} disabled={busy}>
+          <Busy className="text notice-action" busy={doing === "test"}
+                busyLabel="Checking" onClick={test} disabled={busy}>
             Check it still works
-          </button>
+          </Busy>
         </div>
       )}
 
+      {/* A local install only. On a deployed Fundworthy the environment key does not
+          resolve for anybody, so every org saves its own here — see
+          `app/secrets.py: resolve_api_key`. */}
       {!state.has_api_key && state.api_key_source === "environment" && (
         <div className="notice plain">
-          <strong>No key is saved here</strong> — but the researcher is using one
-          (<code>{state.env_key_hint}</code>) from a <code>.env</code> file on this
-          computer, so searches will still be scored. That file is for developers. Saving a
-          key here takes priority over it, and is the one to rely on.
+          <strong>No key is saved here</strong> — but this is a local install, and the
+          researcher is using one (<code>{state.env_key_hint}</code>) from this machine's{" "}
+          <code>.env</code>, so searches will still be scored. Saving a key here takes
+          priority over it, and is the one to rely on.
         </div>
       )}
 
+      {/* This is the state that stops the app working, so it says so. It used to read
+          "the researcher can still find and filter pages, but it cannot read or score
+          them", which describes a degraded mode that no longer exists: without a key a
+          search is refused up front rather than crawling for ten minutes to produce
+          nothing. */}
       {!state.key_available && (
-        <div className="notice plain">
-          No key saved yet. Without one the researcher can still find and filter pages, but
-          it cannot read or score them.
+        <div className="notice error">
+          <strong>No key yet, so searches will not run.</strong> Fundworthy reads funders'
+          pages with Claude and there is nothing here to read them with. Paste a key below
+          and the Search button on <strong>This week</strong> comes back on.
         </div>
       )}
 
@@ -136,20 +151,23 @@ function KeyPanel({ state, onChange }) {
             onChange={(e) => setKey(e.target.value)}
           />
         </label>
-        <button className="primary" onClick={save} disabled={busy || key.trim().length < 8}>
-          {busy ? "Working…" : "Save key"}
-        </button>
+        <Busy className="primary" busy={doing === "save"} busyLabel="Saving"
+              onClick={save} disabled={busy || key.trim().length < 8}>
+          Save key
+        </Busy>
         {/* Checking a key before trusting it is a real capability, not a duplicate of the
             link above: that one tests what is stored, this one tests what was just typed. */}
         {key.trim().length >= 8 && (
-          <button onClick={test} disabled={busy}>
+          <Busy busy={doing === "test"} busyLabel="Checking with Anthropic"
+                onClick={test} disabled={busy}>
             Check it first
-          </button>
+          </Busy>
         )}
         {state.has_api_key && (
-          <button className="danger" onClick={remove} disabled={busy}>
+          <Busy className="danger" busy={doing === "remove"} busyLabel="Removing"
+                onClick={remove} disabled={busy}>
             Remove saved key
-          </button>
+          </Busy>
         )}
       </div>
 
@@ -228,9 +246,10 @@ function OrgPanel({ settings, onChange }) {
       {error && <div className="notice error">{error}</div>}
 
       <div className="row end">
-        <button className="dark" onClick={save} disabled={saving || !dirty}>
-          {saving ? "Saving…" : "Save"}
-        </button>
+        <Busy className="dark" busy={saving} busyLabel="Saving"
+              onClick={save} disabled={!dirty}>
+          Save
+        </Busy>
       </div>
 
       <p className="muted small">

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api } from "../api";
+import { Busy } from "./Spinner";
 
 // "Are you joining a colleague, or starting fresh?" — asked once, right after a first
 // sign-in, before the person has invested anything in an empty dashboard.
@@ -56,9 +57,9 @@ export default function JoinOrg({ onJoined, onSkip }) {
           autoComplete="off"
           spellCheck="false"
         />
-        <button type="submit" disabled={busy || !code.trim()}>
-          {busy ? "Joining…" : "Join my colleague"}
-        </button>
+        <Busy type="submit" busy={busy} busyLabel="Joining" disabled={!code.trim()}>
+          Join my colleague
+        </Busy>
       </form>
 
       <p className="muted small">

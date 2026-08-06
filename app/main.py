@@ -53,7 +53,7 @@ from . import archive, auth, export, repo, scheduler, secrets
 from .db import (DEFAULT_ORG_ID, SECTORS, InviteError, create_invite, import_starter_list,
                  init_db, list_invites, month_key, org_for_user, org_members,
                  redeem_invite, revoke_invite, session)
-from .runner import MANAGER
+from .runner import MANAGER, preflight
 
 log = logging.getLogger(__name__)
 
@@ -498,11 +498,13 @@ def current_run(org: str = Depends(current_org)) -> dict:
 @api.post("/runs", status_code=202)
 def start_run(body: RunIn, org: str = Depends(current_org),
               user=Depends(auth.require_user)) -> dict:
-    """The "Re-run search pipeline" button."""
-    with session() as conn:
-        if not repo.get_settings(conn, org_id=org)["enabled"]:
-            raise HTTPException(
-                409, "The agent is switched off. Turn it back on in Settings first.")
+    """The "Re-run search pipeline" button.
+
+    The kill switch used to be re-checked here, separately from everything else that can
+    stop a run. It is one of five now, all of them in `runner.preflight`, all phrased for
+    the person reading them, and all returned by `GET /api/state` so the button can be
+    disabled with the same sentence it would have failed with.
+    """
     try:
         run_id = MANAGER.start(no_llm=body.no_llm, budget=body.budget,
                                max_opportunities=body.max_opportunities,
@@ -544,6 +546,10 @@ def state(org: str = Depends(current_org)) -> dict:
             "latest_run": repo.latest_run(conn, org_id=org),
             "running": bool(MANAGER.current_run_id_for(org)),
             "spend": repo.spend_summary(conn, org_id=org),
+            # Why a search would not work, if it would not. Same list, same wording, as
+            # the error POST /runs would raise — so the button can explain itself before
+            # it is pressed instead of after.
+            "blockers": preflight(conn, org_id=org),
         }
 
 

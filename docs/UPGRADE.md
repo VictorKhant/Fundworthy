@@ -216,7 +216,7 @@ Both go in the same `~/Rise-Fund-Finder/.env`, and both need a restart.
 nano ~/Rise-Fund-Finder/.env
 ```
 
-### `VITE_SITE_URL` — so Google can index you
+### `SITE_URL` — so Google can index you
 
 **The host is your public address**, the one you type in a browser to reach Fundworthy:
 whatever hostname you pointed at the VM in step 7 of DEPLOY-ORACLE (a DuckDNS subdomain,
@@ -225,11 +225,17 @@ or a real domain if you bought one). Not the IP, and not `localhost` — it goes
 actually fetch.
 
 ```bash
-VITE_SITE_URL=https://your-host.duckdns.org
+SITE_URL=https://your-host.duckdns.org
 ```
 
 No trailing slash. `https`, not `http` — a canonical pointing at the plain-HTTP version
 of a site that redirects to HTTPS is a redirect loop as far as a crawler is concerned.
+
+> **It was `VITE_SITE_URL` until now, and nothing reads the old spelling.** If your `.env`
+> still has that line, rename it *before* the deploy that brings this in — otherwise the
+> build finds no hostname and drops the canonical link and the sitemap until the next one.
+> The `VITE_` prefix is Vite's marker for "expose this to browser code", which this was
+> never doing: it is substituted by a plain Node script after `vite build` has finished.
 
 It is read at **build** time, not at run time, so it only takes effect on the next
 `npm run build`. `scripts/deploy.sh` pulls it out of this file automatically, so a normal
@@ -237,7 +243,7 @@ deploy is enough. To apply it without waiting for one:
 
 ```bash
 cd ~/Rise-Fund-Finder/dashboard
-VITE_SITE_URL=https://your-host.duckdns.org npm run build
+SITE_URL=https://your-host.duckdns.org npm run build
 sudo systemctl restart fundworthy
 ```
 

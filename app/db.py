@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path("data/rise.db")
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 # The org that owns everything written before tenancy existed. A single-tenant install
 # (and every row in the pilot's live database) belongs to it, so adding org scoping is a
@@ -524,6 +524,34 @@ def _migrate(conn: sqlite3.Connection) -> None:
         _migrate_to_org_scoped(conn)
         current = 7
 
+    if current < 8:
+        # v8 gives back the warmth that was never theirs. `import_starter_list` copied
+        # `Source.warm` into every org it seeded, so a nonprofit that signed up this
+        # morning opened Discover funders and found eight funders labelled "Existing
+        # relationship" — a statement about their organisation that nobody at their
+        # organisation had made.
+        #
+        # Three conditions, all of them narrowing, because this is a write over the
+        # user's own data: only the shipped warm sources, only outside the default org
+        # (whose warmth is the real, researched thing), and only rows nobody has edited.
+        # `update_funder` bumps `updated_at`, so `updated_at = created_at` is a reliable
+        # "untouched since it was imported" — an org that ticked the box themselves keeps
+        # their tick.
+        from dataclasses import replace
+
+        from agent.sources import ALL_SOURCES, sector_for
+
+        for s in ALL_SOURCES:
+            if not s.warm:
+                continue
+            conn.execute(
+                "UPDATE funders SET warm=0, sector=? "
+                "WHERE id=? AND org_id<>? AND warm=1 AND updated_at=created_at",
+                (sector_for(replace(s, warm=False)), _funder_id(s.funder, s.url),
+                 DEFAULT_ORG_ID),
+            )
+        current = 8
+
     conn.execute(
         "INSERT INTO meta(key, value) VALUES('schema_version', ?) "
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -963,7 +991,18 @@ def import_starter_list(conn: sqlite3.Connection, key: str, org_id: str) -> int:
     Idempotent by (org_id, id): importing twice adds nothing and, crucially, does not
     resurrect a funder the org deliberately removed — `ON CONFLICT DO NOTHING` leaves an
     existing row exactly as the user left it, un-ticked reasons and all.
+
+    **Warmth is never imported, and that is a correctness rule, not a preference.**
+    `Source.warm` records that *the pilot organisation* already receives money from that
+    funder. Copied verbatim into every new org, it printed "Existing relationship" on
+    eight funders a nonprofit that signed up this morning has never spoken to — a claim
+    about them, made by us, on their own funder page. Whether a relationship exists is
+    something only that org can say, so they say it: the tick is on the funder editor,
+    and it starts unticked. The sector is derived the same way, since `sector_for` reads
+    warmth and would otherwise file them under "Partners we already work with".
     """
+    from dataclasses import replace
+
     from agent.directory import get as get_list
     from agent.sources import sector_for
 
@@ -974,15 +1013,16 @@ def import_starter_list(conn: sqlite3.Connection, key: str, org_id: str) -> int:
     stamp = now_iso()
     added = 0
     for s in lst.sources:
+        cold = replace(s, warm=False)
         cur = conn.execute(
             """INSERT INTO funders(
                    org_id, id, name, url, sector, funder_type, warm, active,
                    exclude_reason, tier, confidence, programs, adapter, notes,
                    created_at, updated_at)
-               VALUES(?,?,?,?,?,?,?,1,'',?,?,?,?,?,?,?)
+               VALUES(?,?,?,?,?,?,0,1,'',?,?,?,?,?,?,?)
                ON CONFLICT(org_id, id) DO NOTHING""",
-            (org_id, _funder_id(s.funder, s.url), s.funder, s.url, sector_for(s),
-             _funder_type_for(s), int(s.warm), int(s.tier), int(s.confidence),
+            (org_id, _funder_id(s.funder, s.url), s.funder, s.url, sector_for(cold),
+             _funder_type_for(s), int(s.tier), int(s.confidence),
              dumps([p.value for p in s.programs]), s.adapter, s.notes, stamp, stamp),
         )
         added += cur.rowcount or 0

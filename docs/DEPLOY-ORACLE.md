@@ -117,12 +117,17 @@ Create the environment file:
 
 ```bash
 cat > .env <<'EOF'
-ANTHROPIC_API_KEY=sk-ant-PUT-THE-REAL-KEY-HERE
 FUNDWORTHY_STRICT_CONFIG=0
 # Sign-in goes here in step 8, once this box has a hostname.
 EOF
 chmod 600 .env
 ```
+
+No `ANTHROPIC_API_KEY`, and that is not an omission. Once step 8 switches sign-in on, each
+org saves its own key on the Settings page and the environment variable stops being read
+at all — so putting one here now just means a live key on the box that nothing uses. It is
+the fallback for a **local** install (`./start.sh`, no sign-in, one org), where the person
+who wrote the file is the person paying for the key.
 
 Smoke-test it before wiring anything else up:
 
@@ -350,12 +355,14 @@ nano .env
 Add the three lines, so the whole file looks something like this:
 
 ```bash
-ANTHROPIC_API_KEY=sk-ant-...          # optional — see the note below
 FUNDWORTHY_STRICT_CONFIG=0
 FIREBASE_PROJECT_ID=your-project-id
 FIREBASE_WEB_API_KEY=AIzaSy-YOUR-WEB-API-KEY
 ALLOWED_EMAILS=admin@your-org.org,the-shared-gmail@gmail.com
 ```
+
+If step 4 left an `ANTHROPIC_API_KEY` line in there, **remove it now** — see the note
+below. Everyone signs in and saves their own key on the Settings page.
 
 > Placeholders, deliberately. Firebase's web API key is public by design — it ships in
 > the page source of every Firebase web app — but a real one does not belong in a public
@@ -399,12 +406,21 @@ Editing `.env` needs only `systemctl restart`. `daemon-reload` is for changes to
   not start a service whose environment file is missing. Keep the file even if you have
   nothing optional to put in it.
 
-> **You do not need `ANTHROPIC_API_KEY` here.** A key saved on the Settings page is
-> encrypted at rest and wins over this file — `app/runner.py` hands it to the pipeline
-> itself. Put it in `.env` only if you want scoring to work before the org has pasted
-> their own key. Note that a *scheduled* run (`python -m agent.run` from cron or a
-> systemd timer) reads the environment directly and has no such fallback: with a
-> Settings-only key it will run the free tiers and score nothing.
+> **Delete `ANTHROPIC_API_KEY` from this file.** Once `FIREBASE_PROJECT_ID` is set, the
+> app ignores it entirely: every org saves its own key on the Settings page, encrypted at
+> rest, and `app/runner.py` hands that one to the pipeline. The line is inert, so leaving
+> it is not a bill — but it is a live API key sitting in a file on a box, for no benefit,
+> and that is reason enough to take it out.
+>
+> It was not always inert, which is why this note changed. The fallback used to apply to
+> the **default org**, and on a deployed box that is a real account — whoever
+> `FUNDWORTHY_PILOT_EMAILS` names, or the first person to sign in to an empty install.
+> That one org searched on *your* key, indefinitely, while its own Settings page correctly
+> said no key was saved. See `app/secrets.py: resolve_api_key`.
+>
+> The scheduled weekly run is unaffected: it goes through `app/scheduler.py` →
+> `RunManager.start`, which resolves each org's own key from the database. Only a bare
+> `python -m agent.run` typed at a shell reads the environment directly.
 
 #### Check it took
 
