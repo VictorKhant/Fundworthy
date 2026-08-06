@@ -506,20 +506,41 @@ def test_a_revoked_invite_cannot_be_used(db):
 
 # --- a new org starts clean ---------------------------------------------------
 
-def test_a_new_org_gets_the_starter_funders_but_none_of_the_pilots_own_data(db):
-    """A newcomer gets the shipped funder lists — an empty list means Re-run does nothing
-    — but nothing that belongs to the pilot: not their program cards, and not their
-    remove-list decisions, which record relationships a stranger does not have."""
+def test_a_new_org_starts_empty_and_inherits_nothing_of_the_pilots(db):
+    """A newcomer gets working settings and nothing else — no funders, no program cards,
+    and none of the pilot's remove-list decisions, which record relationships a stranger
+    does not have.
+
+    Funders have been decided three times (see `seed_org`). They are seeded into nobody
+    again, and the thing that made that broken before is gone: onboarding step 3 is the
+    researched lists as one-click imports, and `runner.preflight` refuses a search with
+    no funders instead of running one that silently does nothing.
+    """
     with session(db) as conn:
         org_for_user(conn, "uid-1", "first@example.org")          # adopts the pilot org
         newcomer = org_for_user(conn, "uid-2", "second@example.org")
 
-        funders = repo.list_funders(conn, org_id=newcomer)
-        assert len(funders) > 40
-        assert all(f["active"] for f in funders), (
-            "the pilot's 'we already get money from them' is not a newcomer's")
+        assert repo.list_funders(conn, org_id=newcomer) == [], "they choose their own"
         assert repo.list_programs(conn, org_id=newcomer) == []
         assert repo.get_settings(conn, org_id=newcomer)["min_award"] == 10_000
+        # And the pilot keeps everything it had.
+        assert len(repo.list_funders(conn, org_id=A)) > 40
+
+
+def test_an_empty_funder_list_is_a_question_rather_than_a_dead_end(db):
+    """The reason seeding-into-nobody is safe now. It was tried before and reverted,
+    because a new account pressed Search and nothing happened with no explanation."""
+    from app.runner import preflight
+
+    with session(db) as conn:
+        # The first signer-in adopts the pre-tenancy org, so a genuine newcomer is the
+        # second. Without this the "newcomer" *is* the pilot org, with its 40 funders,
+        # and the test passes for the wrong reason.
+        org_for_user(conn, "uid-1", "first@example.org")
+        newcomer = org_for_user(conn, "uid-2", "second@example.org")
+        codes = [b["code"] for b in preflight(conn, org_id=newcomer, no_llm=True)]
+
+    assert "no_funders" in codes, "the search is refused, and it says which page fixes it"
 
 
 # --- deploy safety ------------------------------------------------------------
@@ -622,8 +643,11 @@ def test_two_new_accounts_get_the_same_thing(tmp_path, monkeypatch):
         counts = {org: len(repo.list_funders(conn, org_id=org))
                   for org in (first, second)}
         assert len(set(counts.values())) == 1, counts
-        assert all(n > 0 for n in counts.values()), "an empty list means Re-run does nothing"
-        # Program cards are the exception: they describe one nonprofit's own work.
+        # Which is now zero, for both. The fairness property is the one under test — that
+        # what you start with does not depend on who arrived first — and it holds whether
+        # the answer is "everything" or "nothing". It is nothing: a Chicago nonprofit
+        # should not be handed 58 San Diego foundations, and onboarding asks instead.
+        assert all(n == 0 for n in counts.values()), counts
         for org in (first, second):
             assert repo.list_programs(conn, org_id=org) == []
 
@@ -878,3 +902,175 @@ def test_removing_somebody_never_touches_another_org(db):
         assert secrets.read_api_key(conn, org_id=A) == "sk-ant-A-KEY"
         assert repo.list_opportunities(conn, org_id=A, month=month_key())
         assert repo.list_runs(conn, org_id=A)
+
+
+# --- funders one nonprofit offers to another ------------------------------------
+#
+# The only feature here that deliberately crosses the tenant boundary, so it gets the
+# same treatment as everything else in this file: set it up as one org, look as another,
+# and assert that nothing which was not offered came with it.
+
+def _shared_funder(conn, org_id, name, url, *, check_ok=1):
+    f = repo.create_funder(conn, {"name": name, "url": url, "sector": "foundation"},
+                           org_id=org_id)
+    conn.execute("UPDATE funders SET check_ok=?, check_note=?, checked_at=? "
+                 "WHERE org_id=? AND id=?",
+                 (check_ok, "The page opened and names an award amount.",
+                  "2026-08-05T00:00:00+00:00", org_id, f["id"]))
+    repo.update_settings(conn, {"share_funders": True}, org_id=org_id)
+    return f
+
+
+def test_nothing_is_shared_until_an_org_ticks_the_box(db):
+    """Opt in, and the default is off. A funder list is not private, but "not private" is
+    not "ours to publish on their behalf"."""
+    with session(db) as conn:
+        f = repo.create_funder(conn, {"name": "Quiet Trust",
+                                      "url": "https://example.invalid/q"}, org_id=B)
+        conn.execute("UPDATE funders SET check_ok=1 WHERE org_id=? AND id=?",
+                     (B, f["id"]))
+        assert repo.get_settings(conn, org_id=B)["share_funders"] is False
+        assert repo.shared_funders(conn, org_id=A) == []
+
+        repo.update_settings(conn, {"share_funders": True}, org_id=B)
+        assert [x["name"] for x in repo.shared_funders(conn, org_id=A)] == ["Quiet Trust"]
+
+
+def test_only_hand_added_funders_are_ever_offered(db):
+    """Re-sharing the San Diego list back to people who can already import it contributes
+    nothing, and would bury the handful of real contributions in 58 duplicates."""
+    with session(db) as conn:
+        repo.update_settings(conn, {"share_funders": True}, org_id=A)   # pilot shares
+        conn.execute("UPDATE funders SET check_ok=1 WHERE org_id=?", (A,))
+
+        names = {x["name"] for x in repo.shared_funders(conn, org_id=B)}
+        assert names == set(), "the starter lists are already on offer to everybody"
+
+
+def test_a_page_that_did_not_load_is_never_offered(db):
+    """Failing the check is disqualifying; passing it is only permission to be offered.
+    A dead link wastes the next person's time for certain."""
+    with session(db) as conn:
+        _shared_funder(conn, B, "Gone Away Fund", "https://example.invalid/404",
+                       check_ok=0)
+        assert repo.shared_funders(conn, org_id=A) == []
+
+
+def test_an_unchecked_funder_waits_rather_than_being_offered(db):
+    with session(db) as conn:
+        repo.create_funder(conn, {"name": "Not Looked At Yet",
+                                  "url": "https://example.invalid/n"}, org_id=B)
+        repo.update_settings(conn, {"share_funders": True}, org_id=B)
+        assert repo.shared_funders(conn, org_id=A) == []
+
+
+def test_sharing_carries_the_funder_and_nothing_else_about_the_org(db):
+    """The thing that would make this feature unshippable is leaking who is looking for
+    what. Findings, spending, program cards and the org's name must not travel."""
+    with session(db) as conn:
+        _shared_funder(conn, B, "Open Trust", "https://example.invalid/open")
+        repo.update_settings(conn, {"org_name": "Second Nonprofit"}, org_id=B)
+        repo.create_run(conn, "run_b", org_id=B)
+        repo.save_opportunity(conn, _opp(), run_id="run_b", org_id=B)
+        secrets.store_api_key(conn, "sk-ant-THEIRS", org_id=B)
+
+        blob = str(repo.shared_funders(conn, org_id=A))
+
+    assert "Open Trust" in blob
+    for leak in ("Second Nonprofit", "Community Arts Grant", "sk-ant-THEIRS"):
+        assert leak not in blob, f"{leak} must not travel with a shared funder"
+
+
+def test_you_are_not_offered_your_own_funders_or_ones_you_have(db):
+    with session(db) as conn:
+        _shared_funder(conn, B, "Shared Trust", "https://example.invalid/dup")
+        assert [x["name"] for x in repo.shared_funders(conn, org_id=A)] == ["Shared Trust"]
+
+        # A already has that page under a different name — still the same funder.
+        repo.create_funder(conn, {"name": "Same Page, My Name For It",
+                                  "url": "https://example.invalid/dup/"}, org_id=A)
+        assert repo.shared_funders(conn, org_id=A) == []
+        # And B is never shown its own.
+        assert repo.shared_funders(conn, org_id=B) == []
+
+
+def test_two_orgs_offering_the_same_page_appear_once_with_a_count(db):
+    """How many nonprofits independently added it is the only trust signal here that
+    comes from people rather than from a fetch, and it is worth showing."""
+    with session(db) as conn:
+        ensure_org(conn, "org_third", "Third")
+        _shared_funder(conn, B, "Popular Foundation", "https://example.invalid/pop")
+        _shared_funder(conn, "org_third", "Popular Foundation",
+                       "https://example.invalid/pop/")
+
+        out = repo.shared_funders(conn, org_id=A)
+
+    assert len(out) == 1
+    assert out[0]["added_by_count"] == 2
+
+
+def test_one_report_hides_it_from_everybody_at_once(db):
+    """Deliberately fails towards hiding. Hiding a good funder costs one nonprofit one
+    grants page they could add by hand; leaving a bad one up costs somebody an afternoon
+    writing to nobody."""
+    with session(db) as conn:
+        f = _shared_funder(conn, B, "Dubious Fund", "https://example.invalid/d")
+        assert repo.shared_funders(conn, org_id=A)
+
+        repo.report_shared_funder(conn, funder_org=B, funder_id=f["id"],
+                                  reported_by=A, reason="not a real funder")
+        assert repo.shared_funders(conn, org_id=A) == []
+        assert len(repo.open_reports(conn)) == 1
+
+
+def test_reporting_twice_is_one_report_not_a_pattern(db):
+    with session(db) as conn:
+        f = _shared_funder(conn, B, "Dubious Fund", "https://example.invalid/d")
+        first = repo.report_shared_funder(conn, funder_org=B, funder_id=f["id"],
+                                          reported_by=A, reason="x")
+        again = repo.report_shared_funder(conn, funder_org=B, funder_id=f["id"],
+                                          reported_by=A, reason="x")
+        assert again["already"] is True and again["report_id"] == first["report_id"]
+        assert len(repo.open_reports(conn)) == 1
+
+
+def test_an_admin_can_take_it_down_for_good_or_put_it_back(db):
+    """Both directions matter. Without the restore, one objection permanently removes a
+    good funder and a mistake is indistinguishable from moderation."""
+    with session(db) as conn:
+        f = _shared_funder(conn, B, "Contested Fund", "https://example.invalid/c")
+        rid = repo.report_shared_funder(conn, funder_org=B, funder_id=f["id"],
+                                        reported_by=A, reason="looks wrong")["report_id"]
+
+        assert repo.resolve_report(conn, rid, uphold=False, by="admin@x") is True
+        assert [x["name"] for x in repo.shared_funders(conn, org_id=A)] == ["Contested Fund"]
+
+        rid2 = repo.report_shared_funder(conn, funder_org=B, funder_id=f["id"],
+                                         reported_by=A, reason="really")["report_id"]
+        assert repo.resolve_report(conn, rid2, uphold=True, by="admin@x") is True
+        assert repo.shared_funders(conn, org_id=A) == [], "upheld means gone for good"
+        assert repo.open_reports(conn) == []
+
+
+def test_closing_an_org_keeps_what_it_contributed_and_drops_the_copies(db):
+    """The whole point of the asymmetry: a hand-added funder outlives the account, a
+    copy of a list we ship does not."""
+    from app.db import remove_member
+
+    with session(db) as conn:
+        _member(conn, "solo", "only@b.org", B)
+        import_starter = __import__("app.db", fromlist=["import_starter_list"])
+        import_starter.import_starter_list(conn, "national", B)
+        _shared_funder(conn, B, "Their Own Research", "https://example.invalid/own")
+
+        before = {f["name"] for f in repo.list_funders(conn, org_id=B)}
+        assert len(before) > 1, "both kinds present to begin with"
+
+        remove_member(conn, "solo", B)
+
+        after = [f for f in repo.list_funders(conn, org_id=B)]
+        assert [f["name"] for f in after] == ["Their Own Research"]
+        assert [f["added_by"] for f in after] == ["user"]
+        # And it is still on offer to everybody else, which is the reason to keep it.
+        assert [x["name"] for x in repo.shared_funders(conn, org_id=A)] == \
+            ["Their Own Research"]

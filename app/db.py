@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path("data/rise.db")
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 # The org that owns everything written before tenancy existed. A single-tenant install
 # (and every row in the pilot's live database) belongs to it, so adding org scoping is a
@@ -110,6 +110,31 @@ CREATE TABLE IF NOT EXISTS invites (
     redeemed_by TEXT
 );
 
+-- Somebody saying "this shared funder is wrong, or should not be here".
+--
+-- One report hides it from the pool immediately, before anyone reviews it. That is the
+-- deliberate direction to fail in: the cost of hiding a good funder for a few days is
+-- that one nonprofit misses one grant page they could have added by hand anyway, and the
+-- cost of leaving a bad one up is somebody spending an afternoon writing to nobody. An
+-- install admin then takes it down for good or dismisses the report and restores it.
+CREATE TABLE IF NOT EXISTS funder_reports (
+    id          TEXT PRIMARY KEY,
+    -- The (org_id, id) of the funder row that was shared. Kept as two plain columns
+    -- rather than a foreign key: the contributing org may be deleted while the report is
+    -- still open, and a report that vanishes with its subject is not a moderation queue.
+    funder_org  TEXT NOT NULL,
+    funder_id   TEXT NOT NULL,
+    reported_by TEXT NOT NULL,          -- the org that objected, never shown to anyone
+    reason      TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL,
+    -- 'open' until an admin acts, then 'upheld' (gone for good) or 'dismissed' (restored)
+    status      TEXT NOT NULL DEFAULT 'open',
+    resolved_at TEXT,
+    resolved_by TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_reports_open
+    ON funder_reports(status, funder_org, funder_id);
+
 CREATE TABLE IF NOT EXISTS settings (
     org_id     TEXT NOT NULL DEFAULT 'default',
     key        TEXT NOT NULL,
@@ -162,6 +187,20 @@ CREATE TABLE IF NOT EXISTS funders (
     form_990_total_revenue INTEGER,
     form_990_total_expenses INTEGER,
     form_990_checked_at    TEXT,
+    -- How this funder got onto the list: 'starter' if it came from a shipped researched
+    -- list, 'user' if somebody typed it in. Nothing recorded this before, and the two
+    -- paths were indistinguishable afterwards — which matters now that hand-added ones
+    -- are the only ones worth keeping when an org closes, and the only ones ever offered
+    -- to another nonprofit. A copy of a list we ship is not a contribution.
+    added_by    TEXT NOT NULL DEFAULT 'user',
+    -- Evidence, not a verdict. Whether the page was reachable and looked like a grants
+    -- page the last time we looked, and when. Deliberately never rendered as "verified":
+    -- we can say a page loaded and mentions award amounts; we cannot say a funder is
+    -- worth applying to, and a badge implying otherwise is the accuracy shortcut §8
+    -- forbids. NULL means nobody has checked yet, which is not the same as failing.
+    check_ok    INTEGER,
+    check_note  TEXT NOT NULL DEFAULT '',
+    checked_at  TEXT,
     tier        INTEGER NOT NULL DEFAULT 1,
     confidence  INTEGER NOT NULL DEFAULT 1,   -- agent.sources.Confidence
     programs    TEXT NOT NULL DEFAULT '[]',   -- json array of program slugs
@@ -313,6 +352,14 @@ DEFAULT_SETTINGS: dict[str, str] = {
     # Set when they finish the walkthrough. Schema v9 backfills every org that already
     # existed to `1`, because they are self-evidently not new.
     "onboarding_done": "0",
+    # Offer the funders this org typed in by hand to other nonprofits, on Discover.
+    #
+    # **Opt in, off by default.** A funder list is not private — a name, a grants page and
+    # a sector — so sharing leaks nothing. But "not private" is not the same as "yours to
+    # publish on their behalf", and an org that has never been asked has not agreed to
+    # anything. Only `added_by='user'` rows are ever eligible: the shipped researched
+    # lists are already on offer to everybody, so re-sharing a copy contributes nothing.
+    "share_funders": "0",
     # When the weekly search runs, per org. It used to be "Wednesday 11pm PT" written
     # into a config dataclass that nothing read and a sentence in the UI that nothing
     # enforced — there was no scheduler at all, so the only way a search happened was
@@ -420,52 +467,38 @@ def init_db(path: Path | str | None = None, *, seed: bool = True) -> None:
 def seed_org(conn: sqlite3.Connection, org_id: str) -> None:
     """Give an org its starting content: **settings, and nothing else.**
 
-    Both of the things that used to be seeded here have moved out, for different reasons.
+    Neither of the two things a new account might expect to be handed is handed to it,
+    and the reasons are different.
 
-    **Funders** are a directory an org imports from (`agent/directory.py`). Seeding them
-    meant whichever org signed in first inherited 52 and the account created five minutes
-    later got none — an artefact of `DEFAULT_ORG_ID` existing, not a rule anyone chose.
+    **Program cards** describe what *this* nonprofit does, in their words, so another
+    org's cards are not merely unhelpful but actively wrong. Seven cards about somebody
+    else's arts and resilience programs made a new account look configured when it was
+    not, and the first thing they had to do was work out what to delete. They write their
+    own, with the assistant drafting from a link.
 
-    **Program cards** are not seeded at all, and there is deliberately no directory to
-    import them from either. A funder list is shared knowledge — who gives money, in this
-    city — so one org researching it can be useful to the next. A program card is the
-    opposite: it describes what *this* nonprofit does, in their words, and another org's
-    cards are not merely unhelpful but actively wrong. Handing a new account seven cards
-    about somebody else's arts and resilience programs made the app look configured when
-    it was not, and the first thing they had to do was work out what to delete.
+    **Funders** are a directory to import from (`agent/directory.py`), and this has now
+    been decided three times, so the history is worth keeping:
 
-    A new org therefore starts with an empty dashboard and the onboarding checklist,
-    whose second step is "describe what you do" — paste a link to your own website and
-    the assistant drafts a card you correct. That is the intended first five minutes, and
-    it only works if the page is actually empty.
+      1. Seeded into whichever org signed in first. That org got 52 funders and the
+         account created five minutes later got none — an artefact of `DEFAULT_ORG_ID`
+         existing rather than a rule anyone chose.
+      2. Seeded into nobody. Even, and broken: a new account opened onto an empty list,
+         pressed Search, and nothing happened with no explanation anywhere.
+      3. Seeded into everybody, which fixed (2) at the cost of handing a Chicago
+         nonprofit 58 San Diego foundations they never asked for and had to prune.
 
-    **Funders are the exception, and they come back.** They were seeded, then removed
-    entirely when it turned out whoever signed in first inherited 52 and the next account
-    got none. Removing them fixed the unfairness and introduced a worse problem: a new
-    account opened onto an empty list, and a Re-run with no funders does nothing at all.
-    Every org now gets the same starter lists, so it is even *and* the app works on the
-    first click. Which lists is `agent/directory.DEFAULT_ON_SIGNUP`, and choosing your own
-    city is the Discover funders page.
+    Now: **nobody, again — but the thing that made (2) broken is gone.** Onboarding step 3
+    is the researched lists as one-click imports, so an empty list is a question being
+    asked rather than a dead end; and `runner.preflight` refuses a search with no funders
+    and names the page that fixes it, so the silent nothing of (2) cannot happen. A new
+    org therefore chooses its own funders, which is the only version of this that is both
+    even and correct outside San Diego.
 
     Settings still reconcile on every boot rather than once: `seed_settings` is INSERT ...
     ON CONFLICT DO NOTHING per key, so a genuinely new setting appears for an existing org
     without touching a value anyone has chosen.
     """
     seed_settings(conn, org_id)
-
-    # Once. The marker is what stops a restart or a pipeline run resurrecting a funder
-    # the org deliberately removed — the bug this whole seeding path had before.
-    marker = f"seeded_at:{org_id}"
-    if conn.execute("SELECT 1 FROM meta WHERE key=?", (marker,)).fetchone():
-        return
-
-    from agent.directory import DEFAULT_ON_SIGNUP
-
-    for key in DEFAULT_ON_SIGNUP:
-        import_starter_list(conn, key, org_id)
-    conn.execute("INSERT INTO meta(key, value) VALUES(?,?) "
-                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                 (marker, now_iso()))
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
@@ -635,6 +668,38 @@ def _migrate(conn: sqlite3.Connection) -> None:
             log.info("v9: %d org(s) already in use — not showing them onboarding",
                      len(used))
         current = 9
+
+    if current < 10:
+        # v10 records how each funder got onto a list, which nothing did before.
+        #
+        # It matters now for two reasons that both come down to the same distinction: a
+        # copy of a list we ship is not somebody's work. Only hand-added funders survive
+        # an org closing, and only hand-added funders are ever offered to another
+        # nonprofit — re-sharing the San Diego list back to people who can already import
+        # it contributes nothing.
+        #
+        # Backfilled by id, which is reliable because the two insert paths compute it
+        # differently: `import_starter_list` uses `_funder_id(name, url)`, and
+        # `repo.create_funder` hashes the name alone. So a row whose id matches a shipped
+        # source's derived id came from the shipped list, and everything else was typed.
+        funder_cols = {r["name"] for r in conn.execute("PRAGMA table_info(funders)")}
+        for col, decl in (("added_by", "TEXT NOT NULL DEFAULT 'user'"),
+                          ("check_ok", "INTEGER"),
+                          ("check_note", "TEXT NOT NULL DEFAULT ''"),
+                          ("checked_at", "TEXT")):
+            if col not in funder_cols:
+                conn.execute(f"ALTER TABLE funders ADD COLUMN {col} {decl}")
+
+        from agent.sources import ALL_SOURCES
+
+        shipped = {_funder_id(s.funder, s.url) for s in ALL_SOURCES}
+        if shipped:
+            marks = ",".join("?" * len(shipped))
+            n = conn.execute(
+                f"UPDATE funders SET added_by='starter' WHERE id IN ({marks})",
+                tuple(shipped)).rowcount
+            log.info("v10: %d funder row(s) came from a shipped list", n)
+        current = 10
 
     conn.execute(
         "INSERT INTO meta(key, value) VALUES('schema_version', ?) "
@@ -984,12 +1049,11 @@ def strand_org(conn: sqlite3.Connection, org_id: str) -> dict[str, int]:
     the encrypted API key, which is the part that would otherwise be a live credential
     sitting in a table attached to an account with no owner.
 
-    **Kept — deliberately** — the funder list. A funder is not private: it is a name, a
-    grants page and a sector, and it is the researched work that makes this product worth
-    using. Somebody added those by hand, and the intent is to fold them into the shared
-    directory so the next nonprofit in that city does not start from nothing. Deleting
-    them would throw away the only part of a departing org's data that has any value to
-    anyone else.
+    **Kept — deliberately — the funders they added by hand, and only those.** A funder
+    is not private: it is a name, a grants page and a sector, and a hand-added one is
+    researched work that the next nonprofit in that city can use. The imported ones go
+    with everything else, because a copy of a list we already ship to everybody is not a
+    contribution and keeping it would just leave duplicates lying around.
 
     Settings stay too, `org_name` above all, because attributing that funder list later
     needs to know whose it was.
@@ -1001,6 +1065,8 @@ def strand_org(conn: sqlite3.Connection, org_id: str) -> dict[str, int]:
     for table in ("opportunities", "runs"):
         counts[table] = conn.execute(
             f"DELETE FROM {table} WHERE org_id=?", (org_id,)).rowcount
+    counts["imported_funders"] = conn.execute(
+        "DELETE FROM funders WHERE org_id=? AND added_by='starter'", (org_id,)).rowcount
     counts["invites"] = conn.execute(
         "DELETE FROM invites WHERE org_id=? AND redeemed_at IS NULL",
         (org_id,)).rowcount
@@ -1207,8 +1273,8 @@ def import_starter_list(conn: sqlite3.Connection, key: str, org_id: str) -> int:
             """INSERT INTO funders(
                    org_id, id, name, url, sector, funder_type, warm, active,
                    exclude_reason, tier, confidence, programs, adapter, notes,
-                   created_at, updated_at)
-               VALUES(?,?,?,?,?,?,0,1,'',?,?,?,?,?,?,?)
+                   added_by, created_at, updated_at)
+               VALUES(?,?,?,?,?,?,0,1,'',?,?,?,?,?,'starter',?,?)
                ON CONFLICT(org_id, id) DO NOTHING""",
             (org_id, _funder_id(s.funder, s.url), s.funder, s.url, sector_for(cold),
              _funder_type_for(s), int(s.tier), int(s.confidence),

@@ -100,6 +100,9 @@ class SettingsIn(BaseModel):
     # setting rather than through its own endpoint — it is a fact about the account, and
     # the settings table is where facts about the account live.
     onboarding_done: bool | None = None
+    # Offer the funders this org typed in by hand to other nonprofits. Off by default;
+    # turning it on schedules the reachability checks in `app/funder_check.py`.
+    share_funders: bool | None = None
     sectors_active: list[str] | None = None
     search_beyond_partners: bool | None = None
     org_name: str | None = Field(None, max_length=200)
@@ -167,6 +170,31 @@ class RunIn(BaseModel):
     max_opportunities: int | None = Field(None, ge=1, le=100)
 
 
+def _schedule_funder_checks(org_id: str) -> None:
+    """Check this org's unchecked hand-added funders, off the request thread.
+
+    A daemon thread rather than an await: each check is an HTTP round trip to somebody
+    else's website behind a politeness delay, so doing it inline would make ticking a
+    checkbox take half a minute and adding one funder block on the network.
+
+    Nothing depends on it finishing. An unchecked funder is simply not offered to anyone
+    yet — `shared_funders` requires `check_ok = 1` — so a thread that dies takes nothing
+    with it and the next trigger picks the work up again.
+    """
+    import asyncio
+
+    from .funder_check import recheck_shared
+
+    def run() -> None:
+        try:
+            asyncio.run(recheck_shared(session, org_id))
+        except Exception:  # noqa: BLE001 — background work must not take the API down
+            log.exception("funder checks failed for org %s", org_id)
+
+    threading.Thread(target=run, daemon=True,
+                     name=f"fundworthy-check-{org_id[:8]}").start()
+
+
 def _same_page(a: str, b: str) -> bool:
     """Do these two links point at the same page, as a person would judge it.
 
@@ -232,7 +260,13 @@ def write_settings(body: SettingsIn, org: str = Depends(current_org)) -> dict:
         if unknown:
             raise HTTPException(400, f"Unknown sector(s): {', '.join(unknown)}")
     with session() as conn:
-        return {"settings": repo.update_settings(conn, changes, org_id=org)}
+        settings = repo.update_settings(conn, changes, org_id=org)
+    # Turning sharing on is what schedules the reachability checks. Nothing this org
+    # added is offered to anybody until one has passed, so the tick is a request to be
+    # checked rather than an instant publish.
+    if changes.get("share_funders"):
+        _schedule_funder_checks(org)
+    return {"settings": settings}
 
 
 @api.post("/settings/api-key")
@@ -375,9 +409,13 @@ def list_funders(org: str = Depends(current_org)) -> dict:
 def create_funder(body: FunderIn, org: str = Depends(current_org)) -> dict:
     try:
         with session() as conn:
-            return {"funder": repo.create_funder(conn, _set(body), org_id=org)}
+            funder = repo.create_funder(conn, _set(body), org_id=org)
+            sharing = repo.get_settings(conn, org_id=org)["share_funders"]
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    if sharing:
+        _schedule_funder_checks(org)
+    return {"funder": funder}
 
 
 @api.put("/funders/{funder_id}")
@@ -425,6 +463,17 @@ def require_admin(user=Depends(auth.require_user)) -> None:
         raise HTTPException(404, "Not found.")
 
 
+def _is_platform_admin(user) -> bool:
+    """The boolean behind `require_admin`, for telling the UI whether to render the
+    moderation queue at all. Same rule, same env var, no second definition — a UI check
+    that could drift from the gate would eventually show a queue nobody can act on."""
+    try:
+        require_admin(user)
+        return True
+    except HTTPException:
+        return False
+
+
 @api.get("/admin/stats", dependencies=[Depends(require_admin)])
 def admin_stats() -> dict:
     """Counts and money, across the install. No names, no findings, no funder lists."""
@@ -464,6 +513,71 @@ def import_directory_list(key: str, org: str = Depends(current_org)) -> dict:
         except ValueError as exc:
             raise HTTPException(404, str(exc)) from exc
         return {"added": added, "funders": repo.list_funders(conn, org_id=org)}
+
+
+# --- funders other nonprofits have shared -------------------------------------
+
+@api.get("/directory/shared")
+def read_shared_funders(org: str = Depends(current_org)) -> dict:
+    """Hand-added funders from orgs that ticked "share the funders I add".
+
+    Everything here is somebody else's suggestion, and the response says so in the shape
+    of the data rather than trusting the UI to remember: each entry carries the sentence
+    we can stand behind (`evidence`) and the date it was true, never a boolean called
+    `verified`. See `app/funder_check.py` for what those checks can and cannot establish.
+    """
+    with session() as conn:
+        return {"funders": repo.shared_funders(conn, org_id=org)}
+
+
+class ShareReportIn(BaseModel):
+    from_org: str = Field(min_length=1, max_length=64)
+    funder_id: str = Field(min_length=1, max_length=64)
+    reason: str = Field("", max_length=500)
+
+
+@api.post("/directory/shared/report", status_code=201)
+def report_shared(body: ShareReportIn, org: str = Depends(current_org)) -> dict:
+    """Object to a shared funder — wrong, misleading, or not something to put in front of
+    a nonprofit.
+
+    **It is hidden from everybody the moment this is called**, before any admin looks.
+    That is the deliberate direction to fail in: hiding a good funder for a few days
+    costs one nonprofit one grants page they could add by hand anyway, and leaving a bad
+    one up costs somebody an afternoon writing to nobody.
+
+    The reporting org is recorded and never shown. Who objected to whom is exactly the
+    kind of thing a small nonprofit sector would gossip about.
+    """
+    with session() as conn:
+        out = repo.report_shared_funder(
+            conn, funder_org=body.from_org, funder_id=body.funder_id,
+            reported_by=org, reason=body.reason)
+    log.info("shared funder %s/%s reported", body.from_org, body.funder_id)
+    return {"reported": True, **out}
+
+
+@api.get("/admin/reports", dependencies=[Depends(require_admin)])
+def list_reports() -> dict:
+    """The moderation queue. Crosses every tenant boundary, so it is gated by
+    `FUNDWORTHY_ADMIN_EMAILS` alone — see `require_admin`."""
+    with session() as conn:
+        return {"reports": repo.open_reports(conn)}
+
+
+class ResolveIn(BaseModel):
+    uphold: bool
+
+
+@api.post("/admin/reports/{report_id}", dependencies=[Depends(require_admin)])
+def resolve_shared_report(report_id: str, body: ResolveIn,
+                          user=Depends(auth.require_user)) -> dict:
+    """Take a reported funder down for good, or dismiss the report and restore it."""
+    with session() as conn:
+        if not repo.resolve_report(conn, report_id, uphold=body.uphold,
+                                   by=user.email if user else "local"):
+            raise HTTPException(404, "No such open report.")
+    return {"resolved": report_id, "upheld": body.uphold}
 
 
 # --- findings -----------------------------------------------------------------
@@ -680,6 +794,11 @@ def read_org(org: str = Depends(current_org),
             # the keyboard is the admin by definition.
             "you": user.uid if user else "",
             "you_are_admin": (user is None) or (owner == user.uid),
+            # Different thing entirely from `you_are_admin`, which is about this org.
+            # This is the install operator — the only person who can take a reported
+            # funder down — and it is gated by FUNDWORTHY_ADMIN_EMAILS, never by being
+            # somebody's org admin.
+            "platform_admin": _is_platform_admin(user),
         }
 
 

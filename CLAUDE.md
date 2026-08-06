@@ -85,7 +85,7 @@ That is safe in a way it would not have been before per-org keys: a new account 
 the server crawl on the free tier, which `FUNDWORTHY_MAX_RUNS_PER_DAY` can bound if one
 account ever misbehaves.
 
-**Multi-tenant storage** (schema v9). Every row has an owner. `orgs` and `users` tables;
+**Multi-tenant storage** (schema v10). Every row has an owner. `orgs` and `users` tables;
 `org_id` on `settings`, `programs`, `funders`, `opportunities` and `runs`; and each org
 holds **its own encrypted Anthropic key**, so one nonprofit can never spend another's.
 
@@ -125,13 +125,13 @@ can close their own account (`DELETE /api/account`), behind typing their own add
 - **A dangling owner heals** to the earliest remaining member (`org_owner`). An org with
   members and no valid owner could otherwise never remove anybody or hand itself on.
 - **Last one out strands the org rather than deleting it** (`strand_org`): the findings,
-  the run log, unused invites and the **encrypted API key** go — a live credential must
-  not outlive the account it belonged to — and the **funder list stays**. That asymmetry
-  is the point. Findings are one nonprofit's private research and nobody can ever ask for
-  them again; a funder is a name, a grants page and a sector, and hand-added ones are
-  exactly the researched work that should feed the shared directory so the next nonprofit
-  in that city starts with something. Settings stay too, `org_name` above all, because
-  attributing that list later needs to know whose it was.
+  the run log, unused invites, the imported starter funders and the **encrypted API key**
+  go — a live credential must not outlive the account it belonged to — and the funders
+  they **added by hand** stay. That asymmetry is the point. Findings are one nonprofit's
+  private research and nobody can ever ask for them again; a copy of a list we ship is
+  not a contribution; a hand-added funder is researched work that the next nonprofit in
+  that city can use. Settings stay too, `org_name` above all, because attributing that
+  list later needs to know whose it was.
 
 **Whether somebody is new is a stored fact** (`onboarding_done`), not a deduction. It was
 re-derived from "do you have a key, a ticked program and a funder", so an established org
@@ -156,32 +156,64 @@ must not inherit the pilot's 44 San Diego funders.
   dashboard + on-demand runs. Scheduling for a hosted deployment should be a systemd
   timer or cron on the host, not GitHub Actions.
 
+**Funders one nonprofit shares with the next** (`share_funders`, off by default). A
+funder is not private — a name, a grants page, a sector — but "not private" is not "ours
+to publish on their behalf", so an org opts in. Only `added_by='user'` rows are eligible:
+re-sharing a copy of a list we already ship to everybody contributes nothing.
+
+Nothing is offered until `app/funder_check.py` has fetched the page and found it readable
+and plausibly about grants. That check **produces evidence, never a verdict**, and the
+gap between the two is where the harm would live:
+
+| question | answered? |
+|---|---|
+| Is the URL a real, reachable, public page? | yes — `urlguard` + the polite fetcher |
+| Does it look like a grants page? | roughly — `agent/parse.py`, amounts and deadlines |
+| Is this a real registered organisation? | partly — a cached IRS 990, absent for public agencies |
+| Is it worth applying to? | **no**, and nothing here may imply otherwise |
+
+So Discover shows the sentence and the date (*"The page opened and names an award amount.
+Checked 2026-08-05."*) with the link, and no tick. No model is involved and nothing is
+spent. Failing the check is disqualifying; passing it only permits the entry to be
+offered, labelled as somebody else's suggestion.
+
+**Anyone can report one, and one report hides it from everybody immediately**, before
+review. That is the deliberate direction to fail in: hiding a good funder costs one
+nonprofit one grants page they could add by hand, and leaving a bad one up costs somebody
+an afternoon writing to nobody. An install admin (`FUNDWORTHY_ADMIN_EMAILS`, the same gate
+as `/api/admin/stats`) then takes it down for good or dismisses the report and restores
+it — the restore matters, or one objection is a permanent veto. The reporting org is
+recorded and never shown to anyone.
+
 ### Pilot / seed data
 
 The 60 researched sources in `agent/sources.py` — 58 San Diego grantmakers plus the
 California and federal grant databases — are grouped into starter lists
-(`agent/directory.py`) and **every new org is given all three**. They can then be added to
-or removed on **Discover funders**.
+(`agent/directory.py`) that **an org imports for itself**. Nothing is seeded into a new
+account.
 
-That took two attempts. They were originally seeded into `DEFAULT_ORG_ID` alone, so
-whichever account signed in first got 52 funders and the account created five minutes
-later got none — an artefact of that org existing rather than a decision. Giving nobody
-them fixed the unfairness and broke the product: a new account opened onto an empty list,
-and a Re-run with no funders does nothing at all. Everyone getting the same lists is even
-*and* works on the first click.
+This has been decided three times, so the history is the argument:
 
-The cost is that a nonprofit outside San Diego starts with 58 funders that are not near
-them. That is the lesser problem — "some of these are not mine, let me remove them" beats
-"the app did nothing" — and Discover funders is where it gets fixed. The onboarding
-walkthrough's third step is that page, inline, and says out loud what nothing said
-before: **the funder list is the whole search.**
+1. **Into `DEFAULT_ORG_ID` alone.** Whichever account signed in first got 52 funders and
+   the account created five minutes later got none — an artefact of that org existing
+   rather than a decision anyone made.
+2. **Into nobody.** Even, and broken: a new account opened onto an empty list, pressed
+   Search, and nothing happened with no explanation anywhere.
+3. **Into everybody.** Fixed (2) at the cost of handing a Chicago nonprofit 58 San Diego
+   foundations they never asked for and had to prune one at a time.
+
+Now nobody again — **but the thing that made (2) broken is gone.** Onboarding step 3 is
+those lists as one-click imports, so an empty list is a question being asked rather than a
+dead end, and `runner.preflight` refuses a search with no funders and names the page that
+fixes it, so the silent nothing of (2) cannot recur. That step also says out loud what
+nothing said before: **the funder list is the whole search.**
 
 **What is not imported is warmth.** `Source.warm` records that the *pilot* organisation
 already receives money from that funder. Copied into every org it seeded, it printed
 "Existing relationship" on eight funders in the list of a nonprofit that had signed up
 ten minutes earlier — an assertion about them that nobody at their organisation had made.
 `import_starter_list` now imports the cold copy (and derives the sector from it, since
-`sector_for` reads warmth), and schema v8 clears the flag on rows already imported into a
+`sector_for` reads warmth), and schema v8 cleared the flag on rows already imported into a
 non-default org that nobody has since edited. Whether a relationship exists is theirs to
 state, on the funder editor.
 
@@ -257,7 +289,7 @@ seat.
 | `ALLOWED_EMAILS` | Comma-separated. Restricts who may sign in. **Leave it out and anyone can sign up**, which is the default |
 | `FUNDWORTHY_PILOT_EMAILS` | Who inherits the pre-tenancy org (its funders, findings **and saved key**). Claimed by name, never by signing in first — see `app/db.py: _claims_default_org` |
 | `FUNDWORTHY_MAX_RUNS_PER_DAY` | **Off by default.** A lever for one misbehaving account, not a ration — an org spends its own key, so how often it searches is its own business |
-| `FUNDWORTHY_ADMIN_EMAILS` | Who may read `/api/admin/stats`, the one route that crosses every tenant boundary. Its own list, never `ALLOWED_EMAILS`; **unset means nobody** |
+| `FUNDWORTHY_ADMIN_EMAILS` | Who may read `/api/admin/stats` and moderate reported shared funders (`/api/admin/reports`) — the routes that cross every tenant boundary. Its own list, never `ALLOWED_EMAILS`; **unset means nobody**, so a reported funder simply stays hidden until somebody is named |
 | `SITE_URL` | Build-time (dashboard). The public address, for the canonical link and sitemap. Read from the environment, then `dashboard/.env`, then the root `.env`; unset just omits them. Renamed from `VITE_SITE_URL` — the `VITE_` prefix means "expose to browser code via `import.meta.env`", and this is substituted by a plain Node script after `vite build` |
 
 ---

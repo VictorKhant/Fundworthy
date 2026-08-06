@@ -631,3 +631,23 @@ def test_unticking_every_program_does_not_make_an_account_new_again(db):
     assert active == [], "the precondition: nothing is ticked"
     assert settings["onboarding_done"] is True, \
         "a ticked checkbox is not what makes somebody a new user"
+
+
+def test_every_on_off_setting_is_declared_as_one(db):
+    """A settings key whose default is "0" or "1" but which is missing from
+    `_BOOL_SETTINGS` is a bug that looks like nothing until it ships.
+
+    `share_funders` was added without it. `update_settings` therefore stored `str(True)`
+    — the literal "True" — so the SQL that gates the shared pool on `value = '1'` never
+    matched, and `get_settings` handed the browser the string "0", which is **truthy in
+    JavaScript**: the opt-in checkbox rendered as ticked while sharing was off. Two
+    contradictory bugs from one missing set entry.
+    """
+    from app.repo import _BOOL_SETTINGS
+
+    looks_boolean = {k for k, v in DEFAULT_SETTINGS.items() if v in ("0", "1")}
+    missing = sorted(looks_boolean - _BOOL_SETTINGS)
+    assert not missing, (
+        f"{', '.join(missing)} default to an on/off value but are not in _BOOL_SETTINGS, "
+        "so they will be stored as 'True'/'False' and read back as a truthy string."
+    )
