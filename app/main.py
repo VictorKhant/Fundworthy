@@ -398,6 +398,44 @@ async def draft_program(body: DraftIn, org: str = Depends(current_org)) -> dict:
 
 # --- funders ------------------------------------------------------------------
 
+def _duplicate_funder(conn, org: str, name: str | None, url: str | None,
+                      ignore_id: str | None = None) -> dict | None:
+    """An existing funder that is really the same one, or None.
+
+    Two ways to add a funder twice, and neither used to say anything:
+
+      - **Same name.** `repo.create_funder` derives the id from the name and upserts, so
+        a second "San Diego Foundation" silently overwrote the first — quietly editing a
+        row the person thought they were creating, including its notes and its place on
+        the remove list.
+      - **Same page, different name.** Two rows pointing at one grants page, fetched
+        twice every week, scored twice, and listed twice.
+    """
+    wanted_name = (name or "").strip().casefold()
+    for existing in repo.list_funders(conn, org_id=org):
+        if ignore_id and existing["id"] == ignore_id:
+            continue
+        if wanted_name and existing["name"].strip().casefold() == wanted_name:
+            return existing
+        if url and existing.get("url") and _same_page(existing["url"], url):
+            return existing
+    return None
+
+
+def _already_have(existing: dict) -> str:
+    """Why the add was refused, in a form that accounts for where it actually is.
+
+    The remove list is the trap. A funder taken off the search is still on the list, just
+    unticked and collapsed into a section further down — so "you already have this" reads
+    as flatly wrong to somebody looking at the funders they can see. Say where it is.
+    """
+    if not existing["active"]:
+        return (f'"{existing["name"]}" is already on your list, on the remove list '
+                "further down this page. Tick it to start searching it again rather "
+                "than adding it twice.")
+    return (f'"{existing["name"]}" is already on your list. Edit that one instead — '
+            "adding it twice means it gets read and scored twice every week.")
+
 @api.get("/funders")
 def list_funders(org: str = Depends(current_org)) -> dict:
     with session() as conn:
@@ -407,9 +445,13 @@ def list_funders(org: str = Depends(current_org)) -> dict:
 
 @api.post("/funders", status_code=201)
 def create_funder(body: FunderIn, org: str = Depends(current_org)) -> dict:
+    data = _set(body)
     try:
         with session() as conn:
-            funder = repo.create_funder(conn, _set(body), org_id=org)
+            clash = _duplicate_funder(conn, org, data.get("name"), data.get("url"))
+            if clash:
+                raise HTTPException(409, _already_have(clash))
+            funder = repo.create_funder(conn, data, org_id=org)
             sharing = repo.get_settings(conn, org_id=org)["share_funders"]
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -423,6 +465,14 @@ def update_funder(funder_id: str, body: FunderIn,
                   org: str = Depends(current_org)) -> dict:
     changes = _set(body)
     with session() as conn:
+        # Editing a funder onto another one's name or page is the same collision as
+        # adding it twice, so it gets the same answer. `ignore_id` is what stops a plain
+        # "save" on an unchanged row from reporting the row as a duplicate of itself.
+        if "name" in changes or "url" in changes:
+            clash = _duplicate_funder(conn, org, changes.get("name"),
+                                      changes.get("url"), ignore_id=funder_id)
+            if clash:
+                raise HTTPException(409, _already_have(clash))
         updated = repo.update_funder(conn, funder_id, changes, org_id=org)
         sharing = repo.get_settings(conn, org_id=org)["share_funders"]
     if updated is None:
@@ -876,6 +926,12 @@ def delete_own_account(org: str = Depends(current_org),
     If you are the last one out, `strand_org` clears the findings, the run log and the
     saved API key, and deliberately keeps the funder list — see its docstring for why
     that asymmetry is the point rather than an oversight.
+
+    The Firebase sign-in goes too, so "delete my account" does not quietly mean "delete
+    my data and keep your email address on file". It is reported separately in the
+    response because it can fail on its own — Firebase refuses to delete on a stale
+    sign-in — and the honest answer then is to say the data is gone and the sign-in is
+    not, rather than to claim both.
     """
     if user is None:
         raise HTTPException(
@@ -897,9 +953,14 @@ def delete_own_account(org: str = Depends(current_org),
         if not others:
             cleared = {"findings_and_runs_deleted": True, "funders_kept": True}
 
-    log.info("account deleted: %s (org %s, %d other member(s) remain)",
-             user.email, org, others)
-    return {"deleted": user.email, **cleared}
+    # Then the sign-in itself, and **only in this order**. If this fails the person can
+    # still sign in and lands in a fresh empty org — harmless, and they can try again.
+    # Reversed, a failure would lock somebody out of an account whose data is still here.
+    sign_in = auth.delete_firebase_account(user.token)
+
+    log.info("account deleted: %s (org %s, %d other member(s) remain, sign-in: %s)",
+             user.email, org, others, sign_in.value)
+    return {"deleted": user.email, "sign_in": sign_in.value, **cleared}
 
 
 @api.post("/org/invites", status_code=201)

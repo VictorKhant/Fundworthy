@@ -937,3 +937,139 @@ def test_a_report_names_the_funder_it_is_given_not_the_org_asking(signed_in, tok
     assert len(queued) == 1
     assert queued[0]["reason"] == "not real"
     assert "reported_by" not in queued[0], "the objector is not part of the queue view"
+
+
+# --- deleting the sign-in, not just the data ----------------------------------
+#
+# "Delete my account" must not quietly mean "delete your data and keep your email
+# address on file". These are offline: `httpx.post` is stubbed, because the thing under
+# test is which outcome each Firebase answer maps to and what we do with it — not
+# whether Google's endpoint works.
+
+class _Response:
+    def __init__(self, status_code, payload=None):
+        self.status_code = status_code
+        self._payload = payload or {}
+
+    def json(self):
+        return self._payload
+
+
+def _firebase_says(monkeypatch, response):
+    calls = {}
+
+    def fake_post(url, **kw):
+        calls["url"] = url
+        calls["params"] = kw.get("params")
+        calls["json"] = kw.get("json")
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", fake_post)
+    return calls
+
+
+def _configured(monkeypatch):
+    from app import auth
+    monkeypatch.setenv("FIREBASE_PROJECT_ID", PROJECT)
+    monkeypatch.setenv("FIREBASE_WEB_API_KEY", "AIza-not-a-secret")
+    auth.configure()
+    return auth
+
+
+def test_a_successful_delete_reports_the_sign_in_as_removed(monkeypatch):
+    auth = _configured(monkeypatch)
+    calls = _firebase_says(monkeypatch, _Response(200))
+
+    assert auth.delete_firebase_account("tok") is auth.DeletionOutcome.REMOVED
+    assert calls["json"] == {"idToken": "tok"}
+    assert calls["params"] == {"key": "AIza-not-a-secret"}
+    assert "identitytoolkit" in calls["url"], "the REST endpoint, not firebase-admin"
+
+
+def test_a_stale_sign_in_is_reported_rather_than_papered_over(monkeypatch):
+    """Firebase refuses this when you signed in a while ago. It is about `auth_time`, so
+    refreshing the token does not help — the only honest answer is to say so, and the UI
+    then tells them to sign in again rather than claiming the record is gone."""
+    auth = _configured(monkeypatch)
+    _firebase_says(monkeypatch, _Response(
+        400, {"error": {"message": "CREDENTIAL_TOO_OLD_LOGIN_AGAIN"}}))
+
+    assert auth.delete_firebase_account("tok") is auth.DeletionOutcome.NEEDS_RECENT_LOGIN
+
+
+def test_an_account_already_gone_counts_as_removed(monkeypatch):
+    """USER_NOT_FOUND is the outcome we wanted, reached by another route. Reporting it
+    as a failure would send somebody chasing a record that does not exist."""
+    auth = _configured(monkeypatch)
+    _firebase_says(monkeypatch, _Response(400, {"error": {"message": "USER_NOT_FOUND"}}))
+
+    assert auth.delete_firebase_account("tok") is auth.DeletionOutcome.REMOVED
+
+
+def test_firebase_being_unreachable_is_a_failure_not_an_exception(monkeypatch):
+    """This runs immediately after the person's data has already been deleted. An
+    exception here would surface as a 500 on a request that half-succeeded."""
+    import httpx
+    auth = _configured(monkeypatch)
+    _firebase_says(monkeypatch, httpx.ConnectError("no route to host"))
+
+    assert auth.delete_firebase_account("tok") is auth.DeletionOutcome.FAILED
+
+
+def test_a_local_install_has_no_sign_in_to_delete(monkeypatch):
+    from app import auth
+    monkeypatch.delenv("FIREBASE_PROJECT_ID", raising=False)
+    auth.configure()
+
+    assert auth.delete_firebase_account("tok") is auth.DeletionOutcome.NOT_APPLICABLE
+
+
+def test_closing_an_account_deletes_the_data_before_the_sign_in(signed_in, token_for,
+                                                                monkeypatch):
+    """The ordering is the safety property. If the sign-in went first and the data
+    delete then failed, somebody would be locked out of an account whose data is still
+    on the box; this way round a failure is harmless and retryable."""
+    from app import auth as auth_mod
+
+    order = []
+
+    import app.main as main
+    real_remove = main.remove_member
+    monkeypatch.setattr(main, "remove_member",
+                        lambda *a, **k: (order.append("data"), real_remove(*a, **k))[1])
+    monkeypatch.setattr(auth_mod, "delete_firebase_account",
+                        lambda tok: (order.append("sign-in"),
+                                     auth_mod.DeletionOutcome.REMOVED)[1])
+
+    _sign_in(signed_in, token_for)
+    r = signed_in.delete("/api/account", headers=auth_header(token_for()))
+
+    assert r.status_code == 200
+    assert order == ["data", "sign-in"]
+    assert r.json()["sign_in"] == "removed"
+
+
+def test_the_response_says_when_the_sign_in_survived(signed_in, token_for, monkeypatch):
+    from app import auth as auth_mod
+
+    monkeypatch.setattr(auth_mod, "delete_firebase_account",
+                        lambda tok: auth_mod.DeletionOutcome.NEEDS_RECENT_LOGIN)
+    _sign_in(signed_in, token_for)
+    body = signed_in.delete("/api/account", headers=auth_header(token_for())).json()
+
+    assert body["deleted"] == ALLOWED
+    assert body["sign_in"] == "stale", "the data went; say so about the rest"
+
+
+def test_the_token_never_leaves_the_server(signed_in, token_for):
+    """`User` carries the raw bearer token so the delete can use it. No endpoint may
+    hand it back — the same rule the Anthropic key has."""
+    _sign_in(signed_in, token_for)
+    raw = token_for()
+
+    for path in ("/api/auth/me", "/api/org", "/api/state", "/api/settings"):
+        body = signed_in.get(path, headers=auth_header(raw)).text
+        assert raw not in body, f"{path} echoed the caller's ID token back"

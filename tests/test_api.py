@@ -824,3 +824,84 @@ def test_the_sitemap_declares_the_namespace_google_expects(client):
 
     root = ElementTree.fromstring(source.read_text())
     assert root.tag == "{http://www.sitemaps.org/schemas/sitemap/0.9}urlset"
+
+
+# --- adding the same funder twice ---------------------------------------------
+#
+# Both routes to a duplicate used to be silent, and they fail differently. Same name
+# upserts, because `repo.create_funder` derives the id from the name — so the second add
+# quietly edited the first row, notes and remove-list state included. Same page under a
+# different name makes two rows, fetched and scored twice every week.
+
+def test_the_same_funder_name_is_refused_rather_than_overwriting(client):
+    first = client.post("/api/funders", json={
+        "name": "Coastal Trust", "url": "https://example.invalid/coastal",
+        "notes": "spoke to Dana in March",
+    })
+    assert first.status_code == 201
+
+    again = client.post("/api/funders", json={"name": "coastal trust",
+                                              "url": "https://example.invalid/other"})
+    assert again.status_code == 409
+    assert "already on your list" in again.json()["detail"]
+
+    kept = [f for f in client.get("/api/funders").json()["funders"]
+            if f["name"] == "Coastal Trust"]
+    assert len(kept) == 1
+    assert kept[0]["notes"] == "spoke to Dana in March", "the first row is untouched"
+
+
+def test_the_same_page_under_a_different_name_is_refused(client):
+    client.post("/api/funders", json={"name": "Coastal Trust",
+                                      "url": "https://example.invalid/coastal"})
+    again = client.post("/api/funders", json={
+        "name": "The Coastal Trust Foundation",
+        "url": "https://www.example.invalid/coastal/",
+    })
+    assert again.status_code == 409, "www and a trailing slash are the same page"
+
+
+def test_a_funder_on_the_remove_list_says_where_it_is(client):
+    """The trap. A removed funder is still on the list — unticked, in a section further
+    down — so "you already have this" reads as wrong to somebody looking at what they
+    can see."""
+    made = client.post("/api/funders", json={"name": "Paused Trust",
+                                             "url": "https://example.invalid/p"}).json()
+    client.put(f"/api/funders/{made['funder']['id']}", json={"active": False})
+
+    again = client.post("/api/funders", json={"name": "Paused Trust",
+                                              "url": "https://example.invalid/p"})
+    assert again.status_code == 409
+    detail = again.json()["detail"]
+    assert "remove list" in detail and "Tick it" in detail
+
+
+def test_a_genuinely_new_funder_is_still_accepted(client):
+    """The guard must not be so eager that it blocks the second funder somebody adds."""
+    client.post("/api/funders", json={"name": "Coastal Trust",
+                                      "url": "https://example.invalid/coastal"})
+    r = client.post("/api/funders", json={"name": "Inland Fund",
+                                          "url": "https://example.invalid/inland"})
+    assert r.status_code == 201
+
+
+def test_saving_a_funder_unchanged_does_not_report_it_as_its_own_duplicate(client):
+    made = client.post("/api/funders", json={"name": "Coastal Trust",
+                                             "url": "https://example.invalid/coastal"}).json()
+    fid = made["funder"]["id"]
+
+    assert client.put(f"/api/funders/{fid}", json={
+        "name": "Coastal Trust", "url": "https://example.invalid/coastal",
+        "notes": "added a note",
+    }).status_code == 200
+
+
+def test_editing_a_funder_onto_another_ones_page_is_refused(client):
+    client.post("/api/funders", json={"name": "Coastal Trust",
+                                      "url": "https://example.invalid/coastal"})
+    other = client.post("/api/funders", json={"name": "Inland Fund",
+                                              "url": "https://example.invalid/inland"}).json()
+
+    clash = client.put(f"/api/funders/{other['funder']['id']}",
+                       json={"url": "https://example.invalid/coastal"})
+    assert clash.status_code == 409

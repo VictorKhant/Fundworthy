@@ -168,3 +168,75 @@ def test_a_broken_host_is_a_result_not_an_exception(monkeypatch):
     monkeypatch.setattr("agent.fetch.Fetcher", _Exploding)
     ok, note = run(check_page("https://example.invalid/x"))
     assert ok is False and "could not be opened" in note
+
+
+# --- the false negative that started this --------------------------------------
+
+# Reduced from the real macfound.org/grants page. The whole grant vocabulary is "grant"
+# and "grants" — two surface forms of one word — which is precisely what the first
+# version of the rule could not see.
+A_REAL_FOUNDATION = """
+<html><head><title>Grant Search - MacArthur Foundation</title></head><body>
+<h1>Grant Search</h1>
+<p>Search our database of grants. MacArthur has awarded more than $100,000,000 in
+grants across our programs this year. Use the filters to narrow by program area,
+region and year. Each grant record shows the recipient organization, the amount and
+the period covered.</p>
+<p>Our grantmaking supports organizations working on climate solutions, criminal
+justice, nuclear challenges and local initiatives in Chicago and Nigeria. Browse the
+grant list below or download the full dataset.</p>
+</body></html>
+"""
+
+
+def test_a_page_titled_grant_search_is_a_grants_page(monkeypatch):
+    """Reported: MacArthur Foundation was rejected as "not about grants".
+
+    3,116 characters of real text, a page called "Grant Search", at a URL ending
+    `/grants`, stating a figure — and the rule wanted three *distinct strings* from its
+    vocabulary list and found "grant" and "grants", which are one word. Counting surface
+    forms also rewarded rambling pages over focused ones, which is backwards.
+    """
+    _stub_fetch(monkeypatch, html=A_REAL_FOUNDATION)
+    ok, note = run(check_page("https://www.macfound.org/grants"))
+
+    assert ok is True, note
+    assert "opened" in note
+
+
+def test_the_title_and_the_address_count_even_when_the_prose_is_thin(monkeypatch):
+    """The three strongest signals are not in the body: what the page is called, what
+    the address says, and whether the parser could pull a real figure off it."""
+    thin = ("<html><head><title>Grants</title></head><body><p>" + ("Our grant "
+            "programme supports local organizations. " * 12) + "</p></body></html>")
+    _stub_fetch(monkeypatch, html=thin)
+    assert run(check_page("https://example.invalid/grants"))[0] is True
+
+
+def test_a_funders_front_page_is_refused_with_advice_not_a_shrug(monkeypatch):
+    """A homepage is still the wrong link — the funder editor asks for the grants page —
+    but "does not look like it is about grants" is a confusing thing to hear about a
+    foundation's own website. Say which page to use instead."""
+    homepage = ("<html><head><title>The Example Foundation</title></head><body><p>"
+                + ("We are a private foundation working with communities across the "
+                   "region. Our funding supports local organizations. " * 6)
+                + "</p></body></html>")
+    _stub_fetch(monkeypatch, html=homepage)
+    ok, note = run(check_page("https://example.invalid/"))
+
+    assert ok is False
+    assert "front page" in note and "grants page" in note
+
+
+def test_a_page_with_nothing_to_do_with_grants_still_fails(monkeypatch):
+    """The loosening must not turn the check into a rubber stamp."""
+    _stub_fetch(monkeypatch, html=A_HOMEPAGE)
+    assert run(check_page("https://example.invalid/about"))[0] is False
+
+
+def test_plurals_are_one_word_not_two():
+    from app.funder_check import _stem
+
+    assert _stem("grants") == _stem("grant")
+    assert _stem("awards") == _stem("award")
+    assert _stem("rfp") == "rfp", "short words are left alone"
