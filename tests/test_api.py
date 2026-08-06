@@ -188,7 +188,12 @@ def test_program_without_a_name_is_rejected(client):
 
 def test_ticking_a_program_changes_what_the_run_would_search(client):
     """The tick is the whole activation mechanism, so it has to reach the config the
-    pipeline reads — not just the row in the table."""
+    pipeline reads — not just the row in the table.
+
+    Describing the card and ticking it arrive in ONE request, because that is what saving
+    the editor does and because an empty card can no longer be activated on its own (see
+    the test below).
+    """
     from agent.config import load_from_db
 
     before = load_from_db()
@@ -196,10 +201,69 @@ def test_ticking_a_program_changes_what_the_run_would_search(client):
 
     ilia = next(p for p in client.get("/api/programs").json()["programs"]
                 if p["slug"] == "ILIA")
-    client.put(f"/api/programs/{ilia['id']}", json={"active": True})
+    resp = client.put(f"/api/programs/{ilia['id']}",
+                      json={"active": True, "summary": "Leadership awards for local "
+                                                       "nonprofit directors."})
+    assert resp.status_code == 200, resp.text
 
     after = load_from_db()
     assert "ILIA" in after.programs_active
+
+
+def test_an_empty_card_cannot_be_ticked(client):
+    """A card with no summary and no keywords gives the scorer nothing to match against.
+
+    `agent/score.py: org_context` puts exactly those two fields in the prompt, and falls
+    back to "(No description recorded yet. Judge fit conservatively…)" without them — so
+    ticking an empty card does not narrow the search, it adds a line of noise to every
+    candidate that gets scored.
+
+    The dashboard renders one as dashed and un-tickable and opens the editor instead, but
+    that is an affordance. This is the rule, and it has to hold for a direct PUT.
+    """
+    ilia = next(p for p in client.get("/api/programs").json()["programs"]
+                if p["slug"] == "ILIA")
+    assert not ilia["summary"] and not ilia["keywords"], "the fixture stopped being empty"
+
+    resp = client.put(f"/api/programs/{ilia['id']}", json={"active": True})
+
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert "no description" in detail, detail
+    # Written for the person who pressed it, not for a log.
+    for jargon in ("ValueError", "None", "keywords=[]", "program_is_empty"):
+        assert jargon not in detail, detail
+
+    # And it really did not tick.
+    again = next(p for p in client.get("/api/programs").json()["programs"]
+                 if p["slug"] == "ILIA")
+    assert again["active"] is False
+
+
+def test_describing_a_card_and_ticking_it_in_one_write_is_allowed(client):
+    """The editor's Save does exactly this, so the guard has to judge the card as it will
+    be after the write rather than as it was before it."""
+    ilia = next(p for p in client.get("/api/programs").json()["programs"]
+                if p["slug"] == "ILIA")
+
+    resp = client.put(f"/api/programs/{ilia['id']}",
+                      json={"active": True, "keywords": ["leadership", "fellowship"]})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["program"]["active"] is True
+
+
+def test_an_already_ticked_card_can_still_be_edited_and_unticked(client):
+    """The guard must not trap a card that was ticked before the rule existed. Unticking
+    is always allowed, and so is any edit that leaves it inactive."""
+    arts = next(p for p in client.get("/api/programs").json()["programs"]
+                if p["slug"] == "ARTS")
+    assert arts["active"] is True
+
+    assert client.put(f"/api/programs/{arts['id']}",
+                      json={"active": False}).status_code == 200
+    assert client.put(f"/api/programs/{arts['id']}",
+                      json={"active": False, "summary": ""}).status_code == 200
 
 
 def test_per_program_floor_lowers_the_crawl_filter(client):

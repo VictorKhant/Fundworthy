@@ -437,42 +437,84 @@ button.text:hover:not(:disabled) { color: var(--accent-deep); }
   flex-wrap: wrap;
 }
 
-/* Programs and funders, side by side at the bottom of the page. */
-.paircols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
-@media (max-width: 880px) { .paircols { grid-template-columns: 1fr; } }
+/* --- the program chip row (R3) --------------------------------------------- */
+/*
+   Which programs this week's search is for, at the top of This week. It was a column of
+   full-width rows at the FOOT of the page, under the findings whose shape it decides.
 
-/* --- program rows ---------------------------------------------------------- */
+   Each chip is two sibling buttons with a hairline between them, never a button nested
+   in a label: nesting made clicking the pencil toggle the tick as well, so you pressed
+   Edit and silently changed what next week searched for.
+*/
 
-.proglist { display: flex; flex-direction: column; gap: 8px; }
-.progrow {
-  display: flex; align-items: flex-start; gap: 10px;
-  background: var(--card); border: 1px solid var(--line);
-  border-radius: 11px; padding: 11px 13px;
+.progbar { margin-bottom: 18px; }
+.progbar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.progbar-label {
+  font-size: 13px; color: var(--body); font-weight: 500;
+  margin-right: 2px; flex-shrink: 0;
 }
-.progrow.active { border-color: var(--accent-line); }
-.progrow-tick { display: flex; align-items: flex-start; gap: 10px; flex: 1;
-                min-width: 0; cursor: pointer; }
-.progrow-tick > input { margin-top: 3px; flex-shrink: 0; }
-.progrow-main { min-width: 0; }
-.progrow-title {
-  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-  font-weight: 600; font-size: 14px; overflow-wrap: anywhere;
+.progbar-add { font-size: 13px; }
+.progbar-note { margin: 8px 0 0; }
+
+.progchip {
+  display: inline-flex; align-items: stretch;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: var(--card); overflow: hidden;
+  max-width: 100%;
 }
-/* Clamped to two lines. A filled-in card's summary is a paragraph, and at full height
-   one program pushed the rest of the list off the screen. The full text is in the
-   title attribute and in the editor. */
-.progrow-sub {
-  font-size: 12.5px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-  overflow: hidden;
+.progchip.on { border-color: var(--accent-line); background: var(--accent-soft); }
+
+/* An empty card is not neutral: until it is filled in there is nothing for the
+   researcher to match against, and ticking it is refused by the server. Dashed and clay,
+   so it reads as unfinished rather than as another option. */
+.progchip.unfilled { border-style: dashed; border-color: var(--dash); background: var(--card); }
+
+.progchip-tick,
+.progchip-edit {
+  border: 0; background: none; border-radius: 0; cursor: pointer;
+  font: inherit; color: var(--fg); padding: 7px 12px;
+  display: inline-flex; align-items: center; gap: 7px; min-width: 0;
 }
-.progrow-meta { display: block; font-size: 12.5px; color: var(--muted); margin-top: 3px; }
-/* An empty card is not neutral — until it is filled in, the researcher has to guess
-   what the programme needs. Clay, so it reads as unfinished rather than as a caption.
-   Named "unfilled" rather than "empty" because .empty is the page-level no-results
-   block, and the two composed into a 40px dashed box inside every program row. */
-.progrow-sub.unfilled { color: var(--clay); }
-.progrow-actions { display: flex; gap: 10px; flex-shrink: 0; padding-top: 2px; }
+.progchip-tick { font-size: 13.5px; }
+.progchip.on .progchip-tick { font-weight: 600; color: var(--accent-deep); }
+.progchip-tick:hover:not(:disabled),
+.progchip-edit:hover:not(:disabled) { background: var(--line-soft); border-color: transparent; }
+
+.progchip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Fixed width so chips line up whether or not they carry a tick. */
+.progchip-mark {
+  width: 13px; flex-shrink: 0; text-align: center;
+  font-size: 12px; color: var(--accent);
+}
+.progchip.unfilled .progchip-mark { color: var(--clay); }
+
+.progchip-tag {
+  font-size: 11.5px; color: var(--clay-deep); white-space: nowrap; flex-shrink: 0;
+}
+.progchip.unfilled .progchip-tag { color: var(--clay); }
+
+/* The hairline. A border-left on the pencil rather than a separate element, so there is
+   nothing to keep in step with the chip's rounded ends. */
+.progchip-edit {
+  border-left: 1px solid var(--line); color: var(--muted);
+  padding-left: 9px; padding-right: 10px; flex-shrink: 0;
+}
+.progchip.on .progchip-edit { border-left-color: var(--accent-line); }
+.progchip.unfilled .progchip-edit { border-left-style: dashed; border-left-color: var(--dash); }
+.progchip-edit:hover { color: var(--fg); }
+
+/* Removing sits bottom-left in the editor, away from Save and Cancel — it is rare and
+   permanent, and next to a tick you press weekly it is a control somebody eventually
+   hits by accident. */
+.editor-foot { flex-wrap: wrap; }
+.editor-remove { margin-right: auto; }
+
+@media (max-width: 620px) {
+  /* A 44px target on touch, including the pencil. */
+  .progchip-tick, .progchip-edit { padding-top: 11px; padding-bottom: 11px; }
+  .progchip-name { max-width: 52vw; }
+}
 
 /* --- program cards --------------------------------------------------------- */
 

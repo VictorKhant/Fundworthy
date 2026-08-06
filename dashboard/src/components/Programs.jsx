@@ -25,7 +25,7 @@ const BLANK = {
 const list = (s) =>
   s.split(/[\n,]/).map((x) => x.trim()).filter(Boolean);
 
-function Editor({ initial, onSave, onCancel, globalFloor, saving }) {
+function Editor({ initial, onSave, onCancel, onDelete, globalFloor, saving }) {
   const [form, setForm] = useState({ ...BLANK, ...initial });
   const [url, setUrl] = useState(initial?.source_url || "");
   const [drafting, setDrafting] = useState(false);
@@ -143,7 +143,15 @@ function Editor({ initial, onSave, onCancel, globalFloor, saving }) {
         </small>
       </label>
 
-      <div className="row end">
+      {/* Removing lives here, bottom-left, rather than on the chip. It is rare and
+          permanent, and a delete control sitting next to a tick you press every week is
+          a delete control somebody eventually presses by accident. */}
+      <div className="row end editor-foot">
+        {onDelete && (
+          <button className="text danger editor-remove" onClick={onDelete} disabled={saving}>
+            Remove this program
+          </button>
+        )}
         <button className="ghost" onClick={onCancel} disabled={saving}>
           Cancel
         </button>
@@ -161,62 +169,86 @@ function Editor({ initial, onSave, onCancel, globalFloor, saving }) {
   );
 }
 
-// A compact row, not a card. Programs live at the bottom of the page now, in a column
-// half the width they used to have — so the row carries the two facts that decide
-// whether to tick it (what it is, what it costs to bother) and everything else lives one
-// click away in the editor.
+// One program, as a chip. This is the top of This week now, not the bottom of it —
+// "which of our programs am I searching for this week?" is a question you answer before
+// reading the results, and a full-width list of rows at the foot of the page was
+// answering it after.
 //
-// The checkbox and the text share one <label> so the whole block is a tick target. Edit
-// and Remove sit outside it: nesting a button inside a label makes clicking that button
-// also toggle the checkbox.
-function Row({ program, globalFloor, onToggle, onEdit, onDelete }) {
+// **Two buttons, never a button inside a label.** The tick and the pencil are siblings
+// separated by a hairline. Nesting the pencil inside the label made clicking it toggle
+// the checkbox as well — you pressed Edit and silently changed what next week searches
+// for. The old row carried a comment about that; this shape makes it impossible rather
+// than remembered.
+//
+// An **empty card cannot be ticked**, and the chip says so instead of failing when you
+// try: dashed border, a clay tag, and the tick button opens the editor. The same rule is
+// enforced in `repo.update_program`, because this is an affordance and that is the rule.
+//
+// The modifier is `unfilled`, not `empty`, and that is not a style preference: `.empty`
+// is the page-level no-results block (40px padding, 14px radius). Composing the two
+// turns every undescribed program into a large squared-off box in the middle of a row of
+// pills. The row this replaced carried a comment saying exactly that, and this walked
+// into it anyway — hence the note here as well as there.
+function Chip({ program, globalFloor, onToggle, onEdit }) {
   const empty = !program.summary && program.keywords.length === 0;
+  const unreviewed = program.drafted_by_ai && !program.reviewed_by_human;
   const floor = program.min_award != null ? program.min_award : globalFloor;
   const searches = program.search_queries?.length || 0;
 
-  return (
-    <div className={`progrow ${program.active ? "active" : ""}`}>
-      <label className="progrow-tick">
-        <input
-          type="checkbox"
-          checked={program.active}
-          onChange={(e) => onToggle(program, e.target.checked)}
-        />
-        <span className="progrow-main">
-          <span className="progrow-title">
-            {program.name}
-            {program.drafted_by_ai && !program.reviewed_by_human && (
-              <span className="chip inferred" title="Drafted by the assistant and not yet checked by a person">
-                AI draft — review it
-              </span>
-            )}
-          </span>
-          {/* Summary and meta are separate lines rather than one joined string. Joined,
-              a long summary pushed the search count and the floor past the clamp — and
-              those two are the reason to read this row at all. */}
-          <span className={`progrow-sub ${empty ? "unfilled" : ""}`} title={program.summary || undefined}>
-            {empty
-              ? "Empty card — paste the program's web page and the assistant fills it in"
-              : program.summary}
-          </span>
-          {!empty && (
-            <span className="progrow-meta">
-              {searches > 0 && `${searches} ${searches === 1 ? "search" : "searches"} · `}
-              floor {money(floor)}
-            </span>
-          )}
-        </span>
-      </label>
+  const detail = empty
+    ? "This card has no description yet, so there is nothing to match grants against. "
+      + "Click to fill it in."
+    : [program.summary,
+       searches > 0 ? `${searches} ${searches === 1 ? "search" : "searches"}` : null,
+       `floor ${money(floor)}`].filter(Boolean).join(" · ");
 
-      <span className="progrow-actions">
-        <button className="text" onClick={() => onEdit(program)}>
-          Edit
-        </button>
-        <button className="text danger" onClick={() => onDelete(program)}>
-          Remove
-        </button>
-      </span>
+  return (
+    <div className={`progchip ${program.active ? "on" : ""} ${empty ? "unfilled" : ""}`}>
+      <button
+        type="button"
+        className="progchip-tick"
+        // Ticking an empty card is refused by the server, so offering the tick and then
+        // showing an error would be a worse way of saying the same thing. Open the
+        // editor: filling it in is the only route to ticking it anyway.
+        onClick={() => (empty ? onEdit(program) : onToggle(program, !program.active))}
+        aria-pressed={empty ? undefined : program.active}
+        title={detail}
+      >
+        <span className="progchip-mark" aria-hidden="true">
+          {empty ? "+" : program.active ? "✓" : ""}
+        </span>
+        <span className="progchip-name">{program.name}</span>
+        {empty && <span className="progchip-tag">needs filling in</span>}
+        {unreviewed && (
+          // Same §6 rule as .chip.inferred: a value the assistant produced and no human
+          // has confirmed must not look like one a person wrote.
+          <span className="chip inferred progchip-tag"
+                title="Drafted by the assistant and not yet checked by a person">
+            AI draft
+          </span>
+        )}
+      </button>
+
+      <button
+        type="button"
+        className="progchip-edit"
+        onClick={() => onEdit(program)}
+        title={`Edit ${program.name}`}
+        aria-label={`Edit ${program.name}`}
+      >
+        <PencilIcon />
+      </button>
     </div>
+  );
+}
+
+function PencilIcon() {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"
+         strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"
+         width="14" height="14">
+      <path d="M11.2 2.4a1.4 1.4 0 0 1 2 2L5.8 11.8l-2.7.7.7-2.7z" />
+    </svg>
   );
 }
 
@@ -270,53 +302,55 @@ export default function Programs({ programs, globalFloor, onChange }) {
 
   const activeCount = programs.filter((p) => p.active).length;
 
+  const open = editing && editing !== "new" ? editing : null;
+
   return (
-    <section className="panel">
+    <section className="progbar">
       {dialog}
-      <div className="panel-head">
-        <h2>Your programs</h2>
-        <button onClick={() => setEditing("new")}>+ Add</button>
+
+      <div className="progbar-row">
+        <span className="progbar-label">
+          Searching for
+          <span className="muted"> · {activeCount} of {programs.length}</span>
+        </span>
+
+        {programs.map((p) => (
+          <Chip
+            key={p.id}
+            program={p}
+            globalFloor={globalFloor}
+            onToggle={toggle}
+            onEdit={setEditing}
+          />
+        ))}
+
+        <button className="text progbar-add" onClick={() => setEditing("new")}>
+          + Add a program
+        </button>
       </div>
-      <p className="muted small">
-        Tick the ones to search for this week. {activeCount} of {programs.length} ticked.
-        {activeCount === 0 && " Nothing is ticked, so a search would have nothing to look for."}
-      </p>
+
+      {activeCount === 0 && programs.length > 0 && (
+        <p className="muted small progbar-note">
+          Nothing is ticked, so a search would have nothing to look for.
+        </p>
+      )}
 
       {error && <div className="notice error">{error}</div>}
 
-      {editing === "new" && (
+      {/* The editor drops below the row rather than replacing a chip in it. Swapping a
+          chip for a full form made the row reflow and the other chips jump, and on a
+          wrapped row the form landed wherever that chip happened to sit. */}
+      {editing && (
         <Editor
-          initial={BLANK}
+          key={open?.id || "new"}
+          initial={open || BLANK}
           globalFloor={globalFloor}
           saving={saving}
           onSave={save}
           onCancel={() => setEditing(null)}
+          onDelete={open ? () => remove(open) : null}
         />
       )}
-
-      <div className="proglist">
-        {programs.map((p) =>
-          editing && editing !== "new" && editing.id === p.id ? (
-            <Editor
-              key={p.id}
-              initial={p}
-              globalFloor={globalFloor}
-              saving={saving}
-              onSave={save}
-              onCancel={() => setEditing(null)}
-            />
-          ) : (
-            <Row
-              key={p.id}
-              program={p}
-              globalFloor={globalFloor}
-              onToggle={toggle}
-              onEdit={setEditing}
-              onDelete={remove}
-            />
-          )
-        )}
-      </div>
     </section>
   );
 }

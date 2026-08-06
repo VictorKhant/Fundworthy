@@ -165,9 +165,40 @@ def create_program(conn, data: dict, *, org_id: str) -> dict:
     return get_program(conn, program_id, org_id=org_id)  # type: ignore[return-value]
 
 
+def program_is_empty(card: dict) -> bool:
+    """A card with nothing in it for the model to match against.
+
+    `summary` and `keywords` are the two fields `agent/score.py: org_context` actually
+    puts in the prompt. A card with neither contributes its name and nothing else, and
+    the scoring prompt has to fall back to "(No description recorded yet. Judge fit
+    conservatively…)" — so ticking one does not narrow the search, it just adds a line
+    of noise to every candidate.
+    """
+    return not str(card.get("summary") or "").strip() and not (card.get("keywords") or [])
+
+
 def update_program(conn, program_id: str, changes: dict, *, org_id: str) -> dict | None:
-    if get_program(conn, program_id, org_id=org_id) is None:
+    current = get_program(conn, program_id, org_id=org_id)
+    if current is None:
         return None
+
+    # An empty card cannot be ticked. The UI renders one as dashed and un-tickable and
+    # opens the editor instead, but that is a UI affordance and this is the rule: a
+    # direct PUT, the CLI, or a future integration must not be able to activate a card
+    # the scorer can do nothing with.
+    #
+    # Checked against the card as it will be AFTER this write, not as it is now, so
+    # filling in a summary and ticking it in one request is allowed — which is exactly
+    # what saving the editor does.
+    after = {**current, **{k: v for k, v in changes.items() if k in _PROGRAM_FIELDS}}
+    if after.get("active") and program_is_empty(after):
+        raise ValueError(
+            f'"{after.get("name") or "This program"}" has no description yet, so there '
+            "is nothing for the researcher to match grants against. Add a summary or "
+            "some keywords — or paste the program's web page and let the assistant "
+            "fill it in — and then tick it."
+        )
+
     sets, values = [], []
     for field in _PROGRAM_FIELDS:
         if field not in changes:

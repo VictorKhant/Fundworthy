@@ -181,6 +181,16 @@ export default function Dashboard({ state, onChange, onGoto }) {
         </div>
       )}
 
+      {/* Which programs this week's search is for. At the TOP, because it is a
+          question you answer before reading results rather than after — it used to be a
+          list of full-width rows at the foot of the page, below the findings it decides
+          the shape of. */}
+      <Programs
+        programs={state.programs}
+        globalFloor={state.settings.min_award}
+        onChange={onChange}
+      />
+
       {/* Everything standing between this org and a working search, each with the page
           that fixes it. The two notices this replaced said what was missing but not what
           it meant, and there was nothing at all for the two commonest causes of an empty
@@ -286,14 +296,6 @@ export default function Dashboard({ state, onChange, onGoto }) {
           key sends them to fix the wrong thing. */}
       <Findings clear={clear} needsCheck={needsCheck} emptyBody={emptyBody()} />
 
-      {/* Setup, at the bottom. Two columns on a desk, one on a laptop. */}
-      <div className="paircols">
-        <Programs
-          programs={state.programs}
-          globalFloor={state.settings.min_award}
-          onChange={onChange}
-        />
-      </div>
     </>
   );
 }

@@ -347,8 +347,13 @@ def create_program(body: ProgramIn, org: str = Depends(current_org)) -> dict:
 @api.put("/programs/{program_id}")
 def update_program(program_id: str, body: ProgramIn,
                    org: str = Depends(current_org)) -> dict:
-    with session() as conn:
-        updated = repo.update_program(conn, program_id, _set(body), org_id=org)
+    try:
+        with session() as conn:
+            updated = repo.update_program(conn, program_id, _set(body), org_id=org)
+    except ValueError as exc:
+        # Ticking a card with no description. The message is written for the person, not
+        # for a log, because it is rendered straight into the panel.
+        raise HTTPException(400, str(exc)) from exc
     if updated is None:
         raise HTTPException(404, "No such program.")
     return {"program": updated}
