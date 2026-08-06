@@ -90,6 +90,13 @@ def due_orgs(conn, now_utc: datetime | None = None) -> list[str]:
         settings = repo.get_settings(conn, org_id=org_id)
         if not settings["enabled"]:
             continue                      # the kill switch, and it is the whole answer
+        if not settings["schedule_enabled"]:
+            # They have not asked for an unattended weekly search, which is the default.
+            # Distinct from the kill switch above: this org is using Fundworthy happily,
+            # by hand, and nothing should start spending their credit at 11pm because a
+            # `schedule_day` column has a value in it. Every org has one — it is the
+            # starting point the picker opens on, not a decision anybody made.
+            continue
 
         local = _local_now(str(settings["schedule_timezone"]))
         if local.tzinfo != timezone.utc:

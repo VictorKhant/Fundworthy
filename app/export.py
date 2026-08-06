@@ -115,6 +115,35 @@ def to_csv(opportunities: list[dict]) -> str:
     return "﻿" + buf.getvalue()
 
 
-def filename(month: str | None) -> str:
-    """A name that still means something in a Downloads folder six weeks from now."""
-    return f"rise-funding-{month}.csv" if month else "rise-funding.csv"
+def filename(month: str | None, org_name: str | None = None) -> str:
+    """A name that still means something in a Downloads folder six weeks from now.
+
+    It used to be `rise-funding-2026-08.csv` for everybody — the pilot organisation's
+    name, hardcoded, on a file downloaded by whichever nonprofit pressed the button. Now
+    that anyone can sign up that is somebody else's name on their spreadsheet, and it is
+    the same class of mistake as the borrowed "Existing relationship" chip: our data
+    asserting something about them.
+
+    Falls back to `fundworthy-` when the org has not set a name, rather than guessing.
+    """
+    slug = _slug(org_name) or "fundworthy"
+    return f"{slug}-funding-{month}.csv" if month else f"{slug}-funding.csv"
+
+
+def _slug(name: str | None) -> str:
+    """A filename-safe version of whatever they typed.
+
+    Deliberately strict about what survives. This string is placed in a
+    `Content-Disposition` header, where a stray quote, newline or semicolon is not a
+    cosmetic problem but header injection — so anything that is not a letter, digit or
+    dash is dropped rather than escaped.
+    """
+    import re
+    import unicodedata
+
+    if not name:
+        return ""
+    # Fold accents to ASCII so "Fundación" becomes "fundacion" rather than vanishing.
+    folded = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", folded).strip("-").lower()
+    return slug[:60]

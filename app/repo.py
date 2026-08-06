@@ -26,7 +26,7 @@ PUBLIC_SETTINGS = tuple(DEFAULT_SETTINGS.keys())
 _INT_SETTINGS = {"min_award", "min_deadline_runway_days", "max_opportunities",
                  "schedule_hour"}
 _FLOAT_SETTINGS = {"run_budget_usd", "monthly_budget_usd"}
-_BOOL_SETTINGS = {"enabled", "search_beyond_partners"}
+_BOOL_SETTINGS = {"enabled", "schedule_enabled", "search_beyond_partners"}
 _JSON_SETTINGS = {"sectors_active"}
 
 

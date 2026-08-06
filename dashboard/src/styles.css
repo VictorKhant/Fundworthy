@@ -343,7 +343,31 @@ button.text:hover:not(:disabled) { color: var(--accent-deep); }
 .status-sep { color: var(--line); }
 .status-item { display: inline-flex; align-items: center; gap: 8px; }
 .status-actions { margin-left: auto; }
-.status-note { margin: -18px 0 26px; }
+/* How the last search ended.
+
+   It used to be `.status-note`, which was this margin and nothing else — the element
+   carried `muted small`, so the one line explaining why the week's list is short rendered
+   as the same grey fine print as every incidental caption around it. People did not see
+   it, which is the same as it not being there.
+
+   Its own object now, with a marker. The colour of that marker is the whole point: a
+   search that read every funder and found nothing is the product working correctly, and a
+   search that stopped because there was no API key is not, and those two must not look
+   alike. Still deliberately quiet — this is an outcome, not an alert. */
+.run-outcome {
+  display: flex; align-items: flex-start; gap: 10px;
+  margin: -14px 0 26px; padding: 10px 14px;
+  background: var(--panel); border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+  font-size: 14px; color: var(--body);
+}
+.run-outcome-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+  background: var(--accent); margin-top: 6px;
+}
+.run-outcome.attention { border-left-color: var(--clay-deep); }
+.run-outcome.attention .run-outcome-dot { background: var(--clay-deep); }
 
 .minibar {
   width: 64px; height: 5px; border-radius: 999px; background: #E9E5DC;

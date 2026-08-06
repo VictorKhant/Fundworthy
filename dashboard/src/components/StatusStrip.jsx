@@ -8,27 +8,41 @@ import { pacificStamp } from "../api";
 // reason the run stopped are here, not in a log file they would have to be shown how to
 // find. This is the third of the correctness rules at the top of styles.css.
 
+// How the last search ended, in one line. `ok` decides the colour of the marker: sage for
+// "this is a normal outcome", clay for "something needs you". Nothing here is an error
+// dialog — a search that finds nothing is the product working — but a search that could
+// not run should not look the same as one that ran and found a quiet week.
 const STOP_REASONS = {
-  target_met: "Found enough for this week and stopped.",
-  budget: "Hit the spending limit and stopped rather than going over.",
-  sources_exhausted:
-    "Checked every funder on your list. Nothing new above your award floor is a "
-    + "normal week, not a fault.",
-  disabled: "The researcher is switched off.",
-  stopped_by_user: "You stopped it.",
-  error: "Something went wrong — the log below says what.",
-  partial: "Something broke part-way through. What it had already found is above.",
+  target_met: { ok: true, text: "Found enough for this week and stopped." },
+  sources_exhausted: { ok: true, text: "Checked every funder on your list." },
+  budget: { ok: false, text: "Hit your spending limit and stopped rather than going over." },
+  disabled: { ok: false, text: "The researcher is switched off." },
+  stopped_by_user: { ok: true, text: "You stopped it." },
+  error: { ok: false, text: "Something went wrong — the log below says what." },
+  partial: { ok: false, text: "Something broke part-way through. What it had already found is above." },
   // The two that used to be indistinguishable from a quiet week. Both mean the search
   // could not have worked, and both name the one thing to change.
-  no_api_key:
-    "Stopped before reading anything: there was no Claude API key to read with. "
-    + "Add one on Settings.",
-  no_funders:
-    "Stopped without reading anything: there were no funders to search. Fundworthy "
-    + "only reads the funders on your list — add some on Discover funders.",
+  no_api_key: {
+    ok: false,
+    text: "Stopped before reading anything — there was no Claude API key to read with. "
+      + "Add one on Settings.",
+  },
+  no_funders: {
+    ok: false,
+    text: "Stopped without reading anything — there were no funders to search. "
+      + "Fundworthy only reads the funders on your list.",
+  },
 };
 
-export default function StatusStrip({ enabled, run, ceiling, knobsOpen, onToggleKnobs }) {
+const DAY_LABEL = (d) => (d ? d[0].toUpperCase() + d.slice(1) + "s" : "");
+
+// 0 -> "12am", 13 -> "1pm". Short, because it sits in a one-line strip.
+const formatHour = (h) =>
+  h === 0 ? "12am" : h < 12 ? `${h}am` : h === 12 ? "12pm" : `${h - 12}pm`;
+
+export default function StatusStrip({
+  enabled, run, ceiling, knobsOpen, onToggleKnobs, schedule,
+}) {
   const spent = run?.usd_spent || 0;
   const pct = Math.min(100, (spent / (ceiling || 1)) * 100);
 
@@ -43,7 +57,22 @@ export default function StatusStrip({ enabled, run, ceiling, knobsOpen, onToggle
       <section className="statusstrip">
         <span className={`status-state ${enabled ? "" : "off"}`}>
           <span className="status-dot" aria-hidden="true" />
-          {enabled ? "Researcher is on" : "Researcher is off"}
+          {enabled ? "Fundworthy is on" : "Paused"}
+        </span>
+
+        <span className="status-sep" aria-hidden="true">|</span>
+
+        {/* Whether anything runs without them. Worth a permanent line now that it is off
+            unless asked for: "no search happened this week" and "no search is scheduled"
+            are the same empty page and completely different facts. */}
+        <span className="status-item">
+          Weekly search:{" "}
+          <strong>
+            {schedule?.enabled
+              ? `${DAY_LABEL(schedule.day)}${
+                  schedule.hour != null ? ` at ${formatHour(schedule.hour)}` : ""}`
+              : "off"}
+          </strong>
         </span>
 
         <span className="status-sep" aria-hidden="true">|</span>
@@ -75,13 +104,32 @@ export default function StatusStrip({ enabled, run, ceiling, knobsOpen, onToggle
         </span>
       </section>
 
-      {run?.stop_reason && (
-        <p className="status-note muted small">
-          {STOP_REASONS[run.stop_reason] || run.stop_reason}
-          {run.duplicates_skipped > 0 &&
-            ` Skipped ${run.duplicates_skipped} you have already seen this month, for free.`}
-        </p>
-      )}
+      {/* How the last search ended. This was `muted small` — grey 13px fine print,
+          indistinguishable from every other muted line on the page, and set in a
+          stylesheet rule that carried nothing but a margin.
+
+          It is the answer to the question somebody actually arrives with on a thin
+          Thursday: *why is this list short?* "Checked every funder on your list" and
+          "there was no API key to read with" are completely different answers and only
+          one of them is a problem, so it now has a marker whose colour says which, and
+          text you can read without hunting for it. */}
+      {run?.stop_reason && (() => {
+        const outcome = STOP_REASONS[run.stop_reason];
+        return (
+          <p className={`run-outcome ${outcome && !outcome.ok ? "attention" : ""}`}>
+            <span className="run-outcome-dot" aria-hidden="true" />
+            <span>
+              {outcome ? outcome.text : run.stop_reason}
+              {run.duplicates_skipped > 0 && (
+                <span className="muted">
+                  {" "}Skipped {run.duplicates_skipped} you have already seen this month,
+                  for free.
+                </span>
+              )}
+            </span>
+          </p>
+        );
+      })()}
 
       {broken.length > 0 && (
         <div className="notice plain">

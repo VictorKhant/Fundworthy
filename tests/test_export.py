@@ -162,7 +162,46 @@ def test_endpoint_downloads_rather_than_renders(client):
 
 def test_filename_names_the_month_being_downloaded(client):
     res = client.get("/api/opportunities/export.csv?month=2026-07")
-    assert 'filename="rise-funding-2026-07.csv"' in res.headers["content-disposition"]
+    assert 'filename="fundworthy-funding-2026-07.csv"' in res.headers["content-disposition"]
+
+
+def test_the_download_is_named_after_the_organization_that_asked_for_it(client):
+    """It used to be `rise-funding-…` for everybody — the pilot organisation's name,
+    hardcoded, on a file downloaded by whichever nonprofit pressed the button. Same class
+    of mistake as the borrowed "Existing relationship" chip: our data asserting something
+    about them."""
+    client.put("/api/settings", json={"org_name": "Casa Familiar"})
+    res = client.get("/api/opportunities/export.csv?month=2026-07")
+    assert 'filename="casa-familiar-funding-2026-07.csv"' in \
+        res.headers["content-disposition"]
+
+
+def test_a_name_cannot_smuggle_anything_into_the_download_header(client):
+    """The org name is attacker-controlled text going into a Content-Disposition header,
+    where a quote or a newline is header injection rather than a cosmetic problem."""
+    client.put("/api/settings", json={"org_name": 'ev"il\r\nX-Injected: yes'})
+    header = client.get("/api/opportunities/export.csv").headers["content-disposition"]
+
+    assert '"' not in header.split("filename=")[1].strip('"')
+    assert "\n" not in header and "\r" not in header
+    assert "X-Injected" not in header
+
+
+def test_an_unnamed_organization_gets_a_neutral_name_not_a_guess(client):
+    """Blank is a real state — the Settings page says so — and the file should not
+    invent one."""
+    res = client.get("/api/opportunities/export.csv")
+    assert 'filename="fundworthy-funding.csv"' in res.headers["content-disposition"] or \
+        'filename="fundworthy-funding-' in res.headers["content-disposition"]
+
+
+def test_accents_survive_as_readable_ascii(client):
+    """"Fundación" must not become an empty slug, which would silently fall back to the
+    neutral name and lose the org from its own filename."""
+    from app.export import filename
+
+    assert filename("2026-07", "Fundación Comunitaria") == \
+        "fundacion-comunitaria-funding-2026-07.csv"
 
 
 def test_export_never_leaks_the_api_key(client):
