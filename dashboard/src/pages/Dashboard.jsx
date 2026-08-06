@@ -104,14 +104,24 @@ export default function Dashboard({ state, onChange, onGoto }) {
   const dirty = JSON.stringify(draft) !== JSON.stringify(state.settings);
   const set = (k, v) => setDraft({ ...draft, [k]: v });
 
-  async function save() {
+  // `next` lets a caller save a value it has just computed. Without it the only thing
+  // savable is `draft`, and a `set(...)` immediately before a `save()` does not reach it —
+  // React has not re-rendered yet, so the closure still holds the previous draft and the
+  // change is written on some later save or not at all.
+  //
+  // Returns whether it worked, because the caller may want to do something afterwards
+  // (the knobs panel closes itself) and that must not happen when the save failed.
+  async function save(next) {
+    const body = next || draft;
     setSaving(true);
     setSaveError(null);
     try {
-      await api.settings.save(draft);
+      await api.settings.save(body);
       await onChange();
+      return true;
     } catch (e) {
       setSaveError(e.message);
+      return false;
     } finally {
       setSaving(false);
     }
@@ -188,11 +198,28 @@ export default function Dashboard({ state, onChange, onGoto }) {
         </div>
       )}
 
+      {/* The one place `enabled` is reachable from the UI, and it only appears when it is
+          the thing standing in your way.
+
+          There is no "pause everything" checkbox any more — it read as an alternative to
+          the schedule when it is nothing of the sort. But the setting still exists, an
+          operator or an older account can hold it, and a greyed-out button with no
+          control anywhere to ungrey it would be a dead end. So the control lives here,
+          shown only when it is false: an off switch you cannot reach until you have
+          already hit it. */}
       {!draft.enabled && (
-        <div className="notice plain">
-          Fundworthy is paused, so nothing runs and nothing is spent — by hand or on a
-          schedule. Untick "Pause Fundworthy entirely" under "Adjust search settings" to
-          start again.
+        <div className="blocker">
+          <p>
+            Fundworthy is paused, so nothing runs and nothing is spent — by hand or on a
+            schedule.
+          </p>
+          <Busy
+            busy={saving}
+            busyLabel="Starting"
+            onClick={() => { set("enabled", true); save({ ...draft, enabled: true }); }}
+          >
+            Turn it back on
+          </Busy>
         </div>
       )}
 
@@ -234,7 +261,16 @@ export default function Dashboard({ state, onChange, onGoto }) {
           sectors={state.sectors_available}
           dirty={dirty}
           saving={saving}
-          onSave={save}
+          // Wrapped, not passed: `onSave` is wired straight to a button's onClick, so
+          // handing over `save` itself would call save(MouseEvent) — and now that save
+          // takes an optional body, that event would become the body.
+          //
+          // Saving closes the panel. These are settings you change and then get on with
+          // reading the week's list, and leaving four screens of knobs open over the
+          // thing they produce gives no signal that the save landed — the button just
+          // greys out again. Only on success: a failed save keeps the panel open, with
+          // the error and the edits that caused it still on screen.
+          onSave={async () => { if (await save()) setKnobsOpen(false); }}
           onUndo={() => setDraft(state.settings)}
         />
       )}
