@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Organization from "../components/Organization";
-import { Busy } from "../components/Spinner";
+import Spinner, { Busy } from "../components/Spinner";
 import { api } from "../api";
 import { authEnabled, signOutNow } from "../auth";
 
@@ -261,6 +261,143 @@ function OrgPanel({ settings, onChange }) {
   );
 }
 
+// Opting in to sharing the funders you added by hand.
+//
+// Off by default and asked for plainly. A funder list is not private — a name, a grants
+// page and a sector — but "not private" is not the same as "ours to publish on their
+// behalf", and an org that has never been asked has not agreed to anything.
+//
+// The copy is specific about what does and does not leave, because "share my funders"
+// could reasonably be heard as "share my findings", which would be a very different and
+// much worse thing.
+function ShareFunders({ settings, onChange }) {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const on = Boolean(settings.share_funders);
+
+  async function toggle(next) {
+    setSaving(true);
+    setError(null);
+    try {
+      await api.settings.save({ share_funders: next });
+      await onChange();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="panel">
+      <h2>Helping other nonprofits</h2>
+      <p className="settings-lede">
+        Funders you add by hand are research somebody did. Sharing them puts the name and
+        the grants page on other nonprofits' <strong>Discover funders</strong> page, so
+        the next organization in your city does not start from nothing.
+      </p>
+
+      <label className="check">
+        <input type="checkbox" checked={on} disabled={saving}
+               onChange={(e) => toggle(e.target.checked)} />
+        Share the funders I add with other nonprofits
+      </label>
+
+      <ul className="tut-sub">
+        <li>
+          Only funders <strong>you typed in</strong>. The researched lists are already
+          available to everyone, so re-sharing a copy of one adds nothing.
+        </li>
+        <li>
+          Only the name, the web address, the sector and your note.{" "}
+          <strong>Never your findings, your programs, your spending or your name.</strong>
+        </li>
+        <li>
+          Nothing appears until we have checked the page opens and looks like it is about
+          grants. Untick this at any time and yours stop being offered.
+        </li>
+      </ul>
+
+      {saving && <p className="loading-line"><Spinner label="Saving" />Saving…</p>}
+      {error && <div className="notice error">{error}</div>}
+    </section>
+  );
+}
+
+// The moderation queue. Only rendered for whoever `FUNDWORTHY_ADMIN_EMAILS` names, and
+// the server checks again — this component simply is not fetched otherwise.
+//
+// A report hides the funder from everybody the moment it is filed, before anyone looks.
+// So the two buttons here are "it really was bad" and "put it back", and the second one
+// matters: without it a single objection would permanently remove a good funder, and
+// one person's mistake would be indistinguishable from moderation.
+function ReportQueue() {
+  const [reports, setReports] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const [error, setError] = useState(null);
+
+  const load = useCallback(async () => {
+    try {
+      setReports((await api.admin.reports()).reports);
+    } catch {
+      setReports([]);          // not an admin, or the route is not there: show nothing
+    }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  async function resolve(id, uphold) {
+    setBusy(id);
+    setError(null);
+    try {
+      await api.admin.resolve(id, uphold);
+      await load();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (!reports || reports.length === 0) return null;
+
+  return (
+    <section className="panel danger-zone">
+      <h2>Reported funders — {reports.length}</h2>
+      <p className="settings-lede">
+        Each of these is hidden from everyone until you decide. Open the page before you
+        do; the person who reported it is not shown, and neither is the org that added it.
+      </p>
+      {error && <div className="notice error">{error}</div>}
+      <ul className="plain">
+        {reports.map((r) => (
+          <li key={r.id} className="member">
+            <span>
+              <strong>{r.name || "(funder since deleted)"}</strong>
+              {r.url && (
+                <>
+                  {" "}
+                  <a href={r.url} target="_blank" rel="noopener noreferrer">open ↗</a>
+                </>
+              )}
+              {r.reason && <span className="muted small"> — “{r.reason}”</span>}
+            </span>
+            <span className="row">
+              <Busy className="text danger" busy={busy === r.id} busyLabel="Removing"
+                    onClick={() => resolve(r.id, true)}>
+                Take it down
+              </Busy>
+              <Busy className="text" busy={busy === r.id} busyLabel="Restoring"
+                    onClick={() => resolve(r.id, false)}>
+                It is fine — put it back
+              </Busy>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 // Closing your account, at the bottom, behind typing your own address.
 //
 // The confirm step is a typed email rather than an "Are you sure?" because this is not
@@ -403,6 +540,8 @@ export default function Settings({ state, onChange }) {
         </p>
       </section>
 
+      <ShareFunders settings={state.settings} onChange={onChange} />
+      <ReportQueue />
       <DeleteAccount />
 
       <section className="panel">

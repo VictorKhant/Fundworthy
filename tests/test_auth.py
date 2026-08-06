@@ -881,3 +881,59 @@ def test_the_member_routes_are_closed_without_a_token(signed_in):
     assert signed_in.delete("/api/org/members/uid-123").status_code == 401
     assert signed_in.post("/api/org/transfer", json={"uid": "x"}).status_code == 401
     assert signed_in.delete("/api/account").status_code == 401
+
+
+# --- the shared funder pool and its moderation --------------------------------
+
+def test_the_sharing_routes_are_closed_without_a_token(signed_in):
+    assert signed_in.get("/api/directory/shared").status_code == 401
+    assert signed_in.post("/api/directory/shared/report",
+                          json={"from_org": "x", "funder_id": "y"}).status_code == 401
+
+
+def test_moderation_is_hidden_from_ordinary_accounts(signed_in, token_for, monkeypatch):
+    """`FUNDWORTHY_ADMIN_EMAILS` is unset here, and unset must mean nobody — the queue
+    crosses every tenant boundary, so a missing variable cannot be a permissive default.
+
+    404 rather than 403, matching `/api/admin/stats`: an endpoint that says "you are not
+    an admin" has confirmed both that it exists and that being one is a thing to become.
+    """
+    _sign_in(signed_in, token_for)
+    me = auth_header(token_for())
+
+    assert signed_in.get("/api/admin/reports", headers=me).status_code == 404
+    assert signed_in.post("/api/admin/reports/anything", json={"uphold": True},
+                          headers=me).status_code == 404
+    assert signed_in.get("/api/org", headers=me).json()["platform_admin"] is False
+
+
+def test_the_named_operator_can_moderate(signed_in, token_for, monkeypatch):
+    monkeypatch.setenv("FUNDWORTHY_ADMIN_EMAILS", f"someone.else@x.org, {ALLOWED}")
+    _sign_in(signed_in, token_for)
+    me = auth_header(token_for())
+
+    assert signed_in.get("/api/admin/reports", headers=me).status_code == 200
+    assert signed_in.get("/api/org", headers=me).json()["platform_admin"] is True
+    # An id that does not exist is a 404 from the handler, not from the gate.
+    assert signed_in.post("/api/admin/reports/nope", json={"uphold": True},
+                          headers=me).status_code == 404
+
+
+def test_a_report_names_the_funder_it_is_given_not_the_org_asking(signed_in, token_for,
+                                                                  monkeypatch):
+    """The reporting org is recorded server-side from the session and never accepted from
+    the body — the same rule as `current_org`. Who objected to whom is exactly the kind of
+    thing a small nonprofit sector would gossip about."""
+    monkeypatch.setenv("FUNDWORTHY_ADMIN_EMAILS", ALLOWED)
+    _sign_in(signed_in, token_for)
+    me = auth_header(token_for())
+
+    r = signed_in.post("/api/directory/shared/report",
+                       json={"from_org": "org_somebody", "funder_id": "f1",
+                             "reason": "not real"}, headers=me)
+    assert r.status_code == 201
+
+    queued = signed_in.get("/api/admin/reports", headers=me).json()["reports"]
+    assert len(queued) == 1
+    assert queued[0]["reason"] == "not real"
+    assert "reported_by" not in queued[0], "the objector is not part of the queue view"

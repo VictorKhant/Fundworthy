@@ -152,6 +152,14 @@ export const api = {
   directory: {
     read: () => get("/api/directory"),
     import: (key) => post(`/api/directory/${key}/import`),
+    shared: () => get("/api/directory/shared"),
+    report: (from_org, funder_id, reason) =>
+      post("/api/directory/shared/report", { from_org, funder_id, reason }),
+  },
+
+  admin: {
+    reports: () => get("/api/admin/reports"),
+    resolve: (id, uphold) => post(`/api/admin/reports/${id}`, { uphold }),
   },
 
   org: {

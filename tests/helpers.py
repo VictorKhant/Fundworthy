@@ -22,11 +22,16 @@ def seed_starter_funders(path=None) -> None:
     inherit it. It is applied here rather than on import for exactly that reason, and the
     tests that assert on it are asserting about the pilot's configuration.
     """
-    from app.db import (DEFAULT_ORG_ID, REMOVE_LIST_SEED, seed_funders,
+    from app.db import (DEFAULT_ORG_ID, REMOVE_LIST_SEED, import_starter_list,
                         seed_remove_list_only, session)
+    from agent.directory import STARTER_LISTS
 
     with session(path) as conn:
-        seed_funders(conn, DEFAULT_ORG_ID)
+        # The same path a real org uses, deliberately — `seed_funders` is the
+        # pre-tenancy seeder and it copies `Source.warm`, so testing against it would
+        # let the borrowed-relationship bug back in through the fixture.
+        for lst in STARTER_LISTS:
+            import_starter_list(conn, lst.key, DEFAULT_ORG_ID)
         seed_remove_list_only(conn, DEFAULT_ORG_ID)
         for name, reason in REMOVE_LIST_SEED.items():
             conn.execute(

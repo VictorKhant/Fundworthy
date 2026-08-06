@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api } from "../api";
+import { api, SECTOR_LABELS } from "../api";
 import Funders from "../components/Funders";
 import Spinner, { Busy } from "../components/Spinner";
 
@@ -90,6 +90,135 @@ function StarterLists({ onChange }) {
   );
 }
 
+// Funders other nonprofits typed in and chose to share.
+//
+// Everything here is somebody else's suggestion and the page says so plainly, twice: in
+// the heading and on every row. There is no tick, no "verified" badge, no score. What we
+// can honestly say is that the page opened on a particular date and mentions grants —
+// that sentence comes from the server as `evidence` and is printed verbatim — plus the
+// 990 if the funder has one on file. Whether it is worth an application is a judgement
+// nobody here can make for them, and dressing a reachability check up as approval is
+// exactly the accuracy shortcut §8 forbids.
+function SharedFunders({ onChange }) {
+  const [shared, setShared] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const [error, setError] = useState(null);
+  const [done, setDone] = useState({});
+
+  const load = useCallback(async () => {
+    try {
+      setShared((await api.directory.shared()).funders);
+    } catch (e) {
+      setError(e.message);
+    }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  async function add(f) {
+    setBusy(`add:${f.id}`);
+    setError(null);
+    try {
+      await api.funders.create({
+        name: f.name, url: f.url, sector: f.sector,
+        funder_type: f.funder_type, notes: f.notes,
+      });
+      setDone({ ...done, [f.id]: "added" });
+      await onChange();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function report(f) {
+    const reason = window.prompt(
+      `Report "${f.name}"?\n\n` +
+      "Use this if the page is wrong, misleading, or not something that should be put " +
+      "in front of a nonprofit.\n\nIt is hidden from everyone straight away while it is " +
+      "looked at.\n\nWhat is wrong with it? (optional)");
+    if (reason === null) return;
+    setBusy(`report:${f.id}`);
+    setError(null);
+    try {
+      await api.directory.report(f.from_org, f.id, reason);
+      setDone({ ...done, [f.id]: "reported" });
+      await load();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (shared !== null && shared.length === 0) return null;
+
+  return (
+    <section className="card">
+      <h2>Suggested by other nonprofits</h2>
+      <p className="muted">
+        Funders other organizations added by hand and chose to share. <strong>We have
+        not researched these</strong> — we have only checked that the page opens and
+        looks like it is about grants. Open the link before you rely on any of it.
+      </p>
+
+      {error && <div className="notice error">{error}</div>}
+      {!shared && (
+        <p className="loading-line">
+          <Spinner label="Loading suggestions" />
+          Loading…
+        </p>
+      )}
+
+      <div className="directory">
+        {(shared || []).map((f) => (
+          <div key={f.id} className="directory-row">
+            <div>
+              <strong>{f.name}</strong>{" "}
+              <span className="muted small">{SECTOR_LABELS[f.sector] || f.sector}</span>
+              {f.added_by_count > 1 && (
+                <span className="chip">on {f.added_by_count} lists</span>
+              )}
+              {f.url && (
+                <p className="small">
+                  <a href={f.url} target="_blank" rel="noopener noreferrer">
+                    {f.url.replace(/^https?:\/\//, "").slice(0, 60)} ↗
+                  </a>
+                </p>
+              )}
+              <p className="muted small">
+                {f.evidence}
+                {f.checked_at && ` Checked ${f.checked_at.slice(0, 10)}.`}
+                {f.form_990_year
+                  ? ` IRS 990 on file for ${f.form_990_year}.`
+                  : " No IRS 990 found, which is normal for a public agency."}
+              </p>
+            </div>
+            <span className="row">
+              {done[f.id] ? (
+                <span className="muted small">
+                  {done[f.id] === "added" ? "On your list" : "Reported"}
+                </span>
+              ) : (
+                <>
+                  <Busy className="secondary" busy={busy === `add:${f.id}`}
+                        busyLabel="Adding" onClick={() => add(f)}>
+                    Add to my list
+                  </Busy>
+                  <Busy className="text danger" busy={busy === `report:${f.id}`}
+                        busyLabel="Reporting" onClick={() => report(f)}>
+                    Report
+                  </Busy>
+                </>
+              )}
+            </span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function FindMore() {
   return (
     <section className="card soon">
@@ -126,6 +255,7 @@ export default function Discover({ state, onChange }) {
       </header>
 
       <StarterLists onChange={onChange} />
+      <SharedFunders onChange={onChange} />
       <FindMore />
       <Funders
         funders={state.funders}

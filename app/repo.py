@@ -27,7 +27,7 @@ _INT_SETTINGS = {"min_award", "min_deadline_runway_days", "max_opportunities",
                  "schedule_hour"}
 _FLOAT_SETTINGS = {"run_budget_usd", "monthly_budget_usd"}
 _BOOL_SETTINGS = {"enabled", "schedule_enabled", "search_beyond_partners",
-                  "onboarding_done"}
+                  "onboarding_done", "share_funders"}
 _JSON_SETTINGS = {"sectors_active"}
 
 
@@ -296,8 +296,8 @@ def create_funder(conn, data: dict, *, org_id: str) -> dict:
     conn.execute(
         """INSERT INTO funders(
                org_id, id, name, url, sector, funder_type, warm, active, tier,
-               confidence, programs, notes, created_at, updated_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               confidence, programs, notes, added_by, created_at, updated_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'user',?,?)
            ON CONFLICT(org_id, id) DO UPDATE SET
                url=excluded.url, sector=excluded.sector,
                funder_type=excluded.funder_type, warm=excluded.warm,
@@ -662,3 +662,116 @@ def _nullable_int(value) -> int | None:
         return int(float(value))
     except (TypeError, ValueError):
         return None
+
+
+# --- funders other nonprofits have shared ---------------------------------------
+#
+# The pool is every hand-added funder belonging to an org that has ticked "share the
+# funders I add", minus anything reported, minus anything whose page did not load.
+#
+# Deduplicated on the web address, because two nonprofits adding the same foundation is
+# the common case and the expected one — and the count of how many added it is the only
+# trust signal here that comes from people rather than from a fetch. It is shown ("added
+# by 3 nonprofits") and no org is ever named: who funds whom is exactly the kind of thing
+# a small nonprofit sector gossips about, and this feature is not here to leak it.
+
+def shared_funders(conn, *, org_id: str, limit: int = 60) -> list[dict]:
+    """Funders other orgs are offering, that this org does not already have.
+
+    `org_id` is excluded from the results rather than filtered afterwards: seeing your
+    own additions listed back to you as somebody else's suggestion is confusing, and
+    "add" would be a no-op.
+    """
+    mine = {(r["url"] or "").strip().rstrip("/").casefold()
+            for r in conn.execute("SELECT url FROM funders WHERE org_id=?", (org_id,))}
+
+    rows = conn.execute(
+        """SELECT f.id, f.org_id, f.name, f.url, f.sector, f.funder_type, f.notes,
+                  f.ein, f.form_990_url, f.form_990_year, f.form_990_total_revenue,
+                  f.check_note, f.checked_at
+           FROM funders f
+           JOIN settings s
+             ON s.org_id = f.org_id AND s.key = 'share_funders' AND s.value = '1'
+           WHERE f.added_by = 'user'
+             AND f.org_id <> ?
+             AND f.url IS NOT NULL AND f.url <> ''
+             AND f.check_ok = 1
+             AND NOT EXISTS (
+                   SELECT 1 FROM funder_reports r
+                   WHERE r.funder_org = f.org_id AND r.funder_id = f.id
+                     AND r.status IN ('open', 'upheld'))
+           ORDER BY f.name COLLATE NOCASE""",
+        (org_id,))
+
+    out: dict[str, dict] = {}
+    for r in rows:
+        key = (r["url"] or "").strip().rstrip("/").casefold()
+        if key in mine:
+            continue
+        if key in out:
+            out[key]["added_by_count"] += 1
+            continue
+        out[key] = {
+            "id": r["id"], "from_org": r["org_id"],
+            "name": r["name"], "url": r["url"], "sector": r["sector"],
+            "funder_type": r["funder_type"], "notes": (r["notes"] or "")[:280],
+            "ein": r["ein"], "form_990_url": r["form_990_url"],
+            "form_990_year": r["form_990_year"],
+            "form_990_total_revenue": r["form_990_total_revenue"],
+            # Evidence, verbatim, with the date it was true. Never a badge.
+            "evidence": r["check_note"], "checked_at": r["checked_at"],
+            "added_by_count": 1,
+        }
+        if len(out) >= limit:
+            break
+    return list(out.values())
+
+
+def report_shared_funder(conn, *, funder_org: str, funder_id: str,
+                         reported_by: str, reason: str) -> dict:
+    """Object to a shared funder. Hides it from the pool at once, pending review.
+
+    Idempotent per reporting org, so a double-click does not stack two reports against
+    the same entry and make one objection look like a pattern.
+    """
+    import hashlib
+
+    from .db import now_iso
+
+    existing = conn.execute(
+        "SELECT id FROM funder_reports WHERE funder_org=? AND funder_id=? "
+        "AND reported_by=? AND status='open'",
+        (funder_org, funder_id, reported_by)).fetchone()
+    if existing:
+        return {"report_id": existing["id"], "already": True}
+
+    rid = hashlib.sha256(
+        f"{funder_org}:{funder_id}:{reported_by}:{now_iso()}".encode()).hexdigest()[:16]
+    conn.execute(
+        "INSERT INTO funder_reports(id, funder_org, funder_id, reported_by, reason, "
+        "created_at, status) VALUES(?,?,?,?,?,?,'open')",
+        (rid, funder_org, funder_id, reported_by, reason.strip()[:500], now_iso()))
+    return {"report_id": rid, "already": False}
+
+
+def open_reports(conn) -> list[dict]:
+    """The moderation queue, for an install admin. Crosses every tenant boundary, so the
+    route that calls this is gated by `FUNDWORTHY_ADMIN_EMAILS` and nothing else."""
+    return [dict(r) for r in conn.execute(
+        """SELECT r.id, r.funder_org, r.funder_id, r.reason, r.created_at,
+                  f.name, f.url, f.notes
+           FROM funder_reports r
+           LEFT JOIN funders f ON f.org_id = r.funder_org AND f.id = r.funder_id
+           WHERE r.status = 'open'
+           ORDER BY r.created_at""")]
+
+
+def resolve_report(conn, report_id: str, *, uphold: bool, by: str) -> bool:
+    """Take it down for good, or dismiss the report and put it back in the pool."""
+    from .db import now_iso
+
+    cur = conn.execute(
+        "UPDATE funder_reports SET status=?, resolved_at=?, resolved_by=? "
+        "WHERE id=? AND status='open'",
+        ("upheld" if uphold else "dismissed", now_iso(), by, report_id))
+    return cur.rowcount > 0
