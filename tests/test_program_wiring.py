@@ -177,13 +177,13 @@ def test_the_scoring_prompt_carries_her_weights_and_nothing_else():
     """
     from agent.score import WEIGHTS, _SCORING_RULES
 
-    assert WEIGHTS == {"fit": 40, "award": 35, "timing": 25}
+    assert WEIGHTS == {"fit": 60, "award": 30, "timing": 10}
     assert sum(WEIGHTS.values()) == 100
 
     # Matched on the pair, not on the alignment: the components are padded into a column
     # and a whitespace change is not a regression.
-    for component, weight in (("fit_score", 40), ("award_score", 35),
-                              ("timing_score", 25)):
+    for component, weight in (("fit_score", 60), ("award_score", 30),
+                              ("timing_score", 10)):
         assert re.search(rf"{component}\s*,?\s+0-{weight}\b", _SCORING_RULES), \
             f"the prompt does not ask for {component} out of {weight}"
 

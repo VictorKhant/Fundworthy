@@ -59,6 +59,28 @@ const STOP_REASONS = {
   },
 };
 
+// The run's own notes, minus its bookkeeping.
+//
+// `run.notes` is where the pipeline writes anything it wants a person to know — a ticked
+// program that matched no California funding category and so searched nothing, a budget
+// ceiling, a model call that failed on every page. **None of it was rendered anywhere.**
+// It reached `/api/state` as `latest_run.notes` and stopped, so the one place a run
+// explains itself was invisible, and a search that broke identically 164 times looked
+// the same as a quiet week.
+//
+// Two shapes are dropped because the stage boxes already say it better, and only those
+// two — an unrecognised note is SHOWN. That direction is deliberate: a new note that
+// nobody thought to whitelist should look noisy, never be swallowed. Note that
+// "Sources: shipped registry (could not read the funders list…)" is not matched by the
+// first pattern and is therefore shown, which is the whole point — it is the one
+// "Sources:" line that means something went wrong.
+const ROUTINE_NOTE = [
+  /^Sources: \d+ from the funders list/,
+  /^Remove list: \d+ funder/,
+];
+const worthReading = (notes) =>
+  (notes || []).filter((n) => !ROUTINE_NOTE.some((re) => re.test(n)));
+
 // The page a blocker sends you to, named the way the sidebar names it.
 const PAGE_LABEL = {
   settings: "Open Settings",
@@ -81,7 +103,12 @@ export default function Dashboard({ state, onChange, onGoto }) {
     () => localStorage.getItem(HELPER_KEY) === "1"
   );
 
-  useEffect(() => setDraft(state.settings), [state.settings]);
+  // By VALUE, not by reference. `state.settings` is a fresh object literal on every
+  // poll response — same shape as `dirty` below, which has to make the same comparison
+  // for the same reason. Depending on the reference itself reset unsaved knob edits on
+  // any unrelated poll tick (ticking a program chip elsewhere on the page was enough),
+  // silently, mid-edit, with no warning — the settings just snapped back.
+  useEffect(() => setDraft(state.settings), [JSON.stringify(state.settings)]);
 
   const { live, run, isRunning, start, stop, error: runError } = useRun({
     latestRun: state.latest_run,
@@ -372,6 +399,19 @@ export default function Dashboard({ state, onChange, onGoto }) {
           </p>
         );
       })()}
+
+      {/* What the search itself reported, in its own words. Below the outcome line
+          because the outcome is the headline and this is the detail behind it. */}
+      {worthReading(run?.notes).length > 0 && (
+        <div className="run-notes">
+          <p className="run-notes-head">What this search reported</p>
+          <ul>
+            {worthReading(run.notes).map((note, i) => (
+              <li key={i}>{note}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* "Nothing to review" has several very different causes and used to have one
           sentence. A search that ran and filtered everything out is a real, ordinary

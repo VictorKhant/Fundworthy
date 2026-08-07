@@ -47,6 +47,13 @@ from .sources import Source, Tier, active_sources, unconfirmed_sources
 
 log = logging.getLogger("rise")
 
+# How many candidates in a row may fail before the run gives up on the whole list. Five
+# rather than one, because a single unreadable page is ordinary and must not abort a
+# search; five identical failures in a row is a broken key, a bad model id or an outage,
+# and every further attempt spends time to learn nothing new. See the circuit breaker in
+# `evaluate`.
+CONSECUTIVE_ERROR_LIMIT = 5
+
 
 def _emit_funnel(run: RunLog, *, survivors: int | None = None,
                  kept: int | None = None) -> None:
@@ -108,7 +115,27 @@ def resolve_sources(cfg: Config, run: RunLog) -> tuple[list[Source], list[Source
         )
         return sources, skipped
 
-    run.notes.append("Sources: shipped registry (no funders database found)")
+    # `sources_from_db` returns None for two very different reasons: no database file
+    # yet (a fresh clone — expected), or the database exists but the read itself
+    # failed (already logged there). Telling them apart here, once, is what stops the
+    # run notes from claiming "no funders database found" when the real cause was a
+    # transient read error against an org's actual funder list. Wrapped the same way
+    # `excluded_funders` above treats app.db as optional — an agent/-only checkout
+    # with no app package must still get the (more conservative) default message.
+    db_exists = False
+    try:
+        from app.db import db_path as _db_path
+        db_exists = _db_path().exists()
+    except Exception:  # noqa: BLE001
+        pass
+
+    if db_exists:
+        run.notes.append(
+            "Sources: shipped registry (could not read the funders list — see the "
+            "technical log)"
+        )
+    else:
+        run.notes.append("Sources: shipped registry (no funders database found)")
     return active_sources(cfg.max_tier), unconfirmed_sources(cfg.max_tier)
 
 
@@ -289,8 +316,20 @@ async def crawl(cfg: Config, run: RunLog,
                 # Already aggregated by the adapter, so these are counts without rows.
                 # The stage boxes show them in the totals and say the detail is not
                 # available rather than inventing one.
+                #
+                # `candidates_parsed` counts them too, and it did not, which made stage 1
+                # contradict itself on screen. The box reads "came in" from
+                # `candidates_parsed` and "set aside" from came-minus-through, while the
+                # breakdown underneath comes from `rejected_by_filter` — so a run where
+                # the CA portal turned away 118 records off-mission showed "47 set aside"
+                # above a list whose first two rows already summed past 118. Both numbers
+                # were right about different populations, which is the one way a panel
+                # built to explain a thin week can make it less explicable. A record the
+                # adapter refused *was* a candidate we considered and declined, for free,
+                # exactly like a page that fails `apply_filters`.
                 for key, count in result.rejected.items():
                     run.rejected_by_filter[key] = run.rejected_by_filter.get(key, 0) + count
+                    run.candidates_parsed += count
                 for page in result.pages:
                     consider(page, source)
 
@@ -454,6 +493,11 @@ def evaluate(survivors: list[tuple[ParsedPage, Source]], cfg: Config, run: RunLo
 
     out: list[Opportunity] = []
     scoring_errors = 0
+    # Consecutive, not total: a handful of odd pages across a long list is ordinary, and
+    # the same failure on every page in a row is not. Only the second one is worth
+    # abandoning a run over. Reset by any candidate that completes its intended path,
+    # including one triage rejects — a working model call proves the pipeline is alive.
+    consecutive_errors = 0
     # The two denominators the boxes divide by, sent once before the loop so stage 2's
     # bar has a total to fill against from its first tick rather than after its first
     # candidate.
@@ -478,6 +522,9 @@ def evaluate(survivors: list[tuple[ParsedPage, Source]], cfg: Config, run: RunLo
             page, source.funder, int(source.tier),
             [p for p in source.programs if p in cfg.programs_active],
         )
+        # Which tier is working, so a failure is recorded against the box that was
+        # actually running when it happened rather than always against scoring.
+        phase = 2
         try:
             run.triaged += 1
             _emit_funnel(run, survivors=len(ranked), kept=len(out))
@@ -489,8 +536,10 @@ def evaluate(survivors: list[tuple[ParsedPage, Source]], cfg: Config, run: RunLo
                 run.reject(2, "triage_not_an_opportunity", funder=source.funder,
                            title=candidate.title, url=candidate.source_url,
                            detail=reason)
+                consecutive_errors = 0
                 continue
             run.scored += 1
+            phase = 3
             _emit_funnel(run, survivors=len(ranked), kept=len(out))
             opp = score_one(candidate, source, cfg, budget)        # tier 3 — Sonnet
             # Post-scoring deadline guard: §7 rejects passed deadlines, but the
@@ -501,6 +550,7 @@ def evaluate(survivors: list[tuple[ParsedPage, Source]], cfg: Config, run: RunLo
                            title=opp.title, url=opp.source_url,
                            detail=f"closed {opp.deadline.isoformat()}")
                 log.info("  dropped (deadline %s passed): %s", opp.deadline, opp.title[:40])
+                consecutive_errors = 0
                 continue
 
             # Not a reject — it is kept and shown — but the accuracy gate stripping a
@@ -514,6 +564,7 @@ def evaluate(survivors: list[tuple[ParsedPage, Source]], cfg: Config, run: RunLo
                 ))
             kinds[opp.source_kind] += 1
             out.append(opp)
+            consecutive_errors = 0
             _emit_funnel(run, survivors=len(ranked), kept=len(out))
         except BudgetExceeded as exc:
             run.stop_reason = StopReason.BUDGET
@@ -522,12 +573,46 @@ def evaluate(survivors: list[tuple[ParsedPage, Source]], cfg: Config, run: RunLo
             break
         except Exception as exc:  # noqa: BLE001
             # One candidate failing to score must not discard the ones already
-            # scored, or the ones after it. The budget ceiling is the only thing
-            # that stops this loop.
+            # scored, or the ones after it.
             scoring_errors += 1
-            log.warning("  ! could not score %s — %r", page.title[:40], exc)
+            consecutive_errors += 1
+            # **The error goes where every other set-aside reason goes.** It used to be
+            # a `log.warning` plus one line in `run.notes`, and nothing in the dashboard
+            # renders either — so a run whose every triage call raised showed a stage box
+            # reading "164 came in, 0 went through, $0.0000 spent" above the words
+            # "Nothing was set aside at this step". The pipeline knew exactly what had
+            # gone wrong 164 times and had nowhere to say it.
+            #
+            # Recorded against `phase`, so a failing triage is stage 2's problem and a
+            # failing score is stage 3's, and carrying the exception text as the row's
+            # detail — the same slot that holds "$4,000 < $10,000".
+            run.reject(phase, "triage_error" if phase == 2 else "scoring_error",
+                       funder=source.funder, title=candidate.title,
+                       url=candidate.source_url,
+                       detail=f"{type(exc).__name__}: {exc}")
+            log.warning("  ! tier %d failed on %s — %r", phase, page.title[:40], exc)
             if scoring_errors == 1:
-                run.notes.append(f"SCORING ERROR ({source.funder}): {exc!r}")
+                run.notes.append(
+                    f"Tier {phase} could not read {source.funder}: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+            # A circuit breaker, because the alternative is what happened: an expired key
+            # or a bad model id fails identically on every candidate, and this loop
+            # cheerfully walked all 164 of them one API error at a time. Nothing about the
+            # 164th attempt was going to tell anybody more than the 5th did, and a run
+            # that grinds through a whole funder list to produce nothing looks — from the
+            # outside — exactly like a run that worked and found a quiet week.
+            if consecutive_errors >= CONSECUTIVE_ERROR_LIMIT:
+                run.stop_reason = StopReason.ERROR
+                run.notes.append(
+                    f"Stopped after {consecutive_errors} pages in a row could not be "
+                    f"read. This is not a quiet week — something is wrong with the "
+                    f"search itself, and the reason on each one is the same: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                log.error("Stopping: %d consecutive failures at tier %d — %r",
+                          consecutive_errors, phase, exc)
+                break
             continue
 
     if scoring_errors:

@@ -276,7 +276,6 @@ function OrgPanel({ settings, onChange }) {
   const [draft, setDraft] = useState({
     org_name: settings.org_name || "",
     org_location: settings.org_location || "",
-    max_effort_hours: settings.max_effort_hours ?? 10,
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -285,24 +284,18 @@ function OrgPanel({ settings, onChange }) {
     setDraft({
       org_name: settings.org_name || "",
       org_location: settings.org_location || "",
-      max_effort_hours: settings.max_effort_hours ?? 10,
     });
-  }, [settings.org_name, settings.org_location, settings.max_effort_hours]);
+  }, [settings.org_name, settings.org_location]);
 
   const dirty =
     draft.org_name !== (settings.org_name || "") ||
-    draft.org_location !== (settings.org_location || "") ||
-    Number(draft.max_effort_hours) !== Number(settings.max_effort_hours ?? 10);
+    draft.org_location !== (settings.org_location || "");
 
   async function save() {
     setSaving(true);
     setError(null);
     try {
-      await api.settings.save({
-        ...draft,
-        // The number input hands back a string, and the API validates an int.
-        max_effort_hours: Number(draft.max_effort_hours) || 10,
-      });
+      await api.settings.save(draft);
       await onChange();
     } catch (e) {
       setError(e.message);
@@ -344,25 +337,6 @@ function OrgPanel({ settings, onChange }) {
           <span className="muted small">
             Only decides which funders we show you first. It never hides a grant from
             you — that is the funder list's job, and yours.
-          </span>
-        </label>
-
-        {/* Not cosmetic: this is a quarter of the score. It used to be the constant 10
-            inside the scoring prompt — one nonprofit's staffing, applied to everybody —
-            so an org with more capacity had every large application marked infeasible
-            and an org with less had them marked comfortable. */}
-        <label className="field">
-          <span>Hours you can spend on one application</span>
-          <input
-            type="number"
-            min="1"
-            max="200"
-            value={draft.max_effort_hours}
-            onChange={(e) => setDraft({ ...draft, max_effort_hours: e.target.value })}
-          />
-          <span className="muted small">
-            Everyone's time added together. A grant that would take longer than this is
-            ranked lower — it is a quarter of the score.
           </span>
         </label>
       </div>

@@ -199,9 +199,9 @@ def _preamble(cfg: Config) -> str:
 
     This was a hardcoded string — "a nonprofit working across San Diego County and
     Imperial County" — sent for every tenant. `org_name` and `org_location` existed in
-    the settings table and reached the dashboard and stopped there. Program fit is 40 of
-    the 100 points, so every nonprofit outside San Diego had the largest component of its
-    score decided against the wrong region: multi-tenancy reached the database and the UI
+    the settings table and reached the dashboard and stopped there. Program fit is the
+    single largest component of the score, so every nonprofit outside San Diego had it
+    decided against the wrong region: multi-tenancy reached the database and the UI
     and never reached the prompt. It was the single biggest reason nothing scored well.
 
     An empty field is passed through as an empty field. "A nonprofit" with no region
@@ -215,8 +215,10 @@ def _preamble(cfg: Config) -> str:
     distribution down and compresses it.
 
     The hours figure is the org's own (`max_effort_hours`) for the same reason the region
-    is. It was the constant 10, which is one nonprofit's staffing applied to every tenant,
-    and 25 of the 100 points are measured against it.
+    is. It was the constant 10, which is one nonprofit's staffing applied to every tenant.
+    It now feeds `timing_score`, 10 of the 100 points — cut down from 25 because the
+    model's own per-page effort estimate is the least reliable of the three components,
+    and is no longer worth a quarter of the score on its own.
 
     `cfg` is required. It was `Config | None` with a fallback per field, which advertised
     a call shape nothing used and let the San Diego default survive in three places.
@@ -296,9 +298,9 @@ language they can act on, and fill in the funder profile they asked for.
 You do NOT return a total. You return three components and we add them up, so score each
 one on its own and do not adjust one to compensate for another.
 
-  fit_score      0-40   program fit
-  award_score    0-35   award size, against their floor
-  timing_score   0-25   can this application realistically be finished in time
+  fit_score      0-60   program fit
+  award_score    0-30   award size, against their floor
+  timing_score   0-10   can this application realistically be finished in time
 
 **Any component you have no evidence for must be null, not zero.**
 
@@ -306,8 +308,8 @@ This is the most important instruction here. A funder that does not publish an a
 amount has not offered a small grant — it has published a page that does not mention
 money, which is the ordinary case. Scoring that zero says "this is a bad grant" about
 every terse funder page on the internet, and it is what made this list unreadable: the
-components that go missing are worth 60 of the 100 points, so nothing could ever clear
-40. A null takes that component out of the total instead of failing it. Use it freely
+components that go missing are worth 40 of the 100 points, so nothing could ever clear
+60. A null takes that component out of the total instead of failing it. Use it freely
 and without apology; it costs the opportunity nothing.
 
   award_score is null   when the page states no award amount, no range and no typical
@@ -315,37 +317,37 @@ and without apology; it costs the opportunity nothing.
   timing_score is null  when the page gives no deadline and no rolling-basis statement,
                         so there is no calendar to judge the application against.
   fit_score is NEVER null. You always have the page and their programs in front of you,
-                        so fit is always answerable — even if the answer is 3.
+                        so fit is always answerable — even if the answer is 4.
 
---- fit_score, 0-40 ---
+--- fit_score, 0-60 ---
 
-How well this funder's stated priorities match one of the programs listed above. 40 is a
-funder whose own page describes what this organization does. 20 is a plausible but
-unstated fit — a general operating funder in their field. 5 is a funder who would have
+How well this funder's stated priorities match one of the programs listed above. 60 is a
+funder whose own page describes what this organization does. 30 is a plausible but
+unstated fit — a general operating funder in their field. 8 is a funder who would have
 to stretch. 0 is a different field entirely.
 
 Judge against the programs above and nothing else. If the organization's region is
 stated in the preamble, a funder that restricts to somewhere else is a low fit; if no
 region is stated, do not assume one and do not penalise a national funder for it.
 
---- award_score, 0-35, or null ---
+--- award_score, 0-30, or null ---
 
 Against their floor, which is given below. Use these anchors, and interpolate:
 
-  at the floor          ~10 / 35
-  three times the floor ~25 / 35
-  ten times the floor   ~35 / 35
-  below the floor         0 / 35   (rare — these are usually filtered out before you)
+  at the floor          ~9 / 30
+  three times the floor ~21 / 30
+  ten times the floor   ~30 / 30
+  below the floor         0 / 30   (rare — these are usually filtered out before you)
 
 Use the typical or the maximum award, whichever the page actually states; if it states a
 range, use the midpoint. A larger award is worth more because the hours cost the same
 either way — that is the whole reason this component exists.
 
---- timing_score, 0-25, or null ---
+--- timing_score, 0-10, or null ---
 
 Judge the application against the deadline, not in the abstract. A grant closing in three
 weeks that needs an audited financial statement, three letters of support and a board
-resolution is not a 25; a two-page letter of interest due in two months is. A rolling
+resolution is not a 10; a two-page letter of interest due in two months is. A rolling
 deadline with a light application is a high score, because there is no calendar pressure
 at all. Say so in the rationale when the calendar is the problem.
 
@@ -487,13 +489,13 @@ def scoring_schema(program_slugs: list[str]) -> dict:
             # unanswerable from the stored data.
             "fit_score": {
                 "type": "integer",
-                "description": "0-40, program fit. NEVER null — you always have the page "
+                "description": "0-60, program fit. NEVER null — you always have the page "
                                "and their programs, so fit is always answerable.",
             },
             "award_score": {
                 "type": ["integer", "null"],
                 "description": (
-                    "0-35, award size against their floor. NULL when the page states no "
+                    "0-30, award size against their floor. NULL when the page states no "
                     "amount, no range and no typical award — a funder that does not "
                     "publish a figure has not offered a small grant. Never estimate one."
                 ),
@@ -501,7 +503,7 @@ def scoring_schema(program_slugs: list[str]) -> dict:
             "timing_score": {
                 "type": ["integer", "null"],
                 "description": (
-                    "0-25, can the application be finished in time. NULL when the page "
+                    "0-10, can the application be finished in time. NULL when the page "
                     "gives no deadline and no rolling-basis statement, so there is no "
                     "calendar to judge against."
                 ),
@@ -674,7 +676,15 @@ def scoring_schema(program_slugs: list[str]) -> dict:
 # The weights, as data. They were three lines of English inside a prompt and nothing in
 # the codebase enforced them, so the "0-100 weighted score" was really one holistic guess
 # by the model at a sum it had been described in prose.
-WEIGHTS: dict[str, int] = {"fit": 40, "award": 35, "timing": 25}
+#
+# Rebalanced from the original 40/35/25 (fit/award/timing) to 60/30/10. Timing's 25 points
+# leaned heavily on `estimated_effort_hours`, a per-page guess the model makes with no
+# ground truth to check it against — noisy in a way award and fit are not, since a page
+# either states a number or it doesn't. Fit is also the one component that is never null:
+# the page and the org's own programs are always in front of the model, so it is the axis
+# every candidate can actually be judged on. Putting most of the score there, not on a
+# rougher estimate, is the more defensible split.
+WEIGHTS: dict[str, int] = {"fit": 60, "award": 30, "timing": 10}
 
 
 @dataclass(frozen=True)
@@ -700,12 +710,18 @@ def compose_score(parts: ScoreParts) -> int:
 
     This is the fix for the thing that made the whole list unreadable.
 
-    The rubric spends 35 points on award size and 25 on whether the application can be
-    finished before the deadline. Both need the funder to have published something, and
-    `_SCORING_RULES` says plainly that most funders publish neither. So for the median
-    candidate 60 of the 100 points were unearnable, every score was really out of 40, and
-    the list topped out at 42 — which reads as "we found you nothing good" when what
-    actually happened is that grant-makers write terse web pages.
+    Award size and timing both need the funder to have published something, and
+    `_SCORING_RULES` says plainly that most funders publish neither — so for a run where
+    neither shows up, the whole score still has to mean something. That is the general
+    problem this function solves, independent of how `WEIGHTS` splits the 100 points.
+
+    It was found the hard way: under the original 40/35/25 (fit/award/timing) split, 60 of
+    the 100 points were conditioned on evidence most pages do not carry, so for the median
+    candidate every score was really out of 40 and a real run topped out at 42 — which
+    reads as "we found you nothing good" when what actually happened is that grant-makers
+    write terse web pages. `WEIGHTS` now puts most of the score (60) on fit, which is
+    never null, precisely so that gap matters less than it used to — but renormalisation is
+    the actual fix, and it holds for whatever the split is.
 
     Scoring a missing component zero is a claim: it says this opportunity was tested on
     award size and failed. It was not tested. Leaving it out of the denominator says the
@@ -713,8 +729,8 @@ def compose_score(parts: ScoreParts) -> int:
     §6's "amount not stated" rather than a guess. We do not invent the number, and we do
     not punish its absence either.
 
-        fit 28/40, award null, timing 9/25
-          -> earned 37, available 65, score 57
+        fit 42/60, award null, timing 7/10
+          -> earned 49, available 70, score 70
 
     A run where nothing is knowable but fit still produces a usable ordering, because fit
     alone is renormalised to 0-100 and candidates are then compared on the one axis every

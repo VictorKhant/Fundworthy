@@ -61,6 +61,22 @@ export default function SearchSettings({
             onChange={(e) => set("run_budget_usd", Number(e.target.value))}
           />
         </Knob>
+
+        {/* Moved here from the Organization panel — this decides part of the score
+            (agent/score.py: WEIGHTS["timing"]), the same as the other four knobs in
+            this row, not a fact about who the org is. */}
+        <Knob
+          label="Hours you can spend on one application"
+          hint="Everyone's time added together. A grant that would cost more than this scores lower on timing."
+        >
+          <input
+            type="number"
+            min="1"
+            max="200"
+            value={draft.max_effort_hours}
+            onChange={(e) => set("max_effort_hours", Number(e.target.value))}
+          />
+        </Knob>
       </div>
 
       {/* "Where to look" — four sector checkboxes — used to sit here, and it is gone

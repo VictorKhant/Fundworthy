@@ -355,6 +355,25 @@ def test_funder_crud_and_deactivation(client):
     assert target["id"] in after, "but still on the list — the relationship is a record"
 
 
+def test_blocking_a_funder_through_the_api_actually_persists(client):
+    # Regression test: `FunderIn` once had no `blocked` field, so Pydantic silently
+    # dropped it from the request body and the dashboard's Block button did nothing —
+    # a 200 response with the funder unchanged. This goes through the real HTTP layer
+    # (unlike repo-level tests, which call `repo.update_funder` directly and would
+    # never have caught a gap in the request model).
+    target = client.get("/api/funders").json()["funders"][0]
+
+    r = client.put(f"/api/funders/{target['id']}", json={"blocked": True})
+    assert r.status_code == 200
+    assert r.json()["funder"]["blocked"] is True
+
+    after = {f["id"]: f for f in client.get("/api/funders").json()["funders"]}
+    assert after[target["id"]]["blocked"] is True
+
+    r = client.put(f"/api/funders/{target['id']}", json={"blocked": False})
+    assert r.json()["funder"]["blocked"] is False
+
+
 def test_adding_a_funder(client):
     r = client.post("/api/funders", json={
         "name": "Some New Foundation", "url": "https://example.invalid/grants",

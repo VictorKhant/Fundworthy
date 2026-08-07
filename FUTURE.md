@@ -55,6 +55,319 @@ was, quite legitimately, built on. This file is now mostly about closing that ga
 
 ---
 
+## 1a. Prioritized backlog — engineering audit (2026-08-06)
+
+Everything below §2 is the full record, written as each thing was found or shipped. This
+section is a fresh pass on top of it: every `.py` and `.jsx` file in `app/`, `agent/`,
+`sinks/` and `dashboard/src/` read closely against what CLAUDE.md and the rest of this file
+claim is true, looking specifically for what neither document had caught yet. Every item
+below was confirmed against the actual cited file and line before landing here — nothing
+is inferred from a docstring or a comment alone. It sits **alongside, not above,** §8's
+access-and-bus-factor problem, which stays first because it isn't fixable by writing code,
+and because everything else here assumes there is more than one person able to restart the
+service if a fix goes wrong.
+
+### P0 — ✅ shipped (2026-08-06)
+
+Four things, and the common thread was that each one silently defeated a guarantee this
+product is explicitly sold on, in code that was live at the time. All four are fixed, each
+with a regression test that fails on the old code — see CLAUDE.md §2 and §7 for the
+present-tense description of what changed and where the tests live.
+
+1. ~~**The Block button does nothing.**~~ **Fixed.** `FunderIn` had no `blocked` field, so
+   Pydantic silently dropped it from the request body and `PUT /api/funders/{id}` returned
+   200 having changed nothing — `repo.update_funder` already handled `blocked` correctly, the
+   field just never arrived. Added `blocked: bool | None = None` to `FunderIn`
+   (`app/main.py`). `tests/test_api.py::test_blocking_a_funder_through_the_api_actually_persists`
+   goes through the real HTTP layer specifically because every existing test called
+   `repo.update_funder` directly and would never have caught a request-model gap.
+2. ~~**A caught, unlogged exception could serve one org a different org's funder list under
+   a false note.**~~ **Fixed.** `sources_from_db` now logs (`log.error`, with traceback) when
+   an *existing* database fails to read, instead of returning `None` silently and
+   indistinguishably from "no database file yet". `resolve_sources` (`agent/run.py`) checks
+   which case it was and writes an honest run note either way — "could not read the funders
+   list" rather than the false "no funders database found". Covered by
+   `tests/test_db.py::test_a_broken_funders_table_is_logged_not_silently_swallowed` and
+   `::test_a_read_error_gets_an_honest_run_note_not_no_database_found`.
+3. ~~**`apply_filters()` had zero direct tests.**~~ **Fixed.** New `tests/test_filters.py`
+   (12 tests) covers the award floor, the null-vs-reject distinction the module docstring
+   calls the entire product, the deadline runway, the religious/political/not-an-opportunity
+   rejects, the match-requirement flag, and the per-program floor. Writing it surfaced one
+   more thing, filed separately below: `Reject.DEADLINE_PASSED` turns out to be unreachable
+   through a real `ParsedPage`.
+4. ~~**The "no URL, no record" rule had no test that constructs a bad record and checks it's
+   rejected.**~~ **Fixed.** Four new tests in `tests/test_accuracy_gate.py` construct an
+   `Opportunity` with a missing, empty, and scheme-less `source_url` and assert
+   `__post_init__` refuses all three, plus one confirming a real `http(s)://` URL is accepted.
+
+### P1 — significant risk or real cost, next after P0
+
+**Carried forward, still true, detailed in their own sections:** no roles within an org
+(§2, §3), the allow-list living in an env var with no audit trail or revocation (§2),
+per-minute rate limiting still missing on `POST /api/runs` and `POST /api/programs/draft`
+(§5), `data/.fernet-key` sitting next to `data/rise.db` (§5), and run state living in one
+process's memory as the thing actually blocking a second uvicorn worker (§3, §9).
+
+**New from this pass:**
+
+- **A second hardcoded-San-Diego leak, in the one feature CLAUDE.md calls "the answer to
+  the user never writes a prompt."** `app/assistant.py`'s `SYSTEM` prompt opens "You are
+  helping the COO of the organization, a nonprofit in San Diego and Imperial Counties..." as
+  a literal string; `draft_program_card` takes no org context, and its only caller
+  (`app/main.py:391`) never passes `org_name`/`org_location` even though it already resolves
+  the org. This is the exact bug class §5 describes at length for `agent/score.py`'s
+  `_preamble` and says was fixed there — the fix was never applied here.
+- **The cost ceiling undercounts real spend once prompt caching is active.**
+  `Budget.record()` (`agent/score.py:854`) only reads `usage.input_tokens`/`output_tokens`;
+  it never reads `cache_creation_input_tokens` or `cache_read_input_tokens`, even though the
+  scoring prompt now routinely clears the caching threshold. Cache-write tokens bill *above*
+  the base input rate — so the tracked `spent_usd` a run's budget check gates every
+  subsequent call against is an underestimate, meaning a run can spend more real dollars than
+  the $1 ceiling before anything notices. This works directly against the "no exceptions"
+  framing in §5.
+- **A run that fails leaves nothing to explain why, which is the one case the log exists
+  for.** Two compounding gaps: `write_run_log`'s failure path (`agent/run.py:890`) only logs
+  and never marks the run as failed, so a broken sink write still exits 0 and the dashboard
+  shows a "done" run with blank stats and no stop reason; and the "technical log" the UI and
+  CLAUDE.md describe as "still the only thing that explains a run that died halfway"
+  (`app/runner.py:282`) is pure in-process memory, deleted synchronously the instant the
+  child's stdout closes — well under the frontend's 1.5s poll interval — so it is essentially
+  never available after the fact, only while someone happens to be watching live.
+- **A funder's retry backoff hits the exact host that just asked to be left alone, harder.**
+  `Fetcher.get()`'s retry loop (`agent/fetch.py:167`) re-walks the *entire* redirect chain
+  from the original URL on every attempt instead of resuming from the failure, so a 429/503
+  on the final hop of a two-redirect page turns "two retries" into up to nine real requests —
+  worst exactly when the server has just signalled it's overloaded, against this same file's
+  own stated design goal of being a polite, small-nonprofit crawler.
+- **Unsaved edits in "Adjust search settings" — the panel CLAUDE.md says the dashboard was
+  reversed for — are silently wiped by any unrelated action on the same page.**
+  `Dashboard.jsx:84`'s `useEffect(() => setDraft(state.settings), [state.settings])` fires on
+  every poll refresh, because `state.settings` is a new object reference every time
+  regardless of whether values changed. Ticking a program chip elsewhere on the page while
+  the settings drawer is open silently snaps unsaved input back to the stored values, with no
+  warning. `Settings.jsx`'s `OrgPanel` gets this right by depending on the individual field
+  values instead of the object reference — the fix is to match that pattern here.
+- **Turning on org-wide funder sharing from Settings skips the confirmation dialog that the
+  same toggle requires from Discover.** `Settings.jsx`'s `ShareFunders.toggle` saves directly
+  on click; `Discover.jsx`'s `Contribute.toggle` gates the identical action behind a
+  three-point confirm dialog, and a comment above it claims the two match. They don't — a
+  user who finds the setting via Settings rather than Discover starts publishing their
+  funder list with one unconfirmed click.
+- **The shared-funder report endpoint has no plausibility check, so one account can script a
+  wipe of the platform-wide shared directory.** `report_shared_funder`
+  (`app/repo.py:765`) only checks for a duplicate report from the same reporter — never that
+  `(funder_org, funder_id)` names something currently offered. `GET /api/directory/shared`
+  returns exactly the pairs needed to do this; loop GET → report-every-row → GET again and
+  the pool empties in seconds. Combined with `FUNDWORTHY_ADMIN_EMAILS` being unset by default
+  (documented in §2 as normal), an install with no admin configured has no way to undo it.
+- **The dashboard has no test tooling at all, and the team's own comment shows this already
+  shipped a white page to production.** `dashboard/package.json`'s `devDependencies` are only
+  `vite` and `@vitejs/plugin-react` — no runner, no assertion library — and CI's only
+  frontend step is `npm run build`. `tests/test_dashboard_sources.py`'s own docstring
+  documents the incident: a missing import shipped past a green build and 300 passing Python
+  tests, and "the first person to press 'Adjust search settings' on the live site got a white
+  page." The fix that landed is a regex scan for undeclared JSX identifiers, with the same
+  docstring noting "a real ESLint setup would be better and is worth doing" — that's still
+  open, and neither it nor an actual component-level test exists for any of the ~4,300 lines
+  in `dashboard/src/components/`.
+- **`RunManager.start()`'s actual subprocess-launch path has never been exercised by a
+  test.** Every existing test hits a `RuntimeError` inside the lock before reaching
+  `subprocess.Popen` (`app/runner.py:386`) — nothing verifies the API key lands in the child's
+  environment and never in argv (the property the module's own docstring calls out as the
+  reason it's done that way), or that two different orgs' slots don't collide.
+- **The California Grants Portal and Grants.gov integrations — core seed sources per
+  CLAUDE.md — have no test coverage on the code that actually calls them.**
+  `fetch_ca_grants_portal` and `fetch_grants_gov` (`agent/apis.py:166`, `:343`) and their
+  parsing helpers (`_first`, `_structured_amounts`, `_deadline_evidence`) are never invoked by
+  any test. `_first`'s own docstring names the exact failure mode a test would need to catch —
+  "a renamed field returns 200 with a null where the money used to be" — and nothing checks
+  that it actually survives one.
+
+### P2 — moderate, worth scheduling
+
+**Carried forward:** no incremental persistence mid-run (§6, mitigated by SIGTERM handling),
+no shared cross-tenant fetch cache (§9), the vite/esbuild dev-dependency `npm audit` findings
+(§5), no nginx request-size or rate-limit configuration (§5).
+
+**New from this pass:**
+
+- `update_run` (`app/repo.py:516`) is the one function in `repo.py` with no `org_id`
+  parameter — the module otherwise enforces it as a required keyword everywhere, per
+  CLAUDE.md's own stated rule that a missing one should be a `TypeError`, not a silent gap.
+  It also builds its `UPDATE` column list from unvalidated `**fields` keys rather than an
+  allow-list, unlike every sibling writer in the file. No call site passes an
+  externally-influenced `run_id` today, but there's no type-level guard stopping one from
+  starting to.
+- `redeem_invite` (`app/db.py:1126`) resolves the caller's existing account with
+  `WHERE uid=? OR email=?` and `fetchone()` — if a uid and a separately-reused email each
+  match a *different* row (the exact "deleted and remade the Google account" scenario the
+  surrounding docstring anticipates a few lines up), the OR is ambiguous and can silently
+  move or strand the wrong account. `org_for_user` in the same file avoids this correctly
+  with two sequential lookups instead of one combined `OR`.
+- `shared_funders` — the query behind Discover's cross-tenant funder panel — filters on
+  `added_by`, `check_ok` and `f.org_id <> ?`, none of which the table's only index
+  (`idx_funders_org`, on `org_id` alone) can narrow; an inequality on the one indexed column
+  makes it a full scan of every org's funders on every page load. A partial index on
+  `(added_by, check_ok) WHERE added_by='user' AND check_ok=1` fixes it.
+- The v7 org-scoping migration's per-table copy-then-drop (`app/db.py:891`) runs as separate,
+  non-atomic statements after the schema `executescript()` that already forced a commit. A
+  crash between them leaves an orphaned `<table>__pre_org` shadow table that a later boot's
+  skip check can never detect (it only inspects the live table's columns) — silently
+  defeating the retention guarantees §3 documents for org deletion, for any row that predates
+  this migration.
+- `update_program` and `update_funder` (`app/repo.py:202`) each hand-roll a near-identical
+  dynamic-`UPDATE` builder with separate field lists and inline boolean/JSON coercion. The
+  comment at `update_funder`'s `blocked` branch explicitly recalls a real bug this exact
+  duplication already caused once (a boolean stored as the string `"True"` instead of `1`) —
+  the next new column on either table has to get the same branching right a third time, with
+  nothing enforcing it.
+- The CSP allows `'unsafe-inline'` for `script-src` (`app/main.py:1215`) even though the
+  built dashboard has exactly two inline `<script>` blocks, both static and known at build
+  time (a JSON-LD block, a theme-flash-prevention snippet). Hash-pinning them (or moving the
+  theme snippet to an external file under `'self'`) closes the one meaningful gap in the
+  header this app relies on as its XSS defense-in-depth.
+- Adding a shared funder (`dashboard/src/pages/Discover.jsx:139`) copies the contributing
+  org's freeform `notes` field into the receiving org's record without ever displaying it —
+  the card only renders `evidence` and `checked_at`. That's an unreviewed, unbounded string
+  moving across a tenant boundary on one click, against the "evidence, never a verdict"
+  design §2 (Pilot / seed data section of CLAUDE.md) states as this feature's whole safety
+  property.
+- No global FastAPI exception handler exists, and the log format carries no request or org
+  id (`app/main.py:1154`). Several endpoints (`read_settings`, `list_programs`,
+  `list_funders`, `list_opportunities`, `read_archive`, and others) have no try/except of
+  their own, so an unexpected exception in any of them never reaches this app's own logger —
+  only wherever uvicorn's default handling happens to print it.
+- The three live-progress writers behind the spend marker and stage-box rails
+  (`app/runner.py:501`, `_write_spend`/`_write_funnel`/`_write_progress`) fail silently at
+  `log.debug`, but production logging is configured at `INFO` (`app/main.py:1164`) with no
+  per-logger override — so a recurring write failure (lock contention from concurrent orgs,
+  a nearly-full disk) stops the live UI from updating for a whole run with zero trace in the
+  logs an operator would ever see.
+- ~~The per-candidate scoring loop catches every exception the same way with no circuit
+  breaker and no tracking of *consecutive* failures.~~ **Fixed (2026-08-07), and it was
+  live, not hypothetical** — a real run triaged 164 candidates, failed on every one, and
+  reported "0 went through / $0.0000 spent" beside "Nothing was set aside at this step".
+  Three changes: the exception is now a reject row (`triage_error` / `scoring_error`)
+  against whichever tier was running, carrying the exception text as its detail;
+  `CONSECUTIVE_ERROR_LIMIT` (five) ends the run as `error` rather than walking the whole
+  list; and `run.notes` is finally rendered on This week. Covered by
+  `tests/test_pipeline_reporting.py` (five of its tests fail on the old code).
+- **Stage 1's headline number and its own breakdown counted different populations** —
+  found in the same session, from the same run, and **fixed (2026-08-07)**. Rejects made
+  inside an API adapter went into `rejected_by_filter` but never into
+  `candidates_parsed`, so the box reported "47 set aside" above a list whose first two
+  rows summed past 118. `crawl()` now counts an adapter's refusals as candidates
+  considered, which is what they are.
+- `evaluate()` (`agent/run.py:484`) drives Haiku triage and Sonnet scoring strictly serially
+  through blocking synchronous calls, discarding the concurrency `crawl()` built up — and a
+  fresh `anthropic.Anthropic()` client is constructed per call (`agent/score.py:761`) rather
+  than once per run, paying a new TCP/TLS handshake on every one of dozens of calls. Together
+  these inflate wall-clock time well past what candidate count or the budget ceiling would
+  otherwise require, and a longer subprocess is more exposed to the mid-run SIGTERM case §6
+  already treats as a real, costly failure mode.
+- Full page text is held uncapped in memory from `parse_page()` through the entire
+  evaluation loop (`agent/parse.py:131`) — the only place it's ever bounded is a fresh slice
+  taken per-call deep inside `score.py`'s prompt building. A wide crawl touching several large
+  pages can hold multiple megabytes of text no model will ever read, on the resource-
+  constrained free-tier VM this is deployed to.
+- The robots.txt preflight (`agent/fetch.py:159`) runs before the per-host lock is acquired,
+  so concurrent `get()` calls for the same host race to fire simultaneous robots.txt
+  requests on the first crawl touching it — confirmed reachable today: several hosts in
+  `agent/sd_funders.py` (e.g. `www.bscc.ca.gov`) have multiple funder URLs that would trigger
+  it.
+- `WebJsonSink._month_rows` (`sinks/webjson.py:101`) calls `repo.list_opportunities(conn)`
+  without the now-required `org_id` keyword — every call raises `TypeError`, which a bare
+  `except Exception: return None` (intended only to catch "no database yet") swallows
+  silently. `write_run_log` then always falls back to just this run's own output, never the
+  month's archive, defeating the exact fallback the surrounding docstring says it exists to
+  avoid. Low-traffic today since `--sink web` is opt-in, but genuinely broken.
+- `sinks/webjson.py` and `sinks/jsonl.py` have no test coverage at all — no test file
+  imports either module — despite `webjson.py` owning the `PUBLIC_FIELDS` allowlist that
+  keeps a non-public `Opportunity` field from leaking onto the unauthenticated public site,
+  and non-trivial archive-vs-run-only fallback logic.
+- `draft_program_card`'s actual Anthropic-call path (`app/assistant.py:150`) — the code
+  behind "the user never writes a prompt" — is never executed by any test; every existing
+  test stops at the pre-flight "no API key" or duplicate-URL check. The response-truncation
+  logic, cost math, and error-message mapping are all untested and could regress silently.
+- Two of the app's three modal dialogs (`StageDetail.jsx`, `ModelPicker.jsx`) have no
+  keyboard focus trap — only `Confirm.jsx` implements one, with a comment explaining exactly
+  why it matters ("Tab walks out of the dialog... a screen-reader user is answering a
+  question they can no longer see"). The other two reuse the same `aria-modal="true"` markup
+  without the behavior it claims.
+- Switching months quickly on the archive page (`Archive.jsx:30`) can display the wrong
+  month's findings: the fetch effect has no live/cancellation guard, unlike `App.jsx`'s
+  `refresh()`, which uses one for the same reason. Two in-flight requests race and whichever
+  resolves second wins, even if it's for a month no longer selected.
+- A transient failure loading org membership permanently disables the close-account
+  confirmation with no error shown and no retry (`Settings.jsx:744`) — `DeleteAccount`'s
+  mount effect swallows the error and leaves the confirm button disabled with nothing
+  explaining why, for the rest of that page load.
+
+### P3 — minor, worth a cleanup pass
+
+- **A count-only reject group is hardcoded to stage 1** (`app/main.py:782`,
+  `groups.append({"reason": key, "stage": 1, ...})`). That is correct for the case it was
+  written for — an API adapter aggregates its own rejects, and those genuinely are
+  free-tier — but it is right by coincidence rather than by derivation. `run.rejects` is
+  capped at `MAX_REJECTS` (400) while `rejected_by_filter` counts without limit, so on a
+  run that exceeds the cap *any* reason whose rows were truncated away becomes a
+  count-only group and gets filed under stage 1 regardless of the tier it came from —
+  putting a triage or scoring failure in the free-filters box. The reason needs its stage
+  carried alongside the count rather than inferred from whether a row survived.
+- **`Reject.DEADLINE_PASSED` is unreachable through `apply_filters()`.** Found writing the
+  new filter tests above, not by the original audit pass. `ParsedPage.earliest_deadline`
+  (`agent/parse.py:148`) only ever returns a date `>= date.today()` — a page whose only
+  deadline evidence is in the past resolves to `None`. So in `apply_filters`
+  (`agent/filters.py:198`), `deadline` can never be in the past, `days < 0` can never be
+  true, and the `Reject.DEADLINE_PASSED` branch can never fire via a real parsed page. The
+  practical effect: a page whose only stated deadline has already passed is flagged
+  `DEADLINE_NOT_STATED` (a human-reviewed flag, still costs a triage call) rather than freely
+  rejected — which may be the right call if a page can legitimately roll over to an
+  unpublished next cycle, or may just be dead code nobody meant to leave unreachable. Worth a
+  product decision, not a silent fix.
+- `geography_ok` (`agent/filters.py:140`) references `UNIVERSAL_GEOGRAPHY` and
+  `GEOGRAPHY_RESTRICTION` — names defined nowhere in the codebase — and has zero callers;
+  calling it raises `NameError`. It sits directly beneath the comment explaining that
+  geography filtering was deliberately removed (§ note at the top of `agent/filters.py`),
+  and looks like a partial revert left behind by that removal. `summarize()` in the same file
+  is separately dead. Delete both.
+- `apply_filters()` builds a `haystack` string (`agent/filters.py:168`) on every page and
+  never reads it again — a small wasted allocation and a sign of an incomplete refactor.
+- `model_label` (`agent/score.py:81`), `row_to_dict` (`app/db.py:1297`) and `utcnow`
+  (`sinks/sheets.py:379`) each have zero call sites anywhere in the repo, including tests.
+- `idx_users_org` is created twice — once inline in `SCHEMA` (`app/db.py:92`), once again in
+  the separate `INDEXES` block — contradicting the comment explaining why org-referencing
+  indexes were deliberately moved out of `SCHEMA` in the first place. Harmless (`IF NOT
+  EXISTS`), but misleads anyone auditing `INDEXES` for a full inventory.
+- `sinks/sqlite.py:40`'s `_ready()` re-runs the *entire* `init_db()` — schema script, full
+  15-step migration walk, index script, and an unconditional `ensure_org(DEFAULT_ORG_ID)` —
+  before every single write, so one run opens four connections where one preflight check
+  would do, and touches the default org's row even when writing for a different org.
+- `open_reports()` (`app/repo.py:792`), the admin moderation queue, has no `LIMIT` or
+  pagination on a query any signed-up org can grow via `report_shared_funder`.
+- Several redundant local re-imports of names already in scope at module level
+  (`app/repo.py:774`'s `hashlib`/`now_iso`, `agent/apis.py:496`'s `re`) — harmless, but
+  indistinguishable at a glance from the handful of local imports elsewhere in these same
+  files that exist for a real circular-import reason.
+- `ApiKeyTestIn.api_key` (`app/main.py:139`) has no `max_length`, unlike its sibling
+  `ApiKeyIn.api_key` (bounded to 500 chars) — `POST /api/settings/api-key/test` forwards an
+  unbounded string straight into an outbound Anthropic call.
+- `app/assistant.py:177` catches `AuthenticationError` and `APIStatusError` but not
+  `APIConnectionError`/`APITimeoutError` (siblings under `APIError`, not subclasses of
+  `APIStatusError`) — a network blip surfaces a raw Python exception class name
+  ("The assistant could not finish (APIConnectionError).") to a user CLAUDE.md's binding
+  design constraint says has no AI experience and should never see one.
+- `app/stats.py` (the `python -m app.stats` ops CLI) is untested and reads
+  `repo.platform_stats()`'s dict via bare bracket access with no `.get()` — a shape change
+  would only surface when someone runs it by hand, per the module's own docstring, "at 2am."
+- The landing page's "usually 10+ opportunities" claim (`Landing.jsx:96`, repeated as a
+  headline stat) contradicts §1's explicit design — "a run that surfaces six opportunities...
+  is a good run" — and the onboarding tutorial's own copy ("Six results... is a good week").
+  A prospective sign-up who reads the landing page first may read a normal week as
+  underperformance.
+
+---
+
 ## 2. Auth (Firebase) — ✅ shipped
 
 Google sign-in through Firebase, the ID token verified in `app/auth.py` against Google's

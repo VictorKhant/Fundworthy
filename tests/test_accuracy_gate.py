@@ -238,3 +238,66 @@ def test_prose_without_figures_is_left_alone():
                              PAGE_WITH_AMOUNTS) == []
     assert unsourced_figures("", PAGE_WITH_AMOUNTS) == []
     assert unsourced_figures(None, PAGE_WITH_AMOUNTS) == []
+
+
+# --- the no-URL-no-record guard itself -----------------------------------------
+#
+# CLAUDE.md states this rule twice, verbatim, as non-negotiable: "Never state a
+# deadline or award amount that isn't on a page we fetched... source_url is required —
+# no URL, no record." Everything above proves the gate keeps an unverifiable *value*
+# out of a record; this proves the record can't exist at all without a real URL behind
+# it — `Opportunity.__post_init__` is the one guard clause enforcing that, and until
+# now nothing constructed a bad one to check it actually raises.
+
+def _opp(**kw):
+    from datetime import datetime, timezone
+
+    from agent.models import Opportunity, Program, stable_id
+
+    defaults = dict(
+        id=kw.pop("id", None) or stable_id("https://example.invalid/a", "A grant"),
+        title="A grant",
+        funder="Example Foundation",
+        award_min=10_000,
+        award_max=50_000,
+        deadline=None,
+        estimated_effort_hours=8,
+        program_match=[Program.ARTS],
+        score=72,
+        score_rationale="Clears the floor with runway to spare.",
+        source_url="https://example.invalid/a",
+        verified=True,
+        needs_human_check=False,
+        fetched_at=datetime.now(timezone.utc),
+    )
+    defaults.update(kw)
+    return Opportunity(**defaults)
+
+
+def test_a_missing_source_url_is_refused():
+    import pytest
+
+    with pytest.raises(ValueError, match="no URL, no record"):
+        _opp(source_url=None)
+
+
+def test_an_empty_source_url_is_refused():
+    import pytest
+
+    with pytest.raises(ValueError, match="no URL, no record"):
+        _opp(source_url="")
+
+
+def test_a_source_url_without_a_scheme_is_refused():
+    """A funder name, a bare domain, or a path fragment is not a fetchable page —
+    only http(s) proves something was actually read."""
+    import pytest
+
+    for bad in ("example.invalid/grants", "ftp://example.invalid/grants", "  "):
+        with pytest.raises(ValueError, match="no URL, no record"):
+            _opp(source_url=bad)
+
+
+def test_a_real_http_or_https_url_is_accepted():
+    assert _opp(source_url="http://example.invalid/a").source_url.startswith("http://")
+    assert _opp(source_url="https://example.invalid/a").source_url.startswith("https://")

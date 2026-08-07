@@ -443,6 +443,52 @@ def test_sector_no_longer_narrows_the_funder_list(db):
         "the indexed databases were dropped by a filter that should be gone"
 
 
+def test_a_broken_funders_table_is_logged_not_silently_swallowed(tmp_path, caplog):
+    """Regression test: `sources_from_db` used to catch any exception reading an
+    *existing* database with no log line at all, so a transient error (lock
+    contention from another org's concurrent run, a corrupt row) was completely
+    invisible. A file that exists but was never migrated reproduces a genuine query
+    failure — `no such table: funders` — without the database simply being absent."""
+    import sqlite3
+
+    from agent.sources import Tier, sources_from_db
+
+    broken = tmp_path / "unmigrated.db"
+    sqlite3.connect(broken).close()
+
+    with caplog.at_level("ERROR", logger="agent.sources"):
+        result = sources_from_db(Tier.GOVERNMENT, [], db_path=broken)
+
+    assert result is None
+    assert "could not read the funders table" in caplog.text
+
+
+def test_a_read_error_gets_an_honest_run_note_not_no_database_found(
+        tmp_path, monkeypatch):
+    """Regression test: `resolve_sources` used to write "no funders database found"
+    whenever `sources_from_db` returned None — true for a fresh clone, false when the
+    database exists and the read itself failed. An org whose funder-list read broke
+    mid-run would silently fall back to the shipped San Diego registry under a note
+    that actively denied anything had gone wrong."""
+    import sqlite3
+    from datetime import datetime, timezone
+
+    from agent.config import Config
+    from agent.models import RunLog
+    from agent.run import resolve_sources
+
+    broken = tmp_path / "unmigrated.db"
+    sqlite3.connect(broken).close()
+    monkeypatch.setenv("FUNDWORTHY_DB_PATH", str(broken))
+
+    run = RunLog(started_at=datetime.now(timezone.utc))
+    resolve_sources(Config(), run)
+
+    note = " ".join(run.notes)
+    assert "could not read the funders list" in note
+    assert "no funders database found" not in note
+
+
 def test_credit_never_lands_on_an_unchecked_source():
     """Grants.gov and SAM.gov share funder="U.S. Federal Government"; SAM.gov is
     NOT_CHECKED. Crediting by name alone reported the federal source as unchecked

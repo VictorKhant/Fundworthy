@@ -45,11 +45,15 @@ design constraint:
 - The pipeline: fetch → parse → free deterministic filters → Haiku triage → Sonnet
   scoring, behind a hard per-run budget ceiling.
 - The accuracy gate (`agent/verify.py`): a sourced value is nulled unless the model
-  returns the verbatim sentence it came from and that sentence is on the fetched page.
-- Dashboard controls: award floor, deadline runway, result cap, spend limit, program
-  cards as a chip row in a **"What to search for"** panel at the top of This week, an
-  editable funder list with search and paging, a monthly archive, a Re-run button, a real
-  Stop.
+  returns the verbatim sentence it came from and that sentence is on the fetched page. The
+  other half of "no URL, no record" — `Opportunity.__post_init__` (`agent/models.py`)
+  refusing to construct a record with no usable `source_url` — is enforced in code the same
+  way it always was; `tests/test_accuracy_gate.py` now actually constructs a bad one and
+  checks it's rejected, rather than only exercising the quote-matching helpers around it.
+- Dashboard controls: award floor, deadline runway, result cap, spend limit, hours per
+  application, program cards as a chip row in a **"What to search for"** panel at the top
+  of This week, an editable funder list with search and paging, a monthly archive, a
+  Re-run button, a real Stop.
 - **Light and dark** (`body[data-fw-theme]`, a control at the foot of the sidebar). The
   dark palette is derived from the light one — same hues, moved down — because the
   previous attempt was cool grey against a warm light theme and was dropped for it.
@@ -71,6 +75,39 @@ design constraint:
   filling — nothing knows how many pages a funder list will yield until it has been
   fetched, and a bar filling against an invented total is the one dishonest pixel this
   page could have had.
+- **A box and its own breakdown count the same population.** Stage 1 reads "came in" from
+  `candidates_parsed` and "set aside" from came-minus-through, while the reasons
+  underneath come from `rejected_by_filter` — and rejects made *inside* an API adapter
+  (`agent/apis.py`: off-mission category, not open to nonprofits, loan-not-grant) went
+  into the second counter and not the first. A real run showed **"47 set aside" above a
+  list whose first two rows already summed past 118**. Both numbers were right about
+  different populations, which is the one way a panel built to explain a thin week can
+  make it less explicable. A record an adapter refused was a candidate considered and
+  declined for free, exactly like a page that fails `apply_filters`, so `crawl()` now
+  counts it in both.
+- **A tier that fails says so in the same place a tier that rejects says so.** A
+  `triage()` or `score_one()` call that raised was counted in a local `scoring_errors`,
+  written to the log, and summarised once in `run.notes` — none of which any dashboard
+  component rendered. So a search whose every model call failed on an expired key showed
+  *"164 came in, 0 went through, $0.0000 spent"* above the words **"Nothing was set aside
+  at this step"**: the pipeline knew exactly what was wrong 164 times and had nowhere to
+  put it. The exception is now a reject row like any other — `triage_error` at stage 2 or
+  `scoring_error` at stage 3, recorded against whichever tier was actually running, with
+  the exception text in the same slot that holds "$4,000 < $10,000".
+- **A systemic failure stops the run** (`agent/run.py: CONSECUTIVE_ERROR_LIMIT`, five).
+  A bad key or a bad model id fails identically on every candidate, and the loop used to
+  work through all of them one API error at a time — spending minutes to learn what the
+  fifth attempt already knew, then ending as `sources_exhausted`, which reads as a quiet
+  week. Five *consecutive* failures (a single odd page must never abort a search) ends the
+  run as `error` with a note that says it is not a quiet week.
+- **The run's own notes are on the page** (`pages/Dashboard.jsx`, under the outcome line).
+  `run.notes` is where the pipeline writes what it wants a person to know — a ticked
+  program that matched no California funding category and therefore searched nothing, a
+  budget ceiling, a tier that could not read anything. It reached `/api/state` as
+  `latest_run.notes` and stopped there, unrendered. Two purely-bookkeeping shapes are
+  filtered out and **an unrecognised note is shown**: a new note nobody thought to
+  whitelist should look noisy rather than be swallowed, which is the same direction to
+  fail in as `StageDetail`'s label fallback.
 - **Which model runs each paid step** is a setting, chosen from the Engine row under
   those boxes, with the projected cost on each option (`triage_model` / `scoring_model`,
   stored as `provider:model`). **Which provider** those models come from is a panel on
@@ -388,7 +425,12 @@ every other org's archive.
 
 **Hard filters (free rejects), before any model call:** award below the floor
 (default **$10,000**), deadline inside the runway (default 14 days), funder on the
-**remove list**. Match-requirement is *flagged, not filtered*.
+**remove list**. Match-requirement is *flagged, not filtered*. `agent/filters.py:
+apply_filters` is what enforces all of it — including the null-vs-reject distinction the
+module docstring calls out by name, since a filter that rejects a missing amount empties
+the pipeline and one that passes it silently defeats the floor — and `tests/test_filters.py`
+now exercises it directly rather than only through `tests/calibration.py`, which pytest
+never collects on its own.
 
 **There is no sector filter either, and it went the same way** (R8). Four checkboxes —
 "warm_partner / foundation / government / arts_agency" — narrowed the funder list, on a
@@ -414,14 +456,33 @@ nonprofit's suggestion; delete removes the row. Blocking needed its own column p
 because `active` does not reach the two places that offer a funder — an org that unticked
 one got it back from every import.
 
+Blocking reached the database and stopped there for a while: `repo.update_funder` handled
+the column correctly, but `FunderIn` — the request model behind `PUT /api/funders/{id}` —
+had no `blocked` field, so Pydantic silently dropped it from the request body before the
+handler ever saw it. The dashboard's Block control showed a confirm dialog promising the
+funder would never be offered again, then got a 200 back having changed nothing. Fixed by
+adding the field to `FunderIn`; `tests/test_api.py::test_blocking_a_funder_through_the_api_actually_persists`
+goes through the real HTTP layer rather than calling `repo.update_funder` directly, which is
+what let the gap through in the first place.
+
 **The remove list** is the single exclusion lever, and it is the user's: a funder (or a
 single named program, matched on page title) that is un-ticked is never fetched, never
 triaged, never scored. Existing funder relationships go here — the org already receives
 that money and doesn't want to reapply, so a relationship is a reason to *exclude*, never
 to rank higher. The model is never told whether the org knows a funder.
 
-**Score (0–100)** = program fit **40** + award size vs the floor **35** + can-the-app-be
--finished-before-the-deadline **25**. Funder warmth is not a factor.
+**Score (0–100)** = program fit **60** + award size vs the floor **30** + can-the-app-be
+-finished-before-the-deadline **10**. Funder warmth is not a factor.
+
+**Fit carries most of the score, deliberately.** It was 40/35/25 (fit/award/timing) and is
+now 60/30/10. Fit is the one component that is never null — the page and the org's own
+programs are always in front of the model — so it is the axis every candidate can actually
+be judged on. Timing shrank the most: it leans on `estimated_effort_hours`, the model's own
+per-page guess at how long an application takes, which has no ground truth to check it
+against and is noticeably less reliable than "does the page state an amount." A quarter of
+the score riding on that guess was more confidence than the estimate earned; a tenth is
+still enough to separate a two-page letter of interest from an audited-financials
+application closing in three weeks, without a shaky number swinging the ranking on its own.
 
 **The model returns the three parts, not the total** (`agent/score.py: ScoreParts`,
 `compose_score`). It used to return one number and the weights were three lines of English
@@ -433,31 +494,32 @@ and a breakdown under "More details".
 **A component with nothing to judge it on is `null`, and null leaves the denominator**
 rather than scoring zero. This is the fix for the thing that made the whole list
 unreadable. Award size and timing both need the funder to have published something, and
-most funders publish neither — so for the median candidate 60 of the 100 points were
-unearnable, every score was really out of 40, and the list topped out at 42. That reads as
-"we found you nothing good" when what actually happened is that grant-makers write terse
-web pages. Scoring a missing component zero is a *claim*: it says this opportunity was
-tested on award size and failed. It was not tested. So `fit 28/40, award null, timing 9/25`
-is 37 earned out of 65 available → **57**, and the row says what it was and was not scored
-on. It is the same rule as §6's "amount not stated" — we do not invent the number, and we
-do not punish its absence either. `fit_score` is never null: the page and the program cards
-are always in front of the model, so fit is always answerable and a run always has one axis
-every candidate shares.
+most funders publish neither — so under the original 40/35/25 split, 60 of the 100 points
+were unearnable for the median candidate, every score was really out of 40, and the list
+topped out at 42. That reads as "we found you nothing good" when what actually happened is
+that grant-makers write terse web pages. Scoring a missing component zero is a *claim*: it
+says this opportunity was tested on award size and failed. It was not tested. So today,
+`fit 42/60, award null, timing 7/10` is 49 earned out of 70 available → **70**, and the row
+says what it was and was not scored on. It is the same rule as §6's "amount not stated" —
+we do not invent the number, and we do not punish its absence either. `fit_score` is never
+null: the page and the program cards are always in front of the model, so fit is always
+answerable and a run always has one axis every candidate shares.
 
 **The prompt is the org's own, and this was a multi-tenancy leak.** Every scoring call
 opened with a hardcoded *"a nonprofit working across San Diego County and Imperial
 County"* — `org_name` and `org_location` reached the database and the dashboard and
-stopped there. Program fit is 40 points, so every nonprofit outside San Diego had the
-largest component of its score decided against the wrong region. An empty field is passed
-through as an empty field; a guessed region is the thing that broke this. The hours an
-application may cost is theirs too (`max_effort_hours`, default 10) — 25 points are
-measured against it and it was one nonprofit's staffing applied to every tenant.
+stopped there. Program fit is the single largest component of the score, so every nonprofit
+outside San Diego had it decided against the wrong region. An empty field is passed through
+as an empty field; a guessed region is the thing that broke this. The hours an application
+may cost is theirs too (`max_effort_hours`, default 10, set on **"Adjust search settings"**
+on This week) — 10 points are measured against it and it was one nonprofit's staffing
+applied to every tenant.
 
 **The prompt does not tell the model to score low.** "Be strict" sat in the *shared*
 preamble, so it biased Haiku triage — the cheap binary filter deciding what is even worth
 paying to read — as well as scoring. The award floor already does that job,
 deterministically, for free, before any model runs. **And the award scale has anchors**
-(at the floor ≈ 10/35, 3× ≈ 25/35, 10× ≈ 35/35): "relative to the floor" with no scale
+(at the floor ≈ 9/30, 3× ≈ 21/30, 10× ≈ 30/30): "relative to the floor" with no scale
 defined resolves downward, because an undefined scale plus an instruction to be strict is
 answered conservatively every time.
 
@@ -503,6 +565,19 @@ The keyless case is the one that mattered. It used to shrug (`use_llm = False`),
 every funder for five to ten minutes and score none of them, and hand back an empty list
 with no explanation on it. `--no-llm` is still the honest way to ask for the free tiers,
 and still works.
+
+**A failure reading the funder list is not the same as having none, and the run note now
+says which one happened.** `sources_from_db` (`agent/sources.py`) falls back to the shipped
+registry — the pilot's San Diego/California funders — whenever the org's own funders table
+is unavailable, which is correct for a fresh clone with no database yet. It used to fall
+back the same silent way for a real read failure on an *existing* database (lock
+contention from another org's concurrent run, a corrupt row), with no log line and a run
+note claiming "no funders database found" — false, and the one place a non-default org
+would have seen its search quietly switch to someone else's regional funder list. The
+exception is now logged (`log.error`, with traceback), and `resolve_sources`
+(`agent/run.py`) checks whether the database file actually exists before choosing which
+note to write, so "no database yet" and "couldn't read yours — see the technical log" are
+never conflated.
 
 **Kill switch.** The `enabled` setting. If off, a run exits before any network call. In
 `FUNDWORTHY_STRICT_CONFIG` mode a config that can't be read is a refusal to run, so an
@@ -587,7 +662,8 @@ Everything else (funders, programs, this month's findings) is already seeded.
 ├── dashboard/src/               React UI (sidebar, dashboard, archive,
 │                                 discover funders, settings, first-run tutorial)
 ├── tests/                       pytest — calibration.py is the ranking test,
-│                                 test_tenancy.py is the org-isolation test
+│                                 test_tenancy.py is the org-isolation test,
+│                                 test_filters.py is the free-tier filter test
 ├── docs/DEPLOY-ORACLE.md        putting it on an Oracle free-tier VM
 ├── docs/ACCESS.md               getting into the running system (SSH · Firebase · Oracle)
 ├── docs/UPGRADE.md              deploying the tenancy update onto a live box

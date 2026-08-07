@@ -14,10 +14,13 @@ They surface in the run report as research to do, not as silent gaps.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from enum import IntEnum
 
 from .models import Program
+
+log = logging.getLogger(__name__)
 
 
 class Tier(IntEnum):
@@ -349,7 +352,16 @@ def sources_from_db(max_tier: Tier = Tier.WARM,
             rows = [dict(r) for r in conn.execute(
                 "SELECT * FROM funders WHERE active=1 AND blocked=0 AND org_id=? "
                 "ORDER BY warm DESC, name", (scope,))]
-    except Exception:  # noqa: BLE001
+    except Exception:
+        # Unlike the two branches above, the database *does* exist here — this is a
+        # real failure reading it (lock contention from another org's concurrent run,
+        # a corrupt row), not the ordinary "fresh clone" case. It still falls back to
+        # the shipped registry rather than aborting the run, but it must not be
+        # indistinguishable from "no funders database found": that message is false
+        # here, and `resolve_sources` (agent/run.py) checks which case this was so the
+        # run notes say what actually happened.
+        log.error("could not read the funders table at %s — falling back to the "
+                  "shipped registry", target, exc_info=True)
         return None
 
     # --- sector: deliberately not a filter any more (R8) ------------------------
