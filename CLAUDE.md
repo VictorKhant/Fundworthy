@@ -423,6 +423,48 @@ to rank higher. The model is never told whether the org knows a funder.
 **Score (0–100)** = program fit **40** + award size vs the floor **35** + can-the-app-be
 -finished-before-the-deadline **25**. Funder warmth is not a factor.
 
+**The model returns the three parts, not the total** (`agent/score.py: ScoreParts`,
+`compose_score`). It used to return one number and the weights were three lines of English
+inside a prompt that nothing enforced, so "the weighted score" was really a holistic guess
+at a sum. Composing it in Python enforces the weights and makes a score decomposable —
+"why is this 38?" had no answer anywhere in the app, and now it is a row in the database
+and a breakdown under "More details".
+
+**A component with nothing to judge it on is `null`, and null leaves the denominator**
+rather than scoring zero. This is the fix for the thing that made the whole list
+unreadable. Award size and timing both need the funder to have published something, and
+most funders publish neither — so for the median candidate 60 of the 100 points were
+unearnable, every score was really out of 40, and the list topped out at 42. That reads as
+"we found you nothing good" when what actually happened is that grant-makers write terse
+web pages. Scoring a missing component zero is a *claim*: it says this opportunity was
+tested on award size and failed. It was not tested. So `fit 28/40, award null, timing 9/25`
+is 37 earned out of 65 available → **57**, and the row says what it was and was not scored
+on. It is the same rule as §6's "amount not stated" — we do not invent the number, and we
+do not punish its absence either. `fit_score` is never null: the page and the program cards
+are always in front of the model, so fit is always answerable and a run always has one axis
+every candidate shares.
+
+**The prompt is the org's own, and this was a multi-tenancy leak.** Every scoring call
+opened with a hardcoded *"a nonprofit working across San Diego County and Imperial
+County"* — `org_name` and `org_location` reached the database and the dashboard and
+stopped there. Program fit is 40 points, so every nonprofit outside San Diego had the
+largest component of its score decided against the wrong region. An empty field is passed
+through as an empty field; a guessed region is the thing that broke this. The hours an
+application may cost is theirs too (`max_effort_hours`, default 10) — 25 points are
+measured against it and it was one nonprofit's staffing applied to every tenant.
+
+**The prompt does not tell the model to score low.** "Be strict" sat in the *shared*
+preamble, so it biased Haiku triage — the cheap binary filter deciding what is even worth
+paying to read — as well as scoring. The award floor already does that job,
+deterministically, for free, before any model runs. **And the award scale has anchors**
+(at the floor ≈ 10/35, 3× ≈ 25/35, 10× ≈ 35/35): "relative to the floor" with no scale
+defined resolves downward, because an undefined scale plus an instruction to be strict is
+answered conservatively every time.
+
+`tests/calibration.py` is the harness that catches a regression here, and it no longer
+asserts only that every YES outranks every NO — that passed on the 13–42 distribution.
+It measures ordering (AUC), spread, and headroom via `agent/evalmetrics.py`.
+
 **Nothing about the funder's finances is, either — the IRS 990 lookup is gone** (schema
 v12). It called ProPublica's Nonprofit Explorer once per funder and put one line into the
 Sonnet prompt: the funder's revenue and expenses. Two things were wrong with that, and

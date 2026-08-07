@@ -727,6 +727,23 @@ tbody tr:last-child td { border-bottom: none; }
 }
 .opp-detail .opp-meta { margin-top: 0; }
 .opp-why-label { font-family: var(--display); font-style: italic; color: var(--muted); }
+/* What the score is made of. Only inside "More details" — the collapsed row is the four
+   facts that decide whether a grant is worth a day, and a fourth number on it would be
+   one more thing to read past. */
+.opp-parts {
+  display: flex; align-items: baseline; gap: 8px 14px; flex-wrap: wrap;
+  padding: 10px 13px; border-radius: 11px;
+  background: var(--panel); border: 1px solid var(--line);
+  font-size: 12.5px; color: var(--muted);
+}
+.opp-parts-total { font-weight: 600; color: var(--fg); font-size: 13.5px; }
+.opp-parts-unit { color: var(--muted); font-weight: 400; font-size: 11px; }
+.opp-part { font-variant-numeric: tabular-nums; }
+.opp-part strong { color: var(--body); font-weight: 600; }
+/* The component that could not be scored, said in words. Not a zero: a funder that never
+   published an award amount has not offered a small grant. */
+.opp-part.off { flex-basis: 100%; color: var(--clay-deep); font-variant-numeric: normal; }
+
 .opp-links { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; font-size: 13.5px; }
 .opp-links .strong-link { font-weight: 500; }
 .opp-links .muted-link { color: var(--muted); }

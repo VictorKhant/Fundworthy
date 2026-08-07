@@ -102,6 +102,7 @@ export default function Archive() {
           clear={clear}
           needsCheck={needsCheck}
           emptyBody={`Nothing was recorded for ${monthName(month)}.`}
+          maxEffortHours={data.max_effort_hours}
         />
       )}
     </>

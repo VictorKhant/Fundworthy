@@ -26,6 +26,11 @@ from .base import split_sections
 PUBLIC_FIELDS = (
     "id", "title", "funder", "award_min", "award_max", "award_typical", "deadline",
     "deadline_type", "estimated_effort_hours", "program_match", "score",
+    # The three parts the score is composed from. A total whose denominator varies is
+    # not interpretable on its own, and this allow-list is opt-in by design — so the
+    # components have to be named here or `run.json` publishes a number nobody can take
+    # apart. Null on a component means "not scored", never "scored zero".
+    "fit_score", "award_score", "timing_score",
     "score_rationale", "funder_type", "service_areas", "geography",
     "confidence_pct", "contact_note",
     "source_url", "verified", "needs_human_check", "found_on", "section",

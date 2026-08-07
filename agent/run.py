@@ -413,8 +413,13 @@ def _unscored(page: ParsedPage, source: Source, cfg: Config, note: str) -> Oppor
         award_max=page.award_max,
         deadline=page.earliest_deadline,
         estimated_effort_hours=None,
-        program_match=[p for p in source.programs if p in cfg.programs_active]
-                      or list(cfg.programs_active),
+        # Matched nothing and matched everything must not be stored identically. This was
+        # `[...] or list(cfg.programs_active)`, so a page the funder registry claims no
+        # program for was recorded as matching all of them — and the row then renders
+        # "For: every program you run" on something nobody has read. `score_one` was fixed
+        # for exactly this (see the note there); the placeholder path kept the bug, which
+        # is worse here, because these are the rows we never paid to look at.
+        program_match=[p for p in source.programs if p in cfg.programs_active],
         score=0,
         score_rationale=note,
         source_url=page.url,

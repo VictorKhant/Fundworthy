@@ -126,13 +126,13 @@ class Opportunity:
     award_min: int | None
     award_max: int | None
     deadline: date | None
-    estimated_effort_hours: int | None   # vs the 10-hour cap
+    estimated_effort_hours: int | None   # vs the org's hours-per-application setting
 
     # matching. Plain strings, not the three-value Program enum: the org has seven
     # programs and the user can add more from the dashboard, so a program they invent
     # must not be something the pipeline drops for being missing from Python source.
     program_match: list[str]
-    score: int                   # 0-100
+    score: int                   # 0-100, composed by agent/score.py: compose_score
     score_rationale: str         # one sentence, human-readable
 
     # trust — non-negotiable
@@ -183,6 +183,23 @@ class Opportunity:
     # provenance — defaulted so existing construction sites stay valid
     source_kind: SourceKind = SourceKind.FUNDER_PAGE
 
+    # --- the three parts `score` is composed from ---
+    #
+    # Stored so a total can be taken apart. The 40/35/25 weights used to exist only as
+    # English inside the prompt: the model returned one holistic integer and nothing
+    # downstream could say which component produced it, so "why is this 38?" could not be
+    # answered from the data and a structurally unearnable rubric was indistinguishable
+    # from a weak grant.
+    #
+    # **None is not zero.** None means the page gave nothing to judge that component on,
+    # and `compose_score` drops it from the denominator rather than scoring it zero — see
+    # the note there. Defaulted to None so a row written before this existed (or by a
+    # test constructing an Opportunity by hand) reads back as "no breakdown recorded"
+    # instead of "scored zero on everything".
+    fit_score: int | None = None
+    award_score: int | None = None
+    timing_score: int | None = None
+
     def __post_init__(self) -> None:
         if not self.source_url or not self.source_url.startswith(("http://", "https://")):
             raise ValueError(
@@ -228,6 +245,9 @@ class Opportunity:
             "estimated_effort_hours": self.estimated_effort_hours,
             "program_match": [_enum_value(p) for p in self.program_match],
             "score": self.score,
+            "fit_score": self.fit_score,
+            "award_score": self.award_score,
+            "timing_score": self.timing_score,
             "score_rationale": self.score_rationale,
             "funder_type": _enum_value(self.funder_type),
             "service_areas": list(self.service_areas),

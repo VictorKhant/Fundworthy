@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from app.db import DEFAULT_ORG_ID
 
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -162,10 +163,30 @@ def test_the_run_budget_is_customizable_end_to_end(tmp_path, monkeypatch):
 # --- the COO's ranking criteria (§11 Q5, answered) ----------------------------
 
 def test_the_scoring_prompt_carries_her_weights_and_nothing_else():
-    from agent.score import _SCORING_RULES
+    """The weights, asserted against the thing that now enforces them.
 
-    for line in ("40  program fit", "35  award size", "25  can this application"):
-        assert line in _SCORING_RULES, f"missing weight line: {line}"
+    This used to grep the prompt for the literal strings "40  program fit" and so on,
+    which is all it could do while the weights existed only as English inside the prompt
+    and the model returned one holistic total. That is the arrangement that let a rubric
+    spend 60 of its 100 points on evidence most funder pages do not carry without
+    anything in the suite noticing.
+
+    `WEIGHTS` is the source of truth now and `compose_score` applies it, so the check is
+    that the prompt asks for the three components the composer expects — a name drifting
+    apart from its weight is the failure worth catching, not a changed adjective.
+    """
+    from agent.score import WEIGHTS, _SCORING_RULES
+
+    assert WEIGHTS == {"fit": 40, "award": 35, "timing": 25}
+    assert sum(WEIGHTS.values()) == 100
+
+    # Matched on the pair, not on the alignment: the components are padded into a column
+    # and a whitespace change is not a regression.
+    for component, weight in (("fit_score", 40), ("award_score", 35),
+                              ("timing_score", 25)):
+        assert re.search(rf"{component}\s*,?\s+0-{weight}\b", _SCORING_RULES), \
+            f"the prompt does not ask for {component} out of {weight}"
+
     assert "funder warmth" not in _SCORING_RULES.lower() or \
         "Funder warmth is gone" in _SCORING_RULES
 

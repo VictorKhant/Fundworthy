@@ -131,11 +131,25 @@ class Config:
     # funders and key. Defaults to the single-tenant org so the CLI and the tests keep
     # working unchanged.
     org_id: str = "default"
-    # Where this org works, verbatim from the Settings page. Drives the geography filter
-    # (agent/filters.py). Empty means "they have not said", which disables geographic
-    # rejecting rather than guessing — the previous behaviour hardcoded San Diego and
-    # silently discarded another state's grants for free.
+    # Where this org works, verbatim from the Settings page. Drives which funders are
+    # shown first, and now the scoring preamble. Empty means "they have not said", which
+    # is a real answer and is passed to the model as one rather than guessed at — the
+    # previous behaviour hardcoded San Diego and silently discarded another state's
+    # grants for free.
     org_location: str = ""
+    # Who this org is, in their own words. **This is the one that mattered most.**
+    #
+    # It existed in `settings` and reached the dashboard, and it stopped there: the
+    # scoring prompt opened with a hardcoded "a nonprofit working across San Diego County
+    # and Imperial County" for every tenant. Program fit is 40 of the 100 points, so a
+    # nonprofit anywhere else had the largest component of its score decided against the
+    # wrong region — the single biggest reason nothing scored well. Multi-tenancy reached
+    # the database and the UI and never reached the prompt.
+    org_name: str = ""
+    # How many collective team-hours one application is worth to this org. Decides the
+    # 25-point feasibility component, and was a constant in the prompt: the pilot COO's
+    # answer, applied to everybody.
+    max_effort_hours: int = 10
 
     @property
     def programs_active(self) -> list[str]:
@@ -283,6 +297,12 @@ def load_from_db(db_path=None, *, org_id: str | None = None) -> Config | None:
     cfg.sectors_active = list(settings["sectors_active"])
     cfg.search_beyond_partners = bool(settings["search_beyond_partners"])
     cfg.org_location = str(settings.get("org_location") or "")
+    cfg.org_name = str(settings.get("org_name") or "")
+    # Clamped, because it is a free-text number on a settings page and it decides a
+    # quarter of the score. Zero or negative would make every application infeasible;
+    # something absurd would make all of them free.
+    cfg.max_effort_hours = max(1, min(200, _as_int(
+        settings.get("max_effort_hours"), Config.max_effort_hours)))
     # Imported here, not at the top: `agent.score` imports this module, so a top-level
     # import of it is a cycle.
     from .score import SCORING_MODEL, TRIAGE_MODEL

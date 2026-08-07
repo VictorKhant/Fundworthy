@@ -382,6 +382,7 @@ export default function Dashboard({ state, onChange, onGoto }) {
         clear={clear}
         needsCheck={needsCheck}
         emptyBody={emptyBody()}
+        maxEffortHours={state.settings.max_effort_hours}
         helper={!helperDismissed && (
           <div className="helper">
             <span className="helper-mark" aria-hidden="true">✳</span>
