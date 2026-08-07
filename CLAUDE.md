@@ -84,7 +84,13 @@ design constraint:
   different populations, which is the one way a panel built to explain a thin week can
   make it less explicable. A record an adapter refused was a candidate considered and
   declined for free, exactly like a page that fails `apply_filters`, so `crawl()` now
-  counts it in both.
+  counts it in both. The last gap was intra-run duplicates: `consider()` counted the page
+  and returned early without naming a reason, so a grant two funders both link raised
+  "came in" and nothing else. It records `already_seen_this_run` now — distinct from
+  `already_seen_this_month`, which is the monthly archive dedup. **The invariant is
+  `candidates_parsed − survivors == sum(rejected_by_filter)`**, asserted directly by
+  `tests/test_pipeline_reporting.py::test_stage_one_adds_up_exactly` so the next exit path
+  that forgets to name its reason fails a test rather than a nonprofit's screen.
 - **"Worth paying to read" is its own persisted number, not `triaged`** (`runs.survivors`,
   schema v16). They are the same only on a run that read everything: `survivors` is what
   the free filters passed, `triaged` is how many of those we then got round to. It used to

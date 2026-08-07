@@ -308,17 +308,18 @@ no shared cross-tenant fetch cache (§9), the vite/esbuild dev-dependency `npm a
 
 ### P3 — minor, worth a cleanup pass
 
-- **Stage 1 still does not reconcile *exactly*, and the remaining gap is duplicate URLs.**
-  The big divergence (adapter rejects counted in one column and not the other) is fixed, but
-  `consider()` in `agent/run.py` increments `candidates_parsed`, then returns early on
-  `if page.url in survivors` **without recording a reject reason** — a page reached twice in
-  one run (two funders linking the same grant, a redirect landing on an already-seen URL)
-  raises "came in" without raising either "went through" or any row in the breakdown. So
-  `parsed − survivors` can still exceed the sum of the reasons by the number of intra-run
-  duplicates. Small, and in the honest direction (it over-reports what was set aside rather
-  than hiding it), but it is the last thing keeping the two halves of that box from adding
-  up. Wants either its own reason (`already_seen_this_run`) or not counting a duplicate as a
-  candidate at all — the first is better, since it is a real thing that happened.
+- ~~**Stage 1 still does not reconcile exactly, and the remaining gap is duplicate
+  URLs.**~~ **Fixed (2026-08-07).** `consider()` incremented `candidates_parsed` and then
+  returned early on `if page.url in survivors` without recording a reason, so a page two
+  funders both link — or a redirect landing somewhere already read — raised "came in"
+  without raising "went through" or anything in the breakdown. It now records
+  `already_seen_this_run` ("The same page came up twice in this search"), deliberately
+  distinct from `already_seen_this_month`, which is the monthly archive dedup and drives
+  its own sentence on the dashboard. **Stage 1 now adds up exactly**, and
+  `tests/test_pipeline_reporting.py::test_stage_one_adds_up_exactly` asserts the invariant
+  itself — `candidates_parsed − survivors == sum(rejected_by_filter)` — over a crawl that
+  exercises an adapter refusal, a free-filter reject and a duplicate at once, so any future
+  exit path that forgets to name its reason fails there rather than on somebody's screen.
 - **A count-only reject group is hardcoded to stage 1** (`app/main.py:782`,
   `groups.append({"reason": key, "stage": 1, ...})`). That is correct for the case it was
   written for — an API adapter aggregates its own rejects, and those genuinely are

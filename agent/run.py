@@ -233,6 +233,18 @@ async def crawl(cfg: Config, run: RunLog,
         # triaged count here would show a zero on the box that is currently working.
         _emit_funnel(run, survivors=len(survivors))
         if page.url in survivors:
+            # Recorded, not silently dropped. This was the last thing keeping stage 1
+            # from adding up: every other exit below counts a reason, and this one
+            # incremented `candidates_parsed` and returned — so "set aside"
+            # (parsed − survivors) came out one higher than the sum of its own breakdown
+            # for every page two funders both link to, or every redirect that lands
+            # somewhere already seen.
+            #
+            # Distinct from `already_seen_this_month`, which is the monthly archive
+            # dedup. This one is twice in the same search.
+            run.reject(1, "already_seen_this_run", funder=source.funder,
+                       title=page.title, url=page.url,
+                       detail="the same page was reached twice in this search")
             return
 
         # The remove list, second door. A source on it is never fetched — but the
