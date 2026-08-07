@@ -20,8 +20,44 @@ import { useRun } from "../useRun";
 //
 // Programs and funders drop to the bottom for the same reason — they are setup, and
 // setup is not what a Thursday is for.
+//
+// Two things sit **against the list** rather than near the top, and both moved for the
+// same reason: they answer questions that are asked at the list.
+//
+//   - the outcome line ("Checked every funder on your list · skipped 12 you have already
+//     seen") used to render inside StatusStrip, four sections above the thing it
+//     explains. It is the answer to *why is this list short?*
+//   - the helper banner used to be the first element under the page head — the spot the
+//     eye lands on — explaining a convention (the AI/sourced split) that the findings
+//     already mark inline on every row.
 
 const HELPER_KEY = "fw.helperDismissed";
+
+// How the last search ended, in one line. `ok` decides the colour of the marker: sage for
+// "this is a normal outcome", clay for "something needs you". Nothing here is an error
+// dialog — a search that finds nothing is the product working — but a search that could
+// not run should not look the same as one that ran and found a quiet week.
+const STOP_REASONS = {
+  target_met: { ok: true, text: "Found enough for this week and stopped." },
+  sources_exhausted: { ok: true, text: "Checked every funder on your list." },
+  budget: { ok: false, text: "Hit your spending limit and stopped rather than going over." },
+  disabled: { ok: false, text: "The researcher is switched off." },
+  stopped_by_user: { ok: true, text: "You stopped it." },
+  error: { ok: false, text: "Something went wrong — the log below says what." },
+  partial: { ok: false, text: "Something broke part-way through. What it had already found is above." },
+  // The two that used to be indistinguishable from a quiet week. Both mean the search
+  // could not have worked, and both name the one thing to change.
+  no_api_key: {
+    ok: false,
+    text: "Stopped before reading anything — there was no Claude API key to read with. "
+      + "Add one on Settings.",
+  },
+  no_funders: {
+    ok: false,
+    text: "Stopped without reading anything — there were no funders to search. "
+      + "Fundworthy only reads the funders on your list.",
+  },
+};
 
 // The page a blocker sends you to, named the way the sidebar names it.
 const PAGE_LABEL = {
@@ -37,6 +73,7 @@ export default function Dashboard({ state, onChange, onGoto }) {
 
   const [draft, setDraft] = useState(state.settings);
   const [knobsOpen, setKnobsOpen] = useState(false);
+  const [logOpen, setLogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [starting, setStarting] = useState(false);
   const [saveError, setSaveError] = useState(null);
@@ -51,6 +88,16 @@ export default function Dashboard({ state, onChange, onGoto }) {
     running: state.running,
     onChange,
   });
+
+  // The log opens itself when a search starts, and can then be closed. It used to be a
+  // `<details open={isRunning}>`, which forces it open for the whole run — the one
+  // stretch of time somebody might want it out of the way, now that the three boxes
+  // above say what is happening.
+  //
+  // Below `useRun` and not above it: the dependency array is evaluated during the render
+  // that declares `isRunning`, so reading it earlier is a temporal-dead-zone
+  // ReferenceError rather than an undefined.
+  useEffect(() => { if (isRunning) setLogOpen(true); }, [isRunning]);
 
   // Why a search would not work, straight from the server — the same list, in the same
   // words, that pressing the button would have failed with. Pressing it used to be the
@@ -168,20 +215,6 @@ export default function Dashboard({ state, onChange, onGoto }) {
         </div>
       </header>
 
-      {!helperDismissed && (
-        <div className="helper">
-          <span className="helper-mark" aria-hidden="true">✳</span>
-          <p>
-            New here? The list below is what the researcher found this week. Open one to
-            see why it scored the way it did — anything marked <strong>AI</strong> is the
-            researcher's judgement, everything else is quoted from the funder's page.
-          </p>
-          <button className="text helper-dismiss" onClick={dismissHelper}>
-            Dismiss
-          </button>
-        </div>
-      )}
-
       {/* Which programs this week's search is for. At the TOP, because it is a
           question you answer before reading results rather than after — it used to be a
           list of full-width rows at the foot of the page, below the findings it decides
@@ -260,6 +293,7 @@ export default function Dashboard({ state, onChange, onGoto }) {
           hour: draft.schedule_hour,
         }}
         run={run}
+        isRunning={isRunning}
         ceiling={draft.run_budget_usd || 1}
         knobsOpen={knobsOpen}
         onToggleKnobs={() => setKnobsOpen(!knobsOpen)}
@@ -286,36 +320,83 @@ export default function Dashboard({ state, onChange, onGoto }) {
       )}
 
       {/* What the search did, as three boxes — the cost order, which is also the
-          argument: free, cheap, expensive. Hidden while a run is going, because the
-          numbers are the *finished* run's and showing last week's funnel above a live
-          log reads as this run's progress. */}
-      {!isRunning && state.latest_run && (
+          argument: free, cheap, expensive.
+
+          Mounted through a run, not hidden for it. They used to appear only once a
+          search had finished, on the reasoning that last week's funnel above a live log
+          would read as this run's progress. It would have — so the boxes show *this*
+          run's progress instead, which is what they were asked for in the first place. */}
+      {run && (
         <Stages
-          run={state.latest_run}
+          run={run}
+          isRunning={isRunning}
+          cap={draft.max_opportunities}
           settings={state.settings}
           choices={state.model_choices || {}}
           defaults={state.model_defaults || {}}
+          logOpen={logOpen}
+          onToggleLog={() => setLogOpen(!logOpen)}
           onChange={onChange}
         />
       )}
 
-      {/* The log is kept verbatim and moved behind a disclosure. It is still the only
-          thing that explains a run that died halfway, so it stays reachable — and it
-          opens automatically while a run is going, because during a run it is the only
-          thing there is to watch. */}
-      {(isRunning || live.log?.length > 0) && (
-        <details className="runlog-details" open={isRunning}>
-          <summary>Show the technical log</summary>
+      {/* The log is kept verbatim, opened by the button in the stage header above rather
+          than by a <summary> of its own further down the page. It is still the only thing
+          that explains a run that died halfway, so it stays reachable — and it opens
+          automatically while a run is going, because the boxes say what is happening and
+          this says what is happening to it. */}
+      {logOpen && (isRunning || live.log?.length > 0) && (
+        <div className="runlog-open">
           <RunLog isRunning={isRunning} log={live.log} />
-        </details>
+        </div>
       )}
+
+      {/* How the last search ended, against the list it explains.
+          "Checked every funder on your list" and "there was no API key to read with" are
+          completely different answers to *why is this list short?*, and only one of them
+          is a problem — so the marker's colour says which. */}
+      {run?.stop_reason && (() => {
+        const outcome = STOP_REASONS[run.stop_reason];
+        return (
+          <p className={`run-outcome ${outcome && !outcome.ok ? "attention" : ""}`}>
+            <span className="run-outcome-dot" aria-hidden="true" />
+            <span>
+              {outcome ? outcome.text : run.stop_reason}
+              {run.duplicates_skipped > 0 && (
+                <span className="muted">
+                  {" "}Skipped {run.duplicates_skipped} you have already seen this month,
+                  for free.
+                </span>
+              )}
+            </span>
+          </p>
+        );
+      })()}
 
       {/* "Nothing to review" has several very different causes and used to have one
           sentence. A search that ran and filtered everything out is a real, ordinary
           week; a search that never ran because nothing was set up is not, and telling
           somebody to "tick the programs below" when the actual problem is a missing API
           key sends them to fix the wrong thing. */}
-      <Findings clear={clear} needsCheck={needsCheck} emptyBody={emptyBody()} />
+      <Findings
+        clear={clear}
+        needsCheck={needsCheck}
+        emptyBody={emptyBody()}
+        maxEffortHours={state.settings.max_effort_hours}
+        helper={!helperDismissed && (
+          <div className="helper">
+            <span className="helper-mark" aria-hidden="true">✳</span>
+            <p>
+              New here? The list below is what the researcher found this week. Open one to
+              see why it scored the way it did — anything marked <strong>AI</strong> is the
+              researcher's judgement, everything else is quoted from the funder's page.
+            </p>
+            <button className="text helper-dismiss" onClick={dismissHelper}>
+              Dismiss
+            </button>
+          </div>
+        )}
+      />
 
     </>
   );

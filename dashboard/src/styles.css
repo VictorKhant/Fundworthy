@@ -63,6 +63,10 @@
   --dash-soft: #D9D4C8;   /* the archive note — a dashed panel, not an AI mark */
   --nav-active: #EDEAE2;
   --shadow: 0 18px 40px rgba(51, 49, 44, .06);
+  /* Just the colour, for the one shadow that composes its own geometry — the modal
+     lift is deeper and longer than the ambient panel shadow, so it cannot reuse
+     --shadow wholesale. */
+  --shadow-colour: rgba(51, 49, 44, .14);
   --scrim: rgba(51, 49, 44, .28);
 
   /* Three pairs that do double duty, and are the reason a naive dark mode inverts
@@ -81,6 +85,15 @@
   --track: #E9E5DC;       /* the unfilled part of a bar, and the avatar disc */
   --danger: #B4503F;      /* over-budget, and destructive text buttons */
   --meter-warn: #C08A3E;
+
+  /* The ring that pulses out of the stage box currently working. A token pair rather
+     than a literal rgba in the keyframe, because sage at 28% of its LIGHT value is
+     invisible on a dark card — the one place a "shadows are just opacity" exemption
+     would have quietly switched the animation off for half the users. `--pulse-0` is the
+     same colour at zero alpha: animating to `transparent` interpolates through black in
+     some engines and flashes a grey halo. */
+  --pulse: rgba(76, 122, 94, .28);
+  --pulse-0: rgba(76, 122, 94, 0);
 
   /* The amber "you need to do something" family — .blocker and .maintenance. */
   --notice-bg: #FBF3E4;
@@ -181,7 +194,15 @@ button.brandmark:hover:not(:disabled) .brand-dot { background: var(--clay-deep);
 }
 .sidebar-link:hover { background: var(--nav-active); }
 .sidebar-link.current { background: var(--nav-active); font-weight: 600; }
-.sidebar-icon { width: 16px; text-align: center; opacity: .7; font-size: 13px; }
+/* A fixed slot, so the four labels start on one line whatever glyph sits before them.
+   The nav was the one place the last pass went the wrong way — it turned row actions
+   into icons and left this, the list a non-technical person scans most often, as four
+   undifferentiated text links. */
+.sidebar-icon {
+  width: 17px; flex-shrink: 0; opacity: .8;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.sidebar-link.current .sidebar-icon { opacity: 1; color: var(--accent-deep); }
 /* No `margin-top: auto` here any more — .themetoggle above it carries it. Two auto
    margins in one flex column SPLIT the free space rather than stacking, which left the
    toggle stranded halfway up the sidebar with a gap beneath it. */
@@ -386,11 +407,16 @@ button.text:hover:not(:disabled) { color: var(--accent-deep); }
 .page-head p { margin: 0; }
 
 /* First-run orientation. Dismissed permanently, in localStorage — a banner that comes
-   back every Thursday is noise, and this one has nothing to say after the first read. */
+   back every Thursday is noise, and this one has nothing to say after the first read.
+
+   It renders under the "Worth a look" heading rather than at the top of the page. What
+   it explains — anything marked AI is a judgement, everything else is a quote — is
+   marked inline on every row below it, so it belongs against those rows and not in the
+   position the eye lands on first. */
 .helper {
   display: flex; gap: 12px; align-items: flex-start;
   background: var(--accent-soft); border: 1px solid var(--accent-line);
-  border-radius: 14px; padding: 14px 18px; margin-bottom: 18px;
+  border-radius: 14px; padding: 14px 18px; margin: 0 0 14px;
 }
 .helper p { margin: 0; flex: 1; font-size: 14px; color: var(--accent-deep); }
 .helper-mark { font-family: var(--display); font-size: 18px; color: var(--accent); line-height: 1.3; }
@@ -420,6 +446,14 @@ button.text:hover:not(:disabled) { color: var(--accent-deep); }
 .status-sep { color: var(--line); }
 .status-item { display: inline-flex; align-items: center; gap: 8px; }
 .status-actions { margin-left: auto; }
+.status-knobs { display: inline-flex; align-items: center; gap: 6px; }
+/* The spend figure moves during a search. Without a word on it, a number changing by
+   itself every second and a half reads as a glitch rather than as the one thing §8 asks
+   to be trusted with. */
+.status-live {
+  font-size: 11.5px; font-weight: 600; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--accent);
+}
 /* How the last search ended.
 
    It used to be `.status-note`, which was this margin and nothing else — the element
@@ -431,9 +465,12 @@ button.text:hover:not(:disabled) { color: var(--accent-deep); }
    search that read every funder and found nothing is the product working correctly, and a
    search that stopped because there was no API key is not, and those two must not look
    alike. Still deliberately quiet — this is an outcome, not an alert. */
+/* Sits against the findings now, not tucked under the status strip — so the -14px that
+   pulled it up into that strip is gone. It is the answer to "why is this list short?",
+   and that question is asked at the list. */
 .run-outcome {
   display: flex; align-items: flex-start; gap: 10px;
-  margin: -14px 0 26px; padding: 10px 14px;
+  margin: 0 0 18px; padding: 10px 14px;
   background: var(--panel); border: 1px solid var(--line);
   border-left: 3px solid var(--accent);
   border-radius: 10px;
@@ -450,7 +487,12 @@ button.text:hover:not(:disabled) { color: var(--accent-deep); }
   width: 64px; height: 5px; border-radius: 999px; background: var(--track);
   display: inline-block; overflow: hidden; margin-bottom: 0; flex-shrink: 0;
 }
-.minibar-fill { display: block; height: 100%; background: var(--accent); }
+/* Eased, because the figure beside it is written live now. Without the transition the
+   bar jumps between polls, which reads as a redraw rather than as spending. */
+.minibar-fill {
+  display: block; height: 100%; background: var(--accent);
+  transition: width .12s linear;
+}
 
 /* Pulled up under the strip so the two read as one control, not two stacked panels. */
 .searchpanel {
@@ -477,14 +519,33 @@ button.text:hover:not(:disabled) { color: var(--accent-deep); }
    Edit and silently changed what next week searched for.
 */
 
-.progbar { margin-bottom: 18px; }
-.progbar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.progbar-label {
-  font-size: 13px; color: var(--body); font-weight: 500;
-  margin-right: 2px; flex-shrink: 0;
+/* A panel, not a bare row. The chips used to float between the page head and the
+   blockers with no boundary of their own, which left the one control that decides what a
+   search is *for* reading as a caption on the heading above it. */
+.progbar {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+  padding: 14px 16px; margin-bottom: 18px;
 }
-.progbar-add { font-size: 13px; }
-.progbar-note { margin: 8px 0 0; }
+.progbar-head {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px;
+}
+.progbar-mark {
+  width: 24px; height: 24px; border-radius: 7px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--accent-soft); color: var(--accent);
+}
+.progbar-title { font-family: var(--display); font-size: 19px; margin: 0; }
+.progbar-count { flex-shrink: 0; }
+/* A pill at the head, not a text button at the end of the chips: on a long list the row
+   wraps and "+ Add a program" lands somewhere different every week. */
+.progbar-add { margin-left: auto; flex-shrink: 0; }
+.progbar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.progbar-note { margin: 10px 0 0; }
+.progbar-warn {
+  display: flex; align-items: flex-start; gap: 7px; margin: 10px 0 0;
+  font-size: 12.5px; color: var(--clay-deep);
+}
+.progbar-warn svg { flex-shrink: 0; margin-top: 2px; }
 
 .progchip {
   display: inline-flex; align-items: stretch;
@@ -512,12 +573,20 @@ button.text:hover:not(:disabled) { color: var(--accent-deep); }
 
 .progchip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* Fixed width so chips line up whether or not they carry a tick. */
+/* A filled square with a stroke glyph. It was a text character — "✓", "+", or nothing —
+   which left the unticked state with no mark at all, so a ticked chip and an unticked
+   one differed by one thin glyph on a wrapped row of pills. */
 .progchip-mark {
-  width: 13px; flex-shrink: 0; text-align: center;
-  font-size: 12px; color: var(--accent);
+  width: 18px; height: 18px; border-radius: 6px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--card); border: 1px solid var(--dash); color: var(--muted);
 }
-.progchip.unfilled .progchip-mark { color: var(--clay); }
+.progchip.on .progchip-mark {
+  background: var(--accent); border-color: var(--accent); color: var(--on-accent);
+}
+.progchip.unfilled .progchip-mark {
+  background: none; border-style: dashed; color: var(--clay);
+}
 
 .progchip-tag {
   font-size: 11.5px; color: var(--clay-deep); white-space: nowrap; flex-shrink: 0;
@@ -563,45 +632,40 @@ button.text:hover:not(:disabled) { color: var(--accent-deep); }
 
 /* --- funders --------------------------------------------------------------- */
 
+/* Three columns now, not four. The sector had a column of its own and moved under the
+   name (`.funder-sub`) — as a column it was empty space on every row at desktop width
+   and an orphaned fragment at mobile. */
 .funder-list { display: flex; flex-direction: column; }
 .funder-row {
-  display: grid; grid-template-columns: auto 1fr auto auto;
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 10px; align-items: center;
-  padding: 8px 2px; border-bottom: 1px solid var(--line-soft);
+  padding: 8px 6px; border-bottom: 1px solid var(--line-soft);
 }
 .funder-row.inactive { opacity: .55; }
 .funder-name { display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
                font-weight: 500; font-size: 14px; }
-.funder-sector { white-space: nowrap; font-size: 12px; }
 .clamp { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
-@media (max-width: 620px) {
-  .funder-row { grid-template-columns: auto 1fr; }
-  .funder-sector { grid-column: 2; }
-}
 
-/* The list now lives in a half-width column, so the four-across row cannot fit at any
-   viewport. A container query would be the right tool; this list is the only thing that
-   needs one, so an explicit modifier is cheaper than adopting the syntax for one rule.
-
-   Two lines: tick + name on top, then a footer line carrying the sector on the left and
-   Edit/Remove on the right. Both footer items claim the same grid area and justify to
-   opposite ends — they are short enough never to meet, and it keeps the row two lines
-   tall instead of three. */
-.funder-list.compact .funder-row {
-  grid-template-columns: auto minmax(0, 1fr);
-  grid-template-areas: "tick main" "foot foot";
-  row-gap: 3px; align-items: start;
-}
-.funder-list.compact .funder-tick { grid-area: tick; padding-top: 3px; }
-.funder-list.compact .funder-main { grid-area: main; min-width: 0; }
-.funder-list.compact .funder-sector { grid-area: foot; justify-self: start; }
-.funder-list.compact .funder-row > .row { grid-area: foot; justify-self: end; gap: 12px; }
-.funder-list.compact .funder-name { font-size: 13.5px; }
-/* A grants URL has no break opportunity and wrapped to three lines in this column. */
-.funder-list.compact .funder-main a {
-  display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
+/* A grants URL has no break opportunity, so the host/sector line ellipsises rather than
+   wrapping to three lines on a long one. */
+.funder-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .funder-more { padding: 10px 0 0; }
+
+/* Narrow: the row folds to two lines, tick + name on top and the actions on their own
+   line at the right. This used to be an always-on `.compact` modifier from a layout
+   where the list sat in a half-width column — at full width it left the two icons
+   floating alone on a line under every funder. */
+@media (max-width: 620px) {
+  .funder-row {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas: "tick main" "foot foot";
+    row-gap: 3px; align-items: start;
+  }
+  .funder-tick { grid-area: tick; }
+  .funder-main { grid-area: main; min-width: 0; }
+  .funder-row > .row { grid-area: foot; justify-self: end; gap: 12px; }
+  .funder-name { font-size: 13.5px; }
+}
 
 /* --- tables ---------------------------------------------------------------- */
 /* Wide content scrolls inside its own container — the page never scrolls sideways. */
@@ -663,6 +727,23 @@ tbody tr:last-child td { border-bottom: none; }
 }
 .opp-detail .opp-meta { margin-top: 0; }
 .opp-why-label { font-family: var(--display); font-style: italic; color: var(--muted); }
+/* What the score is made of. Only inside "More details" — the collapsed row is the four
+   facts that decide whether a grant is worth a day, and a fourth number on it would be
+   one more thing to read past. */
+.opp-parts {
+  display: flex; align-items: baseline; gap: 8px 14px; flex-wrap: wrap;
+  padding: 10px 13px; border-radius: 11px;
+  background: var(--panel); border: 1px solid var(--line);
+  font-size: 12.5px; color: var(--muted);
+}
+.opp-parts-total { font-weight: 600; color: var(--fg); font-size: 13.5px; }
+.opp-parts-unit { color: var(--muted); font-weight: 400; font-size: 11px; }
+.opp-part { font-variant-numeric: tabular-nums; }
+.opp-part strong { color: var(--body); font-weight: 600; }
+/* The component that could not be scored, said in words. Not a zero: a funder that never
+   published an award amount has not offered a small grant. */
+.opp-part.off { flex-basis: 100%; color: var(--clay-deep); font-variant-numeric: normal; }
+
 .opp-links { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; font-size: 13.5px; }
 .opp-links .strong-link { font-weight: 500; }
 .opp-links .muted-link { color: var(--muted); }
@@ -1006,13 +1087,9 @@ button.text.danger { color: var(--danger); margin-left: auto; }
 .step p { margin: 3px 0 0; }
 
 /* --- the starter directory ------------------------------------------------- */
-.directory { margin-top: 10px; }
-.directory-row {
-  display: flex; align-items: flex-start; gap: 14px;
-  padding: 10px 0; border-top: 1px solid var(--line-soft);
-}
-.directory-row > div { flex: 1; }
-.directory-row p { margin: 2px 0 0; }
+/* `.directory` is a card grid now — see the marketplace block further down. The
+   full-width `.directory-row` it replaced is gone rather than kept as a fallback: one
+   shape of thing, one control. */
 
 /* A card describing something that does not exist yet. Visibly quieter than a working
    one, so it reads as a signpost rather than a broken feature. */
@@ -1191,6 +1268,7 @@ body[data-fw-theme="dark"] {
 
   --nav-active: #2E2A25;
   --shadow: 0 18px 40px rgba(0, 0, 0, .45);
+  --shadow-colour: rgba(0, 0, 0, .55);
   --scrim: rgba(0, 0, 0, .55);
 
   /* The three that flip. */
@@ -1202,6 +1280,10 @@ body[data-fw-theme="dark"] {
   --track: #332F2A;
   --danger: #E08573;      /* lightened to carry on a dark ground */
   --meter-warn: #D9A354;
+
+  /* The dark-mode sage, at a higher alpha — a ring has to clear a near-black card. */
+  --pulse: rgba(127, 176, 143, .34);
+  --pulse-0: rgba(127, 176, 143, 0);
 
   --notice-bg: #2B2418;
   --notice-line: #4A3E24;
@@ -1243,21 +1325,49 @@ body[data-fw-theme="dark"] {
   background: var(--scrim);
   display: flex; align-items: center; justify-content: center;
   padding: 20px;
+  animation: fw-fade .14s ease;
 }
 
+/* No padding-top. The sticky header supplies it — see the note on `.dialog > h2` at the
+   foot of this file. */
 .dialog {
-  background: var(--card); border: 1px solid var(--line); border-radius: 14px;
-  box-shadow: var(--shadow);
-  padding: 22px 24px; width: 100%; max-width: 460px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 18px;
+  box-shadow: 0 24px 60px var(--shadow-colour);
+  padding: 0 24px 22px; width: 100%; max-width: 452px;
   max-height: 86vh; overflow-y: auto;
+  animation: fw-pop .2s cubic-bezier(.2, .8, .3, 1);
 }
 .dialog.clay { border-color: var(--clay-line); }
 
+@keyframes fw-fade { from { opacity: 0; } }
+@keyframes fw-pop {
+  from { opacity: 0; transform: translateY(10px) scale(.985); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dialog, .dialog-scrim { animation: none; }
+}
+
 .dialog h2 {
+  display: flex; align-items: center; gap: 12px;
   font-family: var(--display); font-size: 20px; font-weight: 500;
   letter-spacing: -.01em; margin: 0 0 8px;
 }
 .dialog.clay h2 { color: var(--clay-deep); }
+
+/* A tinted square holding the glyph of the thing about to happen — sage for an ordinary
+   confirmation, clay for a destructive one. It is what makes a pause dialog and a delete
+   dialog tell themselves apart before a word is read; the only other difference between
+   them was the colour of one button at the far end of the panel. */
+.dialog-icon {
+  width: 40px; height: 40px; border-radius: 12px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--accent-soft); color: var(--accent-deep);
+}
+.dialog.clay .dialog-icon { background: var(--clay-soft); color: var(--clay-deep); }
+
+/* The escape hatch on the two panels that have no footer — the ✕ is the only way out
+   of the stage detail and the model picker other than Esc. */
+button.iconbtn.dialog-x { margin-left: auto; width: 32px; height: 32px; flex-shrink: 0; }
 
 .dialog-body { margin: 0 0 12px; color: var(--body); font-size: 14px; }
 
@@ -1280,7 +1390,8 @@ body[data-fw-theme="dark"] {
 }
 
 @media (max-width: 620px) {
-  .dialog { max-width: none; padding: 18px 16px; }
+  /* Padding-top stays 0 — the sticky header carries it. */
+  .dialog { max-width: none; padding: 0 16px 18px; }
   .dialog-actions { flex-direction: column-reverse; align-items: stretch; }
   .dialog-actions button { width: 100%; }
 }
@@ -1307,105 +1418,282 @@ body[data-fw-theme="dark"] {
    halfway.
 */
 
-.stages {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
-  margin-bottom: 18px;
+.stagework { margin-bottom: 18px; }
+
+/* The grid had no heading, and the log was a disclosure further down with no visible
+   relationship to it. One row names the three boxes and hands the log its one remaining
+   job — explaining a run that died halfway. */
+.stagework-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap; margin-bottom: 12px;
+}
+.stagework-title {
+  font-family: var(--ui); font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0;
+}
+.stagework-log { display: inline-flex; align-items: center; gap: 6px; }
+
+/* 30px, and the gap is load-bearing: the connector between two boxes is positioned into
+   it. A smaller gap leaves the arrow overlapping the card it points at. */
+.stages { display: grid; grid-template-columns: repeat(3, 1fr); gap: 30px; }
+.stagecell { position: relative; display: flex; flex-direction: column; }
+
+/* The connector, drawn in the gap to the LEFT of the cell it belongs to. */
+.stage-link {
+  position: absolute; left: -30px; top: 52px; width: 30px; height: 5px;
+  display: block; pointer-events: none;
+}
+.stage-link-rule {
+  position: absolute; left: 5px; right: 5px; top: 2px; height: 1px;
+  background: var(--line); display: block;
+}
+.stage-link-dot {
+  position: absolute; left: 12px; top: 0; width: 5px; height: 5px;
+  border-radius: 50%; background: var(--accent); display: block;
+  animation: fw-flow 1.4s ease-in-out infinite;
+}
+@keyframes fw-flow {
+  0%   { transform: translateX(-10px); opacity: 0; }
+  35%  { opacity: 1; }
+  100% { transform: translateX(16px); opacity: 0; }
 }
 
 .stage {
-  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  position: relative; overflow: hidden;
+  display: flex; flex-direction: column; align-items: stretch; gap: 0;
   text-align: left; width: 100%; cursor: pointer;
-  border-radius: 14px; padding: 14px 16px;
+  border-radius: 16px; padding: 15px 17px;
   font: inherit; color: var(--fg);
   border: 1px solid var(--line); background: var(--card);
+  transition: transform .18s ease, opacity .18s ease;
 }
 .stage:hover { border-color: var(--dash); }
 
 /* Dashed paper for the free tier, sage for triage, white-with-clay for scoring. */
 .stage-free  { border-style: dashed; background: var(--panel); }
 .stage-triage { background: var(--accent-soft); border-color: var(--accent-line); }
-.stage-score { background: var(--card); border-color: var(--clay-line); }
+.stage-score {
+  background: var(--card); border-color: var(--clay-line);
+  box-shadow: 0 6px 20px rgba(160, 107, 79, .07);
+}
 
-.stage-n { font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
-.stage-title { font-size: 14.5px; font-weight: 600; }
+.stage-head { display: flex; align-items: center; gap: 9px; }
+
+/* A numbered badge, not a "STEP N" eyebrow. The three are different colours because the
+   three steps are not equivalent — that is the whole argument the row of boxes makes. */
+.stage-badge {
+  width: 22px; height: 22px; border-radius: 7px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700;
+  background: var(--nav-active); color: var(--muted);
+}
+.stage-triage .stage-badge, .stage-badge.n2 { background: var(--accent); color: var(--on-accent); }
+.stage-score .stage-badge, .stage-badge.n3 { background: var(--clay); color: var(--on-accent); }
+.stage-badge.big { width: 30px; height: 30px; border-radius: 9px; font-size: 15px; }
+
+.stage-title { font-size: 13px; font-weight: 600; letter-spacing: .01em; flex: 1; }
+.stage-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  background: var(--dash);
+}
+.stagecell.at .stage-dot { background: var(--accent); }
+
+/* The pass count ALONE, at display size. It used to render "23 of 61" at one size, which
+   makes three cards in a row impossible to read as a funnel — the eye has nothing to
+   compare. The denominator drops to the footer, where it is context rather than a rival. */
 .stage-count {
-  font-family: var(--display); font-size: 26px; line-height: 1.2; margin-top: 6px;
+  font-family: var(--display); font-size: 34px; line-height: 1.05;
+  margin: 12px 0 2px; color: var(--fg);
 }
-.stage-count .muted { font-size: 15px; }
-.stage-foot { font-size: 12.5px; color: var(--muted); }
+.stage-triage .stage-count { color: var(--accent-deep); }
+.stage-score .stage-count { color: var(--clay-deep); }
+.stage-label { font-size: 12.5px; color: var(--muted); }
 
-.stage-engine {
-  display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap;
-  margin-top: 10px; padding-top: 9px; width: 100%;
-  border-top: 1px solid var(--line); font-size: 12.5px;
+.stage-rule { height: 1px; background: var(--line-soft); margin: 11px 0 9px; display: block; }
+
+.stage-foot { display: flex; align-items: baseline; gap: 10px; font-size: 12.5px; }
+.stage-of { color: var(--muted); }
+/* The card was clickable and nothing said so. */
+.stage-why { margin-left: auto; color: var(--accent); font-weight: 500; flex-shrink: 0; }
+.stage:hover .stage-why { color: var(--accent-deep); }
+
+/* --- a run, happening ------------------------------------------------------- */
+/*
+   The boxes are the run now. They used to be hidden for the whole of a search and appear
+   at the end holding finished numbers, which made the one thing somebody watches for ten
+   minutes the one thing they could not see.
+*/
+.stagecell.at .stage {
+  transform: translateY(-3px);
+  animation: fw-pulse 1.4s ease-in-out infinite;
 }
-.stage-triage .stage-engine { border-top-color: var(--accent-line); }
-.stage-score .stage-engine { border-top-color: var(--clay-line); }
-.stage-cost { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--body); }
+.stagecell.done .stage { opacity: .8; }
+.stagecell.waiting .stage { opacity: .55; }
+
+@keyframes fw-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--pulse); }
+  55%      { box-shadow: 0 0 0 9px var(--pulse-0); }
+}
+
+.stage-rail {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 3px;
+  border-radius: 99px; background: var(--track); overflow: hidden;
+}
+.stage-rail-fill {
+  display: block; height: 100%; width: 0; background: var(--muted);
+  transition: width .12s linear;
+}
+.stage-triage .stage-rail-fill { background: var(--accent); }
+.stage-score .stage-rail-fill { background: var(--clay); }
+/* Stage 1 mid-crawl. Nothing knows how many pages a funder list will yield until it has
+   been fetched, so there is no denominator — and a bar filling against a total we made
+   up would be the one dishonest pixel on this page. It sweeps instead. */
+.stage-rail.sweep .stage-rail-fill {
+  width: 34%; animation: fw-sweep 1.3s ease-in-out infinite;
+}
+@keyframes fw-sweep {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+
+/* --- the engine row, outside the card --------------------------------------- */
+/*
+   A sibling under the card rather than a strip inside it, so all three line up on one
+   baseline whatever the cards above them do. The per-stage cost is NOT here: four
+   decimal places across three cards reads as noise, and the number people want on a card
+   is the count. It is in the stage detail's figures.
+*/
+.stage-engine {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  margin-top: 8px; padding: 7px 11px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--card);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.stagecell:first-child .stage-engine { background: var(--panel); }
+.stage-engine:hover:not(:disabled) { border-color: var(--dash); }
+.stage-engine.fixed { cursor: default; opacity: 1; }
+.stage-engine.fixed .stage-engine-value { color: var(--muted); }
+.stage-engine:disabled { opacity: 1; }
+.stage-engine-label {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em;
+  font-weight: 700; color: var(--muted); flex-shrink: 0;
+}
+.stage-engine-value {
+  font-size: 12.5px; font-weight: 600; color: var(--fg);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.stage-engine-caret { margin-left: auto; color: var(--accent); display: inline-flex; }
 
 /* --- one stage, opened ------------------------------------------------------ */
 
-.stagedetail { max-width: 620px; }
+.stagedetail { max-width: 600px; }
 
+/* Four bordered figures, not four words in a sentence. They are the only numbers in the
+   panel and they were set as an inline run of text, which is the one shape that
+   guarantees nobody compares them. */
 .stage-figures {
-  display: flex; flex-wrap: wrap; gap: 6px 20px; margin-bottom: 14px;
-  font-size: 13.5px; color: var(--body);
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px; margin-bottom: 16px;
 }
-.stage-figures strong { font-family: var(--display); font-size: 17px; font-weight: 500; }
+.figure {
+  display: flex; flex-direction: column; gap: 1px;
+  border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px;
+  background: var(--card); font-size: 12px; color: var(--muted);
+}
+.figure strong {
+  font-family: var(--display); font-size: 26px; font-weight: 500; line-height: 1.1;
+  color: var(--fg);
+}
+.figure.went { background: var(--accent-soft); border-color: var(--accent-line); }
+.figure.went strong { color: var(--accent-deep); }
+.figure.aside { background: var(--clay-soft); border-color: var(--clay-line); }
+.figure.aside strong { color: var(--clay-deep); }
+
+/* Both halves of the step. The panel only ever had the rejections, which turns an
+   account of what a step did into a list of what it threw away. */
+.stage-passed {
+  margin: 0 0 18px; padding: 11px 14px; border-radius: 11px;
+  background: var(--accent-soft); border: 1px solid var(--accent-line);
+  font-size: 13.5px; color: var(--accent-deep);
+}
 
 .reasonlist { list-style: none; margin: 0 0 8px; padding: 0; }
 .reason { border-top: 1px solid var(--line-soft); }
 .reason:last-child { border-bottom: 1px solid var(--line-soft); }
+.reason.on { background: var(--line-soft); border-radius: 10px; }
 
 .reason-head {
   display: flex; align-items: center; gap: 9px; width: 100%;
   border: 0; background: none; border-radius: 0; cursor: pointer;
   font: inherit; font-size: 13.5px; color: var(--fg);
-  padding: 10px 2px; text-align: left;
+  padding: 10px 8px; text-align: left;
 }
 .reason-head:hover { background: var(--line-soft); border-color: transparent; }
-.reason-caret { color: var(--muted); font-size: 11px; width: 10px; flex-shrink: 0; }
-.reason-name { flex: 1; min-width: 0; }
-.reason-count {
-  font-variant-numeric: tabular-nums; color: var(--body); font-weight: 600;
-  flex-shrink: 0;
+.reason-caret {
+  color: var(--muted); display: inline-flex; flex-shrink: 0;
+  transition: transform .18s ease;
 }
+.reason.on .reason-caret { transform: rotate(90deg); }
+/* The count leads, as a clay numeral. */
+.reason-count {
+  font-family: var(--display); font-size: 19px; line-height: 1;
+  color: var(--clay); min-width: 30px; text-align: right;
+  font-variant-numeric: tabular-nums; flex-shrink: 0;
+}
+.reason-name { flex: 1; min-width: 0; }
+/* What makes "64 below your floor, 13 faith-based" legible without reading either
+   number. Proportional to the biggest reason, not to the total — one reason at 90% would
+   otherwise render every other bar as a stub too short to compare. */
+.reason-bar {
+  width: 64px; height: 6px; border-radius: 99px; background: var(--track);
+  overflow: hidden; flex-shrink: 0;
+}
+.reason-bar-fill { display: block; height: 100%; background: var(--clay); }
 .reason-none { margin: 0 0 10px 21px; }
 
 /* The rows that make a reason checkable rather than just countable. */
-.rejectlist { list-style: none; margin: 0 0 8px; padding: 0 0 0 21px; }
+.rejectlist { list-style: none; margin: 0 0 8px; padding: 0 8px 0 29px; }
 .rejectlist li {
-  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
-  padding: 5px 0; font-size: 13px; border-top: 1px dotted var(--line-soft);
+  display: flex; flex-direction: column; gap: 1px;
+  padding: 7px 0; font-size: 13px; border-top: 1px dotted var(--line-soft);
 }
 .rejectlist li:first-child { border-top: 0; }
-.reject-funder { color: var(--muted); font-size: 12px; flex-basis: 100%; }
-.reject-detail { color: var(--clay-deep); font-size: 12.5px; margin-left: auto; }
+/* The FUNDER is the link, not the page title — you recognise "San Diego Foundation", not
+   "Community Enhancement Program FY26 Guidelines". */
+.reject-funder { font-size: 13px; font-weight: 600; color: var(--accent); }
+.reject-title { font-size: 12.5px; color: var(--body); }
+.reject-detail { font-size: 12.5px; color: var(--clay-deep); }
+.reject-host { font-size: 11.5px; color: var(--muted); }
+.reject-more { margin: 2px 0 8px 29px; display: inline-flex; align-items: center; gap: 5px; }
+.reject-more svg { transform: rotate(90deg); transition: transform .18s ease; }
+.reject-more.on svg { transform: rotate(-90deg); }
 
-/* --- the technical log, now a disclosure ------------------------------------ */
-
-.runlog-details { margin-bottom: 18px; }
-.runlog-details > summary {
-  cursor: pointer; font-size: 13px; color: var(--muted);
-  padding: 6px 0; list-style-position: inside;
-}
-.runlog-details > summary:hover { color: var(--fg); }
+/* --- the technical log ------------------------------------------------------ */
+/* Opened by the button in the stage header rather than by a <summary> of its own. */
+.runlog-open { margin-bottom: 18px; }
 
 @media (max-width: 900px) {
-  /* Stacked, and the connector idea does not survive the rotation — so there is none. */
-  .stages { grid-template-columns: 1fr; }
+  /* Stacked. The connectors are absolutely positioned into a horizontal gap that does
+     not exist in one column, so they are removed rather than rotated — an arrow that
+     only works in one orientation is decoration. */
+  .stages { grid-template-columns: 1fr; gap: 14px; }
+  .stage-link { display: none; }
 }
 
 /* --- picking a model per step (R5) ------------------------------------------ */
 
-.stage-model { font-size: 12.5px; }
-.stage-model:hover:not(:disabled) { text-decoration: underline; }
+.modelpicker { max-width: 452px; }
+/* The header carries the stage's own badge, so a dialog opened from box 2 and one opened
+   from box 3 are not two identical panels with one word different in the title. */
+.picker-heading { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.picker-heading small {
+  font-family: var(--ui); font-size: 12.5px; font-weight: 400; color: var(--muted);
+}
 
-.modelpicker { max-width: 520px; }
 .modellist { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 8px; }
 
 .modelopt {
-  display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+  display: flex; align-items: flex-start; gap: 11px;
   width: 100%; text-align: left; cursor: pointer;
   border: 1px solid var(--line); border-radius: 12px; background: var(--card);
   padding: 11px 13px; font: inherit; color: var(--fg);
@@ -1413,38 +1701,141 @@ body[data-fw-theme="dark"] {
 .modelopt:hover:not(:disabled) { border-color: var(--dash); background: var(--card); }
 .modelopt.on { border-color: var(--accent-line); background: var(--accent-soft); }
 
+/* A radio, not a pressed button with an "In use" chip. That chip was a third badge on a
+   row that already carried "Recommended" and a price — three marks, one of which was
+   silently the selection state. This is the one control everybody already reads as
+   "that is the one that is on". */
+.modelopt-radio {
+  width: 16px; height: 16px; border-radius: 50%; flex-shrink: 0; margin-top: 3px;
+  border: 1px solid var(--dash); background: var(--card);
+}
+.modelopt.on .modelopt-radio { border: 5px solid var(--accent); }
+.modelopt-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
 .modelopt-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; width: 100%; }
 .modelopt-name { font-weight: 600; font-size: 14px; }
+.modelopt .chip { font-size: 11.5px; font-weight: 600;
+                  background: var(--accent-soft); color: var(--accent-deep); }
 .modelopt-note { font-size: 12.5px; color: var(--muted); }
 /* The number that stops somebody picking Opus and then wondering why the search
-   stopped halfway down their funder list. */
+   stopped halfway down their funder list. The prototype has no equivalent; this is
+   better than it and stays. */
 .modelopt-cost {
   margin-left: auto; font-variant-numeric: tabular-nums;
   font-size: 12.5px; color: var(--clay-deep);
 }
+.modelpicker-more {
+  display: flex; align-items: flex-start; gap: 7px;
+  padding: 10px 12px; border-radius: 11px; background: var(--panel);
+  border: 1px solid var(--line); margin: 0 0 12px;
+}
+.modelpicker-more svg { flex-shrink: 0; margin-top: 2px; color: var(--accent); }
 
 /* --- funder list: search, paging, the blacklist (R7) ------------------------- */
 
-.funder-search { width: 100%; margin: 4px 0 12px; }
+/* Always visible, not gated on the list passing seven rows. A list that grows a search
+   box on its eighth entry is one more thing that moves under somebody. */
+.funder-search {
+  display: flex; align-items: center; gap: 8px;
+  border: 1px solid var(--line); border-radius: 11px; background: var(--card);
+  padding: 0 6px 0 11px; margin: 4px 0 12px;
+  color: var(--muted);
+}
+.funder-search:focus-within { border-color: var(--accent); }
+.funder-search input {
+  flex: 1; border: 0; background: none; padding: 9px 0; border-radius: 0; min-width: 0;
+}
+.funder-search input:focus-visible { outline: none; border-color: transparent; }
+.panel .funder-search input { background: none; }
 
-.funder-row.blocked { opacity: .72; }
-.funder-row.blocked .funder-name { text-decoration: line-through; text-decoration-color: var(--clay-line); }
+/* The ticks change meaning in selection mode and used to do it in silence. */
+.selectbar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: var(--clay-soft); border: 1px solid var(--clay-line);
+  border-radius: 12px; padding: 9px 13px; margin-bottom: 10px;
+  font-size: 13px; color: var(--clay-deep);
+}
+.selectbar > span:first-child { flex: 1 1 auto; }
+
+/* A button, not a native checkbox: it carries the whole pause/resume affordance, a 13px
+   system box is hard to hit, and `accent-color` is the browser's idea of an accent
+   rather than ours — which showed in dark mode. */
+button.funder-tick {
+  width: 26px; height: 26px; padding: 0; border-radius: 8px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--dash); background: var(--card); color: var(--muted);
+}
+button.funder-tick.on {
+  background: var(--accent); border-color: var(--accent); color: var(--on-accent);
+}
+button.funder-tick:hover:not(:disabled) { border-color: var(--accent); }
+.funder-row.picked { background: var(--clay-soft); border-radius: 8px; }
+/* The host and the sector, under the name rather than in a column of their own. As a
+   column the sector was empty space on every row at desktop width and an orphan at
+   mobile. */
+.funder-sub { font-size: 12.5px; }
+.funder-sub a { color: var(--accent); }
 
 .pager {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   flex-wrap: wrap; margin-top: 12px; font-size: 13px;
 }
 .pager-nums { display: flex; gap: 3px; flex-wrap: wrap; }
+button.pager-arrow {
+  width: 30px; height: 30px; border-radius: 9px;
+  border: 1px solid var(--line); color: var(--body);
+}
+button.pager-arrow.back svg { transform: rotate(180deg); }
+button.pager-arrow:disabled { opacity: .4; cursor: not-allowed; }
 .pager-num {
   min-width: 28px; padding: 4px 7px; border-radius: 8px;
   border: 1px solid transparent; background: none; color: var(--body);
   font: inherit; font-size: 13px; cursor: pointer;
 }
 .pager-num:hover:not(:disabled) { background: var(--line-soft); border-color: transparent; }
-.pager-num.on { background: var(--accent-soft); color: var(--accent-deep); font-weight: 600; }
+/* Ink, not sage. Sage is the "searched / good" colour everywhere else on this page, so
+   using it for the current page number reads as state rather than as position. */
+.pager-num.on {
+  background: var(--invert); color: var(--on-invert); font-weight: 600;
+  border-color: var(--invert);
+}
 
-.blocklist { margin-top: 16px; border-top: 1px solid var(--line-soft); padding-top: 10px; }
-.blocklist-head { font-size: 13px; }
+/* --- the blacklist, as its own section -------------------------------------- */
+/* It was a text button at the foot of the funder panel reading "▸ Blocked — 3", which is
+   a footnote on that list rather than the deliberate, separate thing a blacklist is. */
+.blacklist { padding: 0; }
+.blacklist-head {
+  display: flex; align-items: center; gap: 11px; width: 100%;
+  border: 0; background: none; border-radius: 14px; cursor: pointer;
+  padding: 16px 20px; font: inherit; text-align: left; color: var(--fg);
+}
+.blacklist-head:hover { background: var(--line-soft); border-color: transparent; }
+.blacklist-head h2 { margin: 0; font-size: 20px; }
+/* Rotated, not swapped. A "▸"/"▾" character change is a different glyph appearing where
+   the old one was; this is the same mark turning. */
+.blacklist-caret {
+  display: inline-flex; color: var(--muted); transition: transform .18s ease;
+}
+.blacklist.open .blacklist-caret { transform: rotate(90deg); }
+.blacklist-icon {
+  width: 26px; height: 26px; border-radius: 8px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--clay-soft); color: var(--clay-deep);
+}
+.blacklist-toggle { margin-left: auto; color: var(--accent); font-size: 13.5px; }
+.blacklist > p { margin: 0 20px 10px; }
+.blocked-list { padding: 0 20px 16px; }
+.blocked-row {
+  display: flex; align-items: center; gap: 11px;
+  padding: 9px 0; border-top: 1px solid var(--line-soft);
+}
+.blocked-icon {
+  width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--clay-soft); color: var(--clay-deep);
+}
+.blocked-main { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
+.blocked-name { font-weight: 500; font-size: 14px; }
+.blocked-row .pill { flex-shrink: 0; }
 
 /* --- the funder marketplace (R7a) ------------------------------------------- */
 
@@ -1453,13 +1844,20 @@ body[data-fw-theme="dark"] {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   flex-wrap: wrap; margin-bottom: 6px;
 }
-.market-head h2 { margin: 0; }
+.market-head h2 { margin: 0; display: flex; align-items: center; gap: 10px; }
+.market-icon {
+  width: 26px; height: 26px; border-radius: 8px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--accent-soft); color: var(--accent);
+}
+.market-blurb { margin: 0 0 12px; max-width: 72ch; font-size: 12.5px; }
 
 .segmented {
   display: inline-flex; gap: 2px; padding: 3px;
   background: var(--line-soft); border-radius: 999px;
 }
 .segmented button {
+  display: inline-flex; align-items: center; gap: 6px;
   border: 0; background: none; border-radius: 999px;
   padding: 5px 14px; font: inherit; font-size: 13px; color: var(--muted);
   cursor: pointer;
@@ -1469,28 +1867,114 @@ body[data-fw-theme="dark"] {
   background: var(--card); color: var(--fg); font-weight: 600;
   box-shadow: 0 1px 2px rgba(0, 0, 0, .08);
 }
-
-/* Small cards in a grid, not stacked full-width rows. */
-.marketplace .directory {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px;
+/* Without these, "Shared" is a tab you have to open to find out whether there is
+   anything behind it, and you have to do that every visit. */
+.segmented-count {
+  padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600;
+  background: var(--line); color: var(--muted);
 }
-.marketplace .directory-row {
-  flex-direction: column; align-items: flex-start; gap: 8px;
-  border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px;
-  background: var(--panel);
+.segmented button[aria-selected="true"] .segmented-count {
+  background: var(--accent-soft); color: var(--accent-deep);
 }
 
+/* Small cards in a grid, not stacked full-width rows. This was the biggest visual gap on
+   the page: five shared funders rendered as five full-width rows, which made the section
+   taller than the funder list it sits above. */
+.directory {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(228px, 1fr));
+  gap: 8px; margin-top: 10px;
+}
+.marketcard {
+  display: flex; flex-direction: column; gap: 6px;
+  border: 1px solid var(--line); border-radius: 12px; padding: 11px 13px;
+  background: var(--card); min-width: 0;
+}
+.marketcard.done { background: var(--accent-soft); border-color: var(--accent-line); }
+.marketcard-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.marketcard-icon {
+  width: 22px; height: 22px; border-radius: 7px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--accent-soft); color: var(--accent);
+}
+.marketcard.done .marketcard-icon { background: var(--card); }
+.marketcard-name {
+  font-size: 13.5px; font-weight: 600; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.marketcard-meta { margin-left: auto; font-size: 12px; color: var(--muted); flex-shrink: 0; }
+.marketcard-body {
+  margin: 0; font-size: 12px; color: var(--muted); line-height: 1.45;
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.marketcard-foot { display: flex; align-items: center; gap: 6px; margin-top: auto; }
+.marketcard-foot .pill { flex-shrink: 0; }
+.marketcard-report { margin-left: auto; }
+.marketcard-report:hover:not(:disabled) { background: var(--clay-soft); color: var(--clay-deep); }
+.marketcard-on {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 12.5px; color: var(--accent-deep); font-weight: 500;
+}
+
+/* The §8 line, under the grid rather than above it. A reachability check is not
+   research, and nothing on this page may imply that it is. */
+.market-caveat {
+  display: flex; align-items: flex-start; gap: 7px; margin: 12px 0 0;
+  font-size: 12px; color: var(--muted);
+}
+.market-caveat svg { flex-shrink: 0; margin-top: 2px; color: var(--clay); }
+
+/* Turning sharing ON goes through the confirm; it is the one control on this page that
+   starts publishing rows, and a checkbox that does that silently is the case a dialog
+   exists for. */
 .contribute {
-  display: flex; gap: 10px; align-items: flex-start;
-  margin: 10px 0 14px; padding: 10px 12px;
-  background: var(--accent-soft); border: 1px solid var(--accent-line);
-  border-radius: 12px; font-size: 13px; color: var(--body);
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  margin: 0 0 14px; padding: 10px 13px;
+  border: 1px dashed var(--dash); border-radius: 12px;
+  font-size: 13px; color: var(--body);
 }
-.contribute input { margin-top: 3px; flex-shrink: 0; }
+.contribute.on { border: 1px solid var(--accent-line); background: var(--accent-soft); }
+.contribute-icon {
+  width: 26px; height: 26px; border-radius: 8px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--nav-active); color: var(--muted);
+}
+.contribute.on .contribute-icon { background: var(--accent); color: var(--on-accent); }
+.contribute-text { display: flex; flex-direction: column; gap: 1px; flex: 1 1 200px; min-width: 0; }
 
 @media (max-width: 620px) {
-  .marketplace .directory { grid-template-columns: 1fr; }
+  .directory { grid-template-columns: 1fr; }
 }
+
+/* --- which AI it uses (R5, the provider half) -------------------------------- */
+/*
+   The model picker on This week offers whatever `model_choices` holds and there was
+   nowhere at all to change what that is. Only Anthropic is live; the other three are
+   present and disabled, because a card that names the thing is a signpost and leaving
+   them out entirely would make the picker's "add a provider" line point at nothing.
+*/
+.providers {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px; margin-bottom: 14px;
+}
+.provider {
+  display: flex; flex-direction: column; gap: 7px;
+  border: 1px solid var(--line); border-radius: 12px; padding: 13px 15px;
+  background: var(--panel);
+}
+.provider.on { background: var(--accent-soft); border-color: var(--accent-line); }
+.provider.soon { border-style: dashed; }
+.provider-head { display: flex; align-items: center; gap: 9px; }
+.provider-mark {
+  width: 26px; height: 26px; border-radius: 8px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--nav-active); color: var(--muted);
+  font-weight: 700; font-size: 13px;
+}
+.provider.on .provider-mark { background: var(--accent); color: var(--on-accent); }
+.provider-name { font-weight: 600; font-size: 14px; }
+.provider-check { margin-left: auto; color: var(--accent); display: inline-flex; }
+.provider-models { margin: 0; font-size: 12.5px; color: var(--muted); }
+.provider .pill { align-self: flex-start; }
 
 /* --- member actions and the spending cap (R9) -------------------------------- */
 /*
@@ -1508,6 +1992,16 @@ button.pill {
 }
 button.pill:hover:not(:disabled) { border-color: var(--dash); color: var(--fg); }
 button.pill.on { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent-deep); }
+/* `.pill` is declared after `.primary`, so at equal specificity it wins and a
+   `pill primary` button came out paper-coloured. Stated once here rather than reordering
+   the file around one combination. */
+button.pill.primary {
+  background: var(--accent); border-color: var(--accent);
+  color: var(--on-accent); font-weight: 500;
+}
+button.pill.primary:hover:not(:disabled) {
+  background: var(--accent-deep); border-color: var(--accent-deep); color: var(--on-accent);
+}
 
 /* Icon-only, so it needs its own hit area and its label lives in aria-label. */
 button.iconbtn {
@@ -1518,6 +2012,9 @@ button.iconbtn {
 button.iconbtn:hover:not(:disabled) { background: var(--line-soft); color: var(--fg); border-color: transparent; }
 button.iconbtn.danger { color: var(--clay); }
 button.iconbtn.danger:hover:not(:disabled) { background: var(--clay-soft); color: var(--danger); }
+/* Copy, for the two seconds after it worked. A glyph that does its job silently is a
+   glyph somebody presses again. */
+button.iconbtn.on { background: var(--accent-soft); color: var(--accent-deep); }
 
 .capedit { display: grid; gap: 8px; margin-top: 10px; }
 .capedit .field.inline { gap: 7px; margin: 0; }
@@ -1546,11 +2043,9 @@ button.iconbtn.danger:hover:not(:disabled) { background: var(--clay-soft); color
 @media (max-width: 900px) {
   .page { padding: 18px; padding-top: 64px; }
 
-  /* The three stage boxes stack. There are no connector arrows between them to hide —
-     the R11 note anticipated some, and the boxes read as a sequence from their "Step 1
-     / 2 / 3" labels and their cost order, which survives stacking. Rotating an arrow
-     would have been decoration that only works in one orientation. */
-  .stages { grid-template-columns: 1fr; }
+  /* The stage grid and its connectors are handled in the stages block above — the
+     arrows are removed rather than rotated, because they are positioned into a
+     horizontal gap that does not exist in one column. */
 
   /* Title over buttons, and the two actions share the width rather than one of them
      wrapping alone onto a second line. */
@@ -1585,8 +2080,12 @@ button.iconbtn.danger:hover:not(:disabled) { background: var(--clay-soft); color
   }
   /* Labels wrapping a checkbox are the real target — the box itself is ~13px and always
      will be. Centred, so the row does not grow a lopsided gap. */
-  .funder-tick, .check { display: flex; align-items: center; }
+  .check { display: flex; align-items: center; }
+  /* The funder tick is a square button, so it takes the 44 on both axes rather than
+     stretching into a tall rectangle. */
+  button.funder-tick { width: 44px; }
   .pager-num { min-width: 44px; }
+  button.pager-arrow { width: 44px; height: 44px; }
   /* A segmented control's halves are each a target, so each half gets the 44 and the
      control ends up taller than one button. Padding stays, or the pill hugs the halves
      and the selected one has no visible inset.
@@ -1599,25 +2098,44 @@ button.iconbtn.danger:hover:not(:disabled) { background: var(--clay-soft); color
   /* The findings row already wraps; keep the fit numeral and the funder on one line. */
   .opp-row { row-gap: 8px; }
 
-  .stage-count { font-size: 22px; }
+  .stage-count { font-size: 28px; }
   .segmented { width: 100%; }
-  .segmented button { flex: 1; }
+  .segmented button { flex: 1; justify-content: center; }
+
+  .selectbar { row-gap: 8px; }
+  .blacklist-head { padding: 14px 16px; }
+  .blacklist > p, .blocked-list { margin-inline: 16px; padding-inline: 0; }
+  /* Row 3 of a marketplace card: keep the button and the flag on one line under the
+     two-line body rather than letting the pill wrap beneath the meta. */
+  .marketcard-foot { flex-wrap: nowrap; }
 }
 
 /* Dialogs, at every width. `max-height: 86vh` and the internal scroll were already on
    `.dialog`; what was missing is that the header scrolled away with the content, so a
    long reject list left somebody scrolling a panel with no title on it. */
 .dialog { display: flex; flex-direction: column; }
+/* The header owns the dialog's top padding rather than sitting inside it under a
+   -22px margin. That margin and `position: sticky` fight: sticky positions from the flow
+   box, the `top: 0` constraint then pushes the element back down to the scrollport edge,
+   and the header ended up rendering 22px lower than the space it reserved — sitting on
+   top of the first line of the paragraph below it, in every dialog, scrolled or not.
+   With `padding-top: 0` on `.dialog` the flow position and the sticky position are the
+   same place and there is nothing to fight. The horizontal negative margins stay: those
+   only bleed the background out to the panel edge. */
 .dialog > h2 {
   position: sticky; top: 0; z-index: 1;
-  background: var(--card); margin: -22px -24px 8px; padding: 22px 24px 10px;
+  background: var(--card); margin: 0 -24px 8px; padding: 22px 24px 10px;
 }
 .dialog.clay > h2 { background: var(--card); }
 
 @media (max-width: 620px) {
   .dialog-scrim { padding: 20px 12px; align-items: flex-start; }
-  .dialog { max-height: calc(100vh - 40px); }
-  .dialog > h2 { margin: -18px -16px 8px; padding: 18px 16px 10px; }
-  .stage-figures { gap: 4px 14px; font-size: 13px; }
+  .dialog { max-height: calc(100vh - 40px); padding: 0 16px 18px; }
+  .dialog > h2 { margin: 0 -16px 8px; padding: 18px 16px 10px; }
+  /* Two figure cards across rather than the auto-fit's four, which at this width would
+     be four 26px numerals in columns too narrow for their own labels. */
+  .stage-figures { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .figure { padding: 10px 12px; }
+  .figure strong { font-size: 22px; }
   .modelopt-cost { margin-left: 0; }
 }

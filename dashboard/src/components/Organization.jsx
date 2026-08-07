@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { useConfirm } from "./Confirm";
-import Icon from "./Icon";
+import Icon, { IconButton } from "./Icon";
 import Spinner, { Busy } from "./Spinner";
 import { api, pacificStamp, usd } from "../api";
+import { initials } from "../auth";
 
 // Who else is in this organization, and what it has spent this month.
 //
@@ -52,8 +53,11 @@ function CapEditor({ cap, onSaved }) {
 
   return (
     <div className="capedit">
+      {/* Sized for the audience rather than for a round-numbers habit. This panel's own
+          copy says a weekly search costs about a dollar, which makes $10 three months of
+          use — and $100 a number nobody reading this page should be nudged towards. */}
       <div className="row">
-        {[10, 20, 50, 100].map((amount) => (
+        {[5, 12, 25, 50].map((amount) => (
           <button key={amount} className={`pill ${Number(cap) === amount ? "on" : ""}`}
                   disabled={busy} onClick={() => save(amount)}>
             ${amount}
@@ -160,6 +164,7 @@ export default function Organization({ spend, onChange }) {
   // be taken back by the person doing it.
   async function drop(member) {
     const answer = await ask({
+      icon: "bin",
       tone: "clay",
       title: `Remove ${member.email} from your organization?`,
       points: [
@@ -186,6 +191,7 @@ export default function Organization({ spend, onChange }) {
 
   async function handOver(member) {
     const answer = await ask({
+      icon: "edit",
       title: `Make ${member.email} the admin of your organization?`,
       points: [
         "They will be able to remove people, including you.",
@@ -249,6 +255,10 @@ export default function Organization({ spend, onChange }) {
         <ul className="plain">
           {org.members.map((m) => (
             <li key={m.email} className="member">
+              {/* Three rows of similar-length addresses at the same weight are three
+                  rows nobody tells apart at a glance. The initials are the only thing
+                  that distinguishes them before you read a character. */}
+              <span className="avatar" aria-hidden="true">{initials(m.email)}</span>
               <span>
                 {m.email}
                 {m.uid === org.you && <span className="muted small"> (you)</span>}
@@ -306,9 +316,13 @@ export default function Organization({ spend, onChange }) {
           {org.invites.map((i) => (
             <li key={i.code} className="invite">
               <code className="invite-code">{i.code}</code>
-              <button className="text" onClick={() => copy(i.code)}>
-                {copied === i.code ? "Copied" : "Copy"}
-              </button>
+              {/* Copy is a repeated action on a row, which is the R10 rule for an icon.
+                  It still says "Copied" for two seconds, because a glyph that does its
+                  job silently is a glyph you press again. */}
+              <IconButton name="copy"
+                          label={copied === i.code ? "Copied" : "Copy the code"}
+                          className={copied === i.code ? "on" : ""}
+                          onClick={() => copy(i.code)} />
               <span className="muted small">
                 expires {pacificStamp(i.expires_at)}
               </span>

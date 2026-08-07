@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path("data/rise.db")
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 # The org that owns everything written before tenancy existed. A single-tenant install
 # (and every row in the pilot's live database) belongs to it, so adding org scoping is a
@@ -233,6 +233,21 @@ CREATE TABLE IF NOT EXISTS opportunities (
     estimated_effort_hours INTEGER,
     program_match          TEXT NOT NULL DEFAULT '[]',
     score                  INTEGER NOT NULL DEFAULT 0,
+    -- The three parts the score is composed from, stored so a total can be taken apart.
+    --
+    -- The weights (40 fit / 35 award / 25 timing) used to live only as English inside
+    -- the prompt: the model returned one holistic integer and nothing here could say
+    -- which component produced it. "Why is this 38?" was unanswerable from the data, so
+    -- a rubric that was structurally unearnable looked exactly like a weak grant.
+    --
+    -- **NULL means "not scorable", which is not the same as zero.** A funder that never
+    -- states an award amount cannot earn or lose the 35 award points; scoring that 0/35
+    -- charged the nonprofit for the funder's website being terse, and it was the single
+    -- biggest reason nothing ever cleared 42/100. A null leaves that component out of
+    -- the denominator instead — see `agent/score.py: compose_score`.
+    fit_score              INTEGER,   -- 0-40, always present
+    award_score            INTEGER,   -- 0-35, NULL when the page states no amount
+    timing_score           INTEGER,   -- 0-25, NULL when there is no deadline to judge
     score_rationale        TEXT NOT NULL DEFAULT '',
     funder_type            TEXT NOT NULL DEFAULT 'unknown',
     service_areas          TEXT NOT NULL DEFAULT '[]',
@@ -350,6 +365,13 @@ DEFAULT_SETTINGS: dict[str, str] = {
     # been asserting.
     "org_name": "",
     "org_location": "",
+    # How many collective team-hours this org can spend on one application.
+    #
+    # This was a constant in the scoring prompt — "a hard cap of 10 collective
+    # team-hours" — which is the pilot COO's answer to a question no other org was ever
+    # asked. It decides 25 of the 100 points, so every org inherited one nonprofit's
+    # staffing as their own feasibility bar.
+    "max_effort_hours": "10",
     # Has anybody here been walked through setting this up. **A fact that is recorded,
     # not one that is re-derived**, and that distinction is the whole point.
     #
@@ -794,6 +816,27 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE funders ADD COLUMN blocked "
                          "INTEGER NOT NULL DEFAULT 0")
         current = 14
+
+    if current < 15:
+        # v15 makes a score decomposable, and stops a missing award amount from reading
+        # as a bad grant.
+        #
+        # **Nothing is backfilled, and old rows are not rescored.** A run that finished
+        # before this existed returned one holistic integer and there is no honest way to
+        # split it into three — inventing components would put numbers on a page that no
+        # model ever produced, which is the same rule §6 applies to award amounts.
+        #
+        # So rows written before v15 keep their total and show no breakdown. They age out
+        # on their own: findings are partitioned by `month_key` and every run purges the
+        # org's earlier months. The one real cost is a window where this month's scores
+        # and last month's are on different scales, which is why the UI labels a
+        # renormalised score with what it was scored on rather than presenting a bare
+        # number that quietly changed meaning.
+        opp_cols = {r["name"] for r in conn.execute("PRAGMA table_info(opportunities)")}
+        for col in ("fit_score", "award_score", "timing_score"):
+            if col not in opp_cols:
+                conn.execute(f"ALTER TABLE opportunities ADD COLUMN {col} INTEGER")
+        current = 15
 
     conn.execute(
         "INSERT INTO meta(key, value) VALUES('schema_version', ?) "

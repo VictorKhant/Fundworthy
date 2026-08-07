@@ -215,8 +215,12 @@ function Chip({ program, globalFloor, onToggle, onEdit }) {
         aria-pressed={empty ? undefined : program.active}
         title={detail}
       >
+        {/* A filled square with a stroke glyph, not a text character. The three states
+            have to be distinguishable at a glance across a wrapped row of chips, and a
+            bare "✓" / "+" / nothing gave the third state no mark at all — an unticked
+            card and a ticked one differed by one thin character. */}
         <span className="progchip-mark" aria-hidden="true">
-          {empty ? "+" : program.active ? "✓" : ""}
+          <Icon name={empty ? "close" : program.active ? "check" : "add"} size={11} />
         </span>
         <span className="progchip-name">{program.name}</span>
         {empty && <span className="progchip-tag">needs filling in</span>}
@@ -263,6 +267,7 @@ export default function Programs({ programs, globalFloor, onChange }) {
   const toggle = guard((p, active) => api.programs.update(p.id, { active }));
   const remove = guard(async (p) => {
     const answer = await ask({
+      icon: "bin",
       tone: "clay",
       title: `Remove "${p.name}"?`,
       points: [
@@ -293,19 +298,34 @@ export default function Programs({ programs, globalFloor, onChange }) {
   };
 
   const activeCount = programs.filter((p) => p.active).length;
+  const unfilled = programs.filter((p) => !p.summary && p.keywords.length === 0).length;
 
   const open = editing && editing !== "new" ? editing : null;
 
   return (
+    // A panel, not a bare row. The chips used to float between the page head and the
+    // blockers with no boundary of their own, which left the one control that decides
+    // what a search is *for* reading as a caption on the heading above it.
     <section className="progbar">
       {dialog}
 
-      <div className="progbar-row">
-        <span className="progbar-label">
-          Searching for
-          <span className="muted"> · {activeCount} of {programs.length}</span>
+      <div className="progbar-head">
+        <span className="progbar-mark" aria-hidden="true">
+          <Icon name="check" size={13} />
         </span>
+        <h2 className="progbar-title">What to search for</h2>
+        <span className="muted small progbar-count">
+          {activeCount} of {programs.length} being searched
+        </span>
+        {/* A pill at the head, not a text button at the end of the chips. On a long list
+            the row wraps and "+ Add a program" lands wherever the last chip happened to
+            stop, which is a different place every week. */}
+        <button className="pill progbar-add" onClick={() => setEditing("new")}>
+          + Add
+        </button>
+      </div>
 
+      <div className="progbar-row">
         {programs.map((p) => (
           <Chip
             key={p.id}
@@ -315,15 +335,22 @@ export default function Programs({ programs, globalFloor, onChange }) {
             onEdit={setEditing}
           />
         ))}
-
-        <button className="text progbar-add" onClick={() => setEditing("new")}>
-          + Add a program
-        </button>
       </div>
 
       {activeCount === 0 && programs.length > 0 && (
         <p className="muted small progbar-note">
           Nothing is ticked, so a search would have nothing to look for.
+        </p>
+      )}
+
+      {/* The other half of the same problem, which had no note at all: a card can be
+          ticked-looking and still be unsearchable, and the only cue was a dashed border
+          somebody has to already know the meaning of. */}
+      {unfilled > 0 && (
+        <p className="progbar-warn">
+          <Icon name="warning" size={13} />
+          A card with nothing in it can't be searched for — open it and paste the
+          program's web page.
         </p>
       )}
 

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import Icon, { IconButton } from "./Icon";
 
 // Which model does one step of the search, opened from that step's Engine row.
 //
@@ -14,6 +15,18 @@ import { useEffect, useRef } from "react";
 // It is a **projection from the last run**, and it says so. There is no honest forecast
 // before a search has ever run, and inventing one would be a number under a spending
 // limit that nothing stands behind.
+//
+// The options are **radios**. They were pressed-state buttons carrying an "In use" chip,
+// which put a third badge on a row that already had "Recommended" and a price — three
+// marks, one of which was silently the selection state. A radio is the one control
+// everybody already reads as "this is the one that is on".
+
+const BLURB = {
+  2: "This step asks one yes/no question of every page that survived the free filters, "
+   + "so it runs the most times and the cheap answer is usually the right one.",
+  3: "This step reads the whole page and writes the score you act on. It runs on the "
+   + "fewest pages and it is the judgement you are paying for.",
+};
 
 export default function ModelPicker({ stage, choices, current, lastCost, onClose, onPick }) {
   const panel = useRef(null);
@@ -29,8 +42,11 @@ export default function ModelPicker({ stage, choices, current, lastCost, onClose
     return () => document.removeEventListener("keydown", onKey);
   });
 
+  // `preventScroll`, because the dialog scrolls internally and focusing the first option
+  // scrolled the sentence explaining the step up under the sticky header — so the panel
+  // opened already having hidden the thing it opens to say.
   useEffect(() => {
-    if (stage) panel.current?.querySelector("button")?.focus();
+    if (stage) panel.current?.querySelector(".modelopt")?.focus({ preventScroll: true });
   }, [stage]);
 
   if (!stage) return null;
@@ -50,18 +66,17 @@ export default function ModelPicker({ stage, choices, current, lastCost, onClose
       <div className="dialog modelpicker" role="dialog" aria-modal="true"
            aria-labelledby="picker-title" ref={panel}>
         <h2 id="picker-title">
-          {stage === 2 ? "Which model takes the quick look?" : "Which model reads properly?"}
+          <span className={`stage-badge big n${stage.n}`} aria-hidden="true">{stage.n}</span>
+          <span className="picker-heading">
+            Which model does {stage.title.toLowerCase()}?
+            <small>You can change this before any search.</small>
+          </span>
+          <IconButton name="close" label="Close" className="dialog-x" onClick={close} />
         </h2>
-        <p className="dialog-body">
-          {stage === 2
-            ? "This step asks one yes/no question of every page that survived the free "
-              + "filters, so it runs the most times and the cheap answer is usually the "
-              + "right one."
-            : "This step reads the whole page and writes the score you act on. It runs "
-              + "on the fewest pages and it is the judgement you are paying for."}
-        </p>
 
-        <ul className="modellist">
+        <p className="dialog-body">{BLURB[stage.n]}</p>
+
+        <ul className="modellist" role="radiogroup" aria-labelledby="picker-title">
           {choices.map((c) => {
             const mine = c.id === current;
             const r = rate(c.id);
@@ -72,26 +87,44 @@ export default function ModelPicker({ stage, choices, current, lastCost, onClose
               <li key={c.id}>
                 <button
                   type="button"
+                  role="radio"
                   className={`modelopt ${mine ? "on" : ""}`}
                   onClick={() => (mine ? close() : onPick(c.id))}
-                  aria-pressed={mine}
+                  aria-checked={mine}
                 >
-                  <span className="modelopt-head">
-                    <span className="modelopt-name">{c.label}</span>
-                    {c.recommended && <span className="chip">Recommended</span>}
-                    {mine && <span className="chip strong">In use</span>}
-                    {projected != null && (
-                      <span className="modelopt-cost">
-                        ~${projected.toFixed(4)}
-                      </span>
-                    )}
+                  <span className="modelopt-radio" aria-hidden="true" />
+                  <span className="modelopt-body">
+                    <span className="modelopt-head">
+                      <span className="modelopt-name">{c.label}</span>
+                      {c.recommended && <span className="chip">Recommended</span>}
+                      {projected != null && (
+                        <span className="modelopt-cost">
+                          ~${projected.toFixed(4)}
+                        </span>
+                      )}
+                    </span>
+                    <span className="modelopt-note">{c.note}</span>
                   </span>
-                  <span className="modelopt-note">{c.note}</span>
                 </button>
               </li>
             );
           })}
         </ul>
+
+        {/* Where the other providers come from. It points at a panel that exists and
+            currently has one live provider on it — which is the point: the line is not a
+            promise, it is a route to the place the answer will be. */}
+        {/* The text is wrapped in a span deliberately. This is a flex row, and a bare
+            text node beside an element becomes its own anonymous flex ITEM — so the
+            sentence, the <strong> and the tail laid themselves out as three narrow
+            columns rather than one line. */}
+        <p className="muted small modelpicker-more">
+          <Icon name="add" size={13} />
+          <span>
+            Add OpenAI, DeepSeek or Qwen under{" "}
+            <strong>Settings → Which AI it uses</strong> and their models appear here too.
+          </span>
+        </p>
 
         <p className="muted small">
           {lastCost > 0
@@ -100,10 +133,6 @@ export default function ModelPicker({ stage, choices, current, lastCost, onClose
             : "Costs appear here once you have run a search."}{" "}
           Whatever you pick, a search still stops itself at your per-search limit.
         </p>
-
-        <div className="dialog-actions">
-          <button className="text" onClick={close}>Close</button>
-        </div>
       </div>
     </div>
   );

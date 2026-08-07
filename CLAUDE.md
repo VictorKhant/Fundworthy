@@ -47,22 +47,40 @@ design constraint:
 - The accuracy gate (`agent/verify.py`): a sourced value is nulled unless the model
   returns the verbatim sentence it came from and that sentence is on the fetched page.
 - Dashboard controls: award floor, deadline runway, result cap, spend limit, program
-  cards as a chip row at the top of This week, an editable funder list with search and
-  paging, a monthly archive, a Re-run button, a real Stop.
+  cards as a chip row in a **"What to search for"** panel at the top of This week, an
+  editable funder list with search and paging, a monthly archive, a Re-run button, a real
+  Stop.
 - **Light and dark** (`body[data-fw-theme]`, a control at the foot of the sidebar). The
   dark palette is derived from the light one — same hues, moved down — because the
   previous attempt was cool grey against a warm light theme and was dropped for it.
   Default is light and `prefers-color-scheme` is deliberately not consulted.
 - **Three stage boxes** (`components/Stages.jsx`) in place of the streaming log as the
-  primary account of a run: free filters → Haiku triage → Sonnet scoring, each with what
-  came in, what went through, and what it cost. Opening one lists **which** pages were
-  set aside and why, with the specific fact — "$4,000 < $10,000", or triage's own
-  fifteen words. The log is kept verbatim behind "Show the technical log", because it is
-  still the only thing that explains a run that died halfway.
-- **Which model runs each paid step** is a setting, chosen from the Engine row on those
-  boxes, with the projected cost on each option (`triage_model` / `scoring_model`, stored
-  as `provider:model`).
-- Spend **moves while a search runs**. It used to be written only at the end.
+  primary account of a run: free filters → Haiku triage → Sonnet scoring, each showing
+  the pass count alone at display size with the denominator in its footer. Opening one
+  lists **which** pages were set aside and why, with the specific fact — "$4,000 <
+  $10,000", or triage's own fifteen words — and, above that, the rule that let the rest
+  through. The log is kept verbatim behind "Show the technical log" in the section
+  header, because it is still the only thing that explains a run that died halfway.
+- **The boxes are the run while it happens.** They were hidden for the whole of a search
+  and appeared at the end holding finished numbers, which made the one thing somebody
+  watches for ten minutes the one thing they could not see. The working box lifts and
+  pulses, the ones behind it dim, and each carries a progress rail. Those rails divide by
+  real totals or say they cannot: stage 2 is "of the pages that survived the free
+  filters, how many have been read" and stage 3 is "of the results you asked for, how
+  many are found" (the `target_met` condition), while stage 1 **sweeps** rather than
+  filling — nothing knows how many pages a funder list will yield until it has been
+  fetched, and a bar filling against an invented total is the one dishonest pixel this
+  page could have had.
+- **Which model runs each paid step** is a setting, chosen from the Engine row under
+  those boxes, with the projected cost on each option (`triage_model` / `scoring_model`,
+  stored as `provider:model`). **Which provider** those models come from is a panel on
+  Settings ("Which AI it uses") — Anthropic live, OpenAI/DeepSeek/Qwen present and
+  visibly disabled, because connecting one needs a provider column on the stored key, an
+  adapter interface in `agent/score.py` and per-provider pricing, and none of that is
+  built. A card that names the thing is a signpost; leaving them out would make the model
+  picker's "add a provider" line point at nothing.
+- Spend **moves while a search runs**, with a LIVE marker beside it — an unlabelled
+  number changing by itself reads as a glitch. It used to be written only at the end.
 - One themed confirm dialog (`components/Confirm.jsx`) instead of `window.confirm` —
   every destructive path says what will happen rather than asking "are you sure?".
 - **Responsive on two breakpoints and only two**, 900 and 620. Below 900 the sidebar
@@ -201,10 +219,18 @@ gap between the two is where the harm would live:
 | Is this a real registered organisation? | **no** — see the IRS 990 note in §5 |
 | Is it worth applying to? | **no**, and nothing here may imply otherwise |
 
-So Discover shows the sentence and the date (*"The page opened and names an award amount.
-Checked 2026-08-05."*) with the link, and no tick. No model is involved and nothing is
-spent. Failing the check is disqualifying; passing it only permits the entry to be
-offered, labelled as somebody else's suggestion.
+So Discover's **Add funders** section shows the sentence and the date (*"The page opened
+and names an award amount. Checked 2026-08-05."*) on a small card with the link, and no
+tick. No model is involved and nothing is spent. Failing the check is disqualifying;
+passing it only permits the entry to be offered, labelled as somebody else's suggestion —
+and the "we have not researched these" line sits **under** that grid, word for word,
+where it is the last thing read before Add rather than the first thing scrolled past.
+
+That section is a card grid and not a column of full-width rows, which is not only
+cosmetic: five shared funders as five full-width rows made the "who should I watch?"
+section taller than the funder list it sits above. The page order is Add funders →
+Funders it watches → Blacklist → "Find funders near you" — the last of those is disabled
+and unbuilt, and it was sitting between the two things people came for.
 
 **Anyone can report one, and one report hides it from everybody immediately**, before
 review. That is the deliberate direction to fail in: hiding a good funder costs one
@@ -396,6 +422,48 @@ to rank higher. The model is never told whether the org knows a funder.
 
 **Score (0–100)** = program fit **40** + award size vs the floor **35** + can-the-app-be
 -finished-before-the-deadline **25**. Funder warmth is not a factor.
+
+**The model returns the three parts, not the total** (`agent/score.py: ScoreParts`,
+`compose_score`). It used to return one number and the weights were three lines of English
+inside a prompt that nothing enforced, so "the weighted score" was really a holistic guess
+at a sum. Composing it in Python enforces the weights and makes a score decomposable —
+"why is this 38?" had no answer anywhere in the app, and now it is a row in the database
+and a breakdown under "More details".
+
+**A component with nothing to judge it on is `null`, and null leaves the denominator**
+rather than scoring zero. This is the fix for the thing that made the whole list
+unreadable. Award size and timing both need the funder to have published something, and
+most funders publish neither — so for the median candidate 60 of the 100 points were
+unearnable, every score was really out of 40, and the list topped out at 42. That reads as
+"we found you nothing good" when what actually happened is that grant-makers write terse
+web pages. Scoring a missing component zero is a *claim*: it says this opportunity was
+tested on award size and failed. It was not tested. So `fit 28/40, award null, timing 9/25`
+is 37 earned out of 65 available → **57**, and the row says what it was and was not scored
+on. It is the same rule as §6's "amount not stated" — we do not invent the number, and we
+do not punish its absence either. `fit_score` is never null: the page and the program cards
+are always in front of the model, so fit is always answerable and a run always has one axis
+every candidate shares.
+
+**The prompt is the org's own, and this was a multi-tenancy leak.** Every scoring call
+opened with a hardcoded *"a nonprofit working across San Diego County and Imperial
+County"* — `org_name` and `org_location` reached the database and the dashboard and
+stopped there. Program fit is 40 points, so every nonprofit outside San Diego had the
+largest component of its score decided against the wrong region. An empty field is passed
+through as an empty field; a guessed region is the thing that broke this. The hours an
+application may cost is theirs too (`max_effort_hours`, default 10) — 25 points are
+measured against it and it was one nonprofit's staffing applied to every tenant.
+
+**The prompt does not tell the model to score low.** "Be strict" sat in the *shared*
+preamble, so it biased Haiku triage — the cheap binary filter deciding what is even worth
+paying to read — as well as scoring. The award floor already does that job,
+deterministically, for free, before any model runs. **And the award scale has anchors**
+(at the floor ≈ 10/35, 3× ≈ 25/35, 10× ≈ 35/35): "relative to the floor" with no scale
+defined resolves downward, because an undefined scale plus an instruction to be strict is
+answered conservatively every time.
+
+`tests/calibration.py` is the harness that catches a regression here, and it no longer
+asserts only that every YES outranks every NO — that passed on the 13–42 distribution.
+It measures ordering (AUC), spread, and headroom via `agent/evalmetrics.py`.
 
 **Nothing about the funder's finances is, either — the IRS 990 lookup is gone** (schema
 v12). It called ProPublica's Nonprofit Explorer once per funder and put one line into the

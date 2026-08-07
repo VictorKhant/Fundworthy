@@ -121,15 +121,31 @@ TRIAGE_MAX_TOKENS = 512
 SCORING_MAX_TOKENS = 8_000  # headroom: max_tokens caps thinking + response on Sonnet 4.6
 
 # Sonnet 4.6 will not cache a prefix shorter than 2048 tokens — a cache_control marker
-# on a shorter prompt is silently ignored, no error and no saving. Today SCORING_SYSTEM
-# is ~554 tokens, so caching is genuinely off; it turns on by itself once the Org Profile
-# boilerplate (§4) lands in the prompt. Asserting the threshold rather than pasting a
-# marker that does nothing keeps the code honest about which it is.
+# on a shorter prompt is silently ignored, no error and no saving. `score_one` therefore
+# measures the prompt and only marks it when it is worth marking.
+#
+# **It now clears the threshold, where it used to sit well under it.** The scoring system
+# prompt is `org_context(cfg) + _SCORING_RULES`, and the three-component rubric roughly
+# quintupled the second half: it measures ~2700 estimated tokens against a two-program
+# org, so caching is genuinely on and every candidate after the first in a run re-reads
+# that prefix at the cached rate. Triage is ~750 and stays uncached, which is why only
+# `score_one` does the check.
+#
+# This is a saving, not a cost, but it is worth stating: `Budget` prices every call at
+# the standard input rate, so a run's real spend is now *below* what the ceiling thinks.
+# Over-estimating is the safe direction — the ceiling stops us early rather than late.
 SONNET_CACHE_MIN_TOKENS = 2048
 
 
-# Recognised by app/runner.py and stripped from the visible log.
+# The child → runner protocol. Both are recognised by `app/runner.py: _pump`, consumed,
+# and kept out of the log a person reads — machine chatter in the middle of "✓ San Diego
+# Foundation — 3 amounts, 1 deadline" is worse than the delay either one fixes.
+#
+# They live together here rather than one per module because there are two writers and
+# one reader, and a marker whose prefix drifts from the parser's is a feature that
+# silently stops working.
 SPEND_MARKER = "::spend "
+STAGE_MARKER = "::stage "
 
 
 class BudgetExceeded(RuntimeError):
@@ -178,21 +194,53 @@ class Budget:
 
 # --- prompts ------------------------------------------------------------------
 
-_ORG_PREAMBLE = """\
-You are screening funding opportunities for the organization, a nonprofit working \
-across San Diego County and Imperial County (the Far South / Border North region \
-spans both).
+def _preamble(cfg: Config) -> str:
+    """Who we are screening for, in their own words.
 
-The person reading your output is the organization's COO. They have one hour on Thursday morning
-and a hard cap of 10 collective team-hours per application. Their stated problem is
-NOT that they cannot find grants — they can already find plenty. It is that what they
-find is too small to justify a 10-hour application.
+    This was a hardcoded string — "a nonprofit working across San Diego County and
+    Imperial County" — sent for every tenant. `org_name` and `org_location` existed in
+    the settings table and reached the dashboard and stopped there. Program fit is 40 of
+    the 100 points, so every nonprofit outside San Diego had the largest component of its
+    score decided against the wrong region: multi-tenancy reached the database and the UI
+    and never reached the prompt. It was the single biggest reason nothing scored well.
 
-So: surfacing a marginal opportunity costs them more than missing one. Be strict.
+    An empty field is passed through as an empty field. "A nonprofit" with no region
+    stated is an honest prompt; a guessed region is the thing that broke this.
 
-This week they are looking for funding for these programs, and they live in different
-funder universes:
-"""
+    **"Be strict" is gone from here**, and its removal is not a tuning preference. It sat
+    in the shared preamble, so it biased triage as well as scoring — the cheap binary
+    filter that decides what is even worth paying to read. The award floor already does
+    that job, deterministically, for free, before any model runs; saying it again in
+    English to a model that also has to produce a calibrated 0-100 just drags the whole
+    distribution down and compresses it.
+
+    The hours figure is the org's own (`max_effort_hours`) for the same reason the region
+    is. It was the constant 10, which is one nonprofit's staffing applied to every tenant,
+    and 25 of the 100 points are measured against it.
+
+    `cfg` is required. It was `Config | None` with a fallback per field, which advertised
+    a call shape nothing used and let the San Diego default survive in three places.
+    """
+    org = cfg.org_name.strip()
+    where = cfg.org_location.strip()
+    hours = cfg.max_effort_hours
+
+    who = f"{org}, a nonprofit" if org else "a nonprofit"
+    if where:
+        who += f" working in {where}"
+
+    return (
+        f"You are screening funding opportunities for {who}.\n"
+        "\n"
+        "The person reading your output runs this organization. They have one hour on a "
+        f"Thursday morning, and about {hours} collective team-hours to spend on any one "
+        "application. Their problem is not that they cannot find grants — they can "
+        "already find plenty. It is that most of what they find is too small to justify "
+        "the hours an application costs.\n"
+        "\n"
+        "They are looking for funding for these programs, which live in different funder "
+        "universes:\n"
+    )
 
 
 def org_context(cfg: Config) -> str:
@@ -206,7 +254,7 @@ def org_context(cfg: Config) -> str:
     Still byte-stable *within* a run — every candidate in a run sees the same prefix —
     so prompt caching behaves exactly as before.
     """
-    lines = [_ORG_PREAMBLE]
+    lines = [_preamble(cfg)]
     for card in cfg.programs:
         lines.append(f"\n- {card.slug} — {card.name}.")
         if card.summary:
@@ -228,35 +276,85 @@ def org_context(cfg: Config) -> str:
     return "\n".join(lines) + "\n"
 
 _TRIAGE_RULES = """
-Your job is one binary decision: is this page an open funding opportunity that the organization
-could actually apply for?
+Your job is one binary decision: is this page an open funding opportunity that this
+organization could actually apply for?
 
 Answer false for: past grantee lists, panelist calls, annual reports, staff pages,
-programs for individual artists only, programs restricted to organizations the organization is
-not, and anything already closed.
+programs open only to individuals rather than organizations, programs restricted to a
+kind of applicant this organization is not, and anything already closed.
+
+Answer TRUE when it is a real, open call, even if the page is thin. A page that names no
+amount and no deadline is the ordinary case, not a disqualification — this is a yes/no
+about whether an application is possible, not about whether it is a good idea. The next
+step decides that, and it can only decide it about pages you let through.
 """
 
 _SCORING_RULES = """
-Score this opportunity 0-100 for the organization, write one sentence explaining the score in
-language the COO can act on, and fill in the funder profile they asked for.
+Score this opportunity for this organization, write one sentence explaining the score in
+language they can act on, and fill in the funder profile they asked for.
 
-Weights — these are the COO's own, given directly (CLAUDE.md Q5, answered):
-  40  program fit
-  35  award size relative to the floor
-  25  can this application realistically be finished before the deadline
+You do NOT return a total. You return three components and we add them up, so score each
+one on its own and do not adjust one to compensate for another.
+
+  fit_score      0-40   program fit
+  award_score    0-35   award size, against their floor
+  timing_score   0-25   can this application realistically be finished in time
+
+**Any component you have no evidence for must be null, not zero.**
+
+This is the most important instruction here. A funder that does not publish an award
+amount has not offered a small grant — it has published a page that does not mention
+money, which is the ordinary case. Scoring that zero says "this is a bad grant" about
+every terse funder page on the internet, and it is what made this list unreadable: the
+components that go missing are worth 60 of the 100 points, so nothing could ever clear
+40. A null takes that component out of the total instead of failing it. Use it freely
+and without apology; it costs the opportunity nothing.
+
+  award_score is null   when the page states no award amount, no range and no typical
+                        award. Do not estimate one from the funder's size or reputation.
+  timing_score is null  when the page gives no deadline and no rolling-basis statement,
+                        so there is no calendar to judge the application against.
+  fit_score is NEVER null. You always have the page and their programs in front of you,
+                        so fit is always answerable — even if the answer is 3.
+
+--- fit_score, 0-40 ---
+
+How well this funder's stated priorities match one of the programs listed above. 40 is a
+funder whose own page describes what this organization does. 20 is a plausible but
+unstated fit — a general operating funder in their field. 5 is a funder who would have
+to stretch. 0 is a different field entirely.
+
+Judge against the programs above and nothing else. If the organization's region is
+stated in the preamble, a funder that restricts to somewhere else is a low fit; if no
+region is stated, do not assume one and do not penalise a national funder for it.
+
+--- award_score, 0-35, or null ---
+
+Against their floor, which is given below. Use these anchors, and interpolate:
+
+  at the floor          ~10 / 35
+  three times the floor ~25 / 35
+  ten times the floor   ~35 / 35
+  below the floor         0 / 35   (rare — these are usually filtered out before you)
+
+Use the typical or the maximum award, whichever the page actually states; if it states a
+range, use the midpoint. A larger award is worth more because the hours cost the same
+either way — that is the whole reason this component exists.
+
+--- timing_score, 0-25, or null ---
+
+Judge the application against the deadline, not in the abstract. A grant closing in three
+weeks that needs an audited financial statement, three letters of support and a board
+resolution is not a 25; a two-page letter of interest due in two months is. A rolling
+deadline with a light application is a high score, because there is no calendar pressure
+at all. Say so in the rationale when the calendar is the problem.
 
 Nothing else moves the score. In particular:
 
-- Funder warmth is gone. The organization already receives money from the funders it has
+- Funder warmth is gone. This organization already receives money from the funders it has
   relationships with and does not want to reapply, so a relationship is a reason to
   leave a funder out of the search entirely — never a reason to rank it higher. You are
-  not told whether the organization knows a funder, because it must not change the score.
-
-On the 25 points for finishing in time: judge the application against the deadline, not
-in the abstract. A grant closing in three weeks that needs an audited financial
-statement, three letters of support and a board resolution is not a 25; a two-page
-letter of interest due in two months is. Say so in the rationale when the calendar is
-the problem.
+  not told whether they know a funder, because it must not change the score.
 
 There are two kinds of field below and they are held to different standards.
 
@@ -270,18 +368,20 @@ it, set BOTH the value and its quote to null. Never infer, estimate, or recall a
 from anywhere but this page. The deadline quote MUST contain the full date including
 the year.
 
-INFERRED fields — funder_type, service_areas, confidence_pct, estimated_effort_hours —
-are your judgement and are shown to the COO labelled as such. Use everything on the page.
-Do not force them: "unknown" and an empty list are real answers.
+INFERRED fields — the three component scores, funder_type, service_areas,
+confidence_pct, estimated_effort_hours — are your judgement and are shown to the reader
+labelled as such. Use everything on the page. Do not force them: "unknown" and an empty
+list are real answers.
 
 The one exception is estimated_effort_hours, which is ALWAYS required. Never leave it
-out. Every opportunity on this list gets compared against a hard 10-hour cap, so an
-application with no estimate cannot be weighed against one that has it — it silently
-drops out of the only comparison that matters. If the page is thin, estimate from what
-the funder is asking for and how much money is at stake: a two-page letter of interest
-is not a full proposal with audited financials. A rough number you would defend is far
-more useful to them than no number. If the page is an index or overview rather than a
-single application, estimate the typical application it leads to.
+out. Every opportunity on this list gets compared against their hours-per-application
+figure, given below with the page, so an application with no estimate cannot be weighed
+against one that has it — it silently drops out of the only comparison that matters. If the page is
+thin, estimate from what the funder is asking for and how much money is at stake: a
+two-page letter of interest is not a full proposal with audited financials. A rough
+number you would defend is far more useful to them than no number. If the page is an
+index or overview rather than a single application, estimate the typical application it
+leads to.
 
 Also:
 - deadline_type is "fixed" when the page names one date, "rolling" when it says
@@ -290,14 +390,17 @@ Also:
 - award_typical_stated is what the funder says they TYPICALLY or on AVERAGE award —
   not the maximum, and never a total program budget or a since-inception figure.
 - contact_note: only a name, email, or phone number that literally appears on the page.
-- confidence_pct is how confident you are that this funder would fund one of the organization's
-  programs listed above. Be honest and use the low end when the fit is thin.
+- confidence_pct is how likely you think it is that this funder would fund one of the
+  programs listed above, as a percentage. It is a probability, not a grade: 50 means you
+  genuinely think it could go either way. Do not shade it downwards to be cautious — a
+  systematically pessimistic number is not more honest than an accurate one, it is just
+  wrong in a predictable direction, and this is the largest figure on the row.
 - estimated_effort_hours is your read of what a competitive application costs this
   team in WORKING HOURS, counting drafting, gathering attachments, and internal
   review. Give a whole number on every opportunity, without exception — a null cannot
-  be compared against the 10-hour cap, so it drops the row out of the only comparison
-  that matters instead of failing it. Above 10 is a real signal, not a rounding error
-  — say so in the rationale when it happens.
+  be compared against their hours figure, so it drops the row out of the only comparison
+  that matters instead of failing it. Going over the figure given below is a real signal,
+  not a rounding error — say so in the rationale when it happens.
 - application_lead_time_days is different and is about the CALENDAR: how many days
   from starting to being able to submit, given what the application requires. Audited
   financials, board resolutions, letters of support and reference forms all depend on
@@ -305,22 +408,22 @@ Also:
   exceeds the days left before the deadline, the opportunity is not feasible — score
   the "finish in time" component at or near zero and say so plainly in the rationale.
 - time_to_funds_days is your estimate of how long AFTER submitting before the money
-  would actually reach the organization's bank account — decision timeline plus disbursement. A
+  would actually reach their bank account — decision timeline plus disbursement. A
   nonprofit's cash flow depends on this and funders rarely state it, so estimate from
   what the page says about review cycles and award dates. This is a judgement, and it
   is labelled as one; null if you have nothing to go on.
-- score_rationale is one sentence, no preamble, no hedging, written for someone
-  deciding whether to spend ten hours. It must not contain any dollar figure or date
-  that is not in the page text above. Do not write "awards are typically around $X"
-  from your own knowledge of the funder — a number in this sentence reads as sourced
-  because everything around it is, and it is checked against the page.
+- score_rationale is one sentence, no preamble, no hedging, written for someone deciding
+  whether to spend a day on this. It must not contain any dollar figure or date that is
+  not in the page text above. Do not write "awards are typically around $X" from your own
+  knowledge of the funder — a number in this sentence reads as sourced because everything
+  around it is, and it is checked against the page.
 - needs_human_check is NOT "some information was missing". Missing information is the
-  normal case — most funders publish neither an amount nor a deadline — and it is
-  already reflected in the score. Set it true only when YOU reported something you
-  could not fully confirm from the page. Most results should be false.
+  normal case — most funders publish neither an amount nor a deadline — and a component
+  you correctly set to null is not a problem to flag. Set it true only when YOU reported
+  something you could not fully confirm from the page. Most results should be false.
 - If the text you are given is not readable prose — binary, a PDF stream, markup
-  fragments — do not score it. Return score 0, say so in the rationale, and set
-  needs_human_check true.
+  fragments — do not score it. Return fit_score 0 with the other two null, say so in the
+  rationale, and set needs_human_check true.
 """
 
 TRIAGE_SCHEMA = {
@@ -350,6 +453,24 @@ QUOTE_BACKED: dict[str, str] = {
 }
 
 
+# A hard limit in the structured-outputs API, not a style rule: a schema with more than
+# this many union-typed (`["x", "null"]` or anyOf) parameters is refused with a 400 —
+# "this causes exponential compilation cost".
+#
+# It is worth knowing about because it is invisible until a live run. Adding the two
+# nullable component scores took this schema to 17 and every scoring call started
+# failing; `confidence_pct` and the two contact fields gave the slots back. Nullability
+# here is a budget, so spend it on the fields where "the page does not say" is genuinely
+# different from a value — and use `""` for the ones where it is not.
+MAX_UNION_PARAMS = 16
+
+
+def union_param_count(schema: dict) -> int:
+    """How many of this schema's parameters are union-typed. Tested, not assumed."""
+    return sum(1 for spec in schema.get("properties", {}).values()
+               if isinstance(spec.get("type"), list) or "anyOf" in spec)
+
+
 def scoring_schema(program_slugs: list[str]) -> dict:
     """The response schema, with program_match restricted to the ticked programs.
 
@@ -360,7 +481,31 @@ def scoring_schema(program_slugs: list[str]) -> dict:
     return {
         "type": "object",
         "properties": {
-            "score": {"type": "integer", "description": "0-100."},
+            # The three parts, not a total. The total is composed in Python by
+            # `compose_score` so the weights are enforced rather than described, and so a
+            # score can be taken apart afterwards — "why is this 38?" used to be
+            # unanswerable from the stored data.
+            "fit_score": {
+                "type": "integer",
+                "description": "0-40, program fit. NEVER null — you always have the page "
+                               "and their programs, so fit is always answerable.",
+            },
+            "award_score": {
+                "type": ["integer", "null"],
+                "description": (
+                    "0-35, award size against their floor. NULL when the page states no "
+                    "amount, no range and no typical award — a funder that does not "
+                    "publish a figure has not offered a small grant. Never estimate one."
+                ),
+            },
+            "timing_score": {
+                "type": ["integer", "null"],
+                "description": (
+                    "0-25, can the application be finished in time. NULL when the page "
+                    "gives no deadline and no rolling-basis statement, so there is no "
+                    "calendar to judge against."
+                ),
+            },
             "score_rationale": {"type": "string", "description": "Exactly one sentence."},
             "program_match": {
                 "type": "array",
@@ -369,13 +514,14 @@ def scoring_schema(program_slugs: list[str]) -> dict:
             },
             # Not nullable, unlike every other inferred field. This is an estimate, not
             # a claim about the page, so there is no accuracy rule requiring it to be
-            # withheld — and §7 weights effort against a hard 10-hour cap, which a null
-            # cannot be compared against. Structured outputs enforce the integer, so the
-            # model has to commit to a number rather than declining the question.
+            # withheld — and every row is weighed against the org's own hours-per-
+            # application figure (`max_effort_hours`), which a null cannot be compared
+            # against. Structured outputs enforce the integer, so the model has to commit
+            # to a number rather than declining the question.
             "estimated_effort_hours": {
                 # NOT nullable, deliberately. The schema used to allow null "if
                 # unknowable" and the model took the option on 2 of 5 findings — and a
-                # null cannot be compared against the 10-hour cap, so those rows fell
+                # null cannot be compared against their hours figure, so those rows fell
                 # out of the decision this whole list exists to serve.
                 "type": "integer",
                 "description": "Whole WORKING HOURS for a competitive application. Always "
@@ -459,16 +605,20 @@ def scoring_schema(program_slugs: list[str]) -> dict:
                 "type": ["string", "null"],
                 "description": "The exact sentence stating that geography. Verbatim.",
             },
+            # These two are plain strings with "" for absent, not nullable — see
+            # MAX_UNION_PARAMS below. `_gated` already treats "" exactly as it treats
+            # None, and an empty quote fails `quote_on_page` on length, so nothing about
+            # the accuracy gate changes.
             "contact_note": {
-                "type": ["string", "null"],
+                "type": "string",
                 "description": (
                     "A contact name, email, or phone number that literally appears on the "
-                    "page. null otherwise — never construct one from a domain name."
+                    'page. "" otherwise — never construct one from a domain name.'
                 ),
             },
             "contact_quote": {
-                "type": ["string", "null"],
-                "description": "The exact sentence containing that contact. Verbatim.",
+                "type": "string",
+                "description": 'The exact sentence containing that contact, verbatim. "" if none.',
             },
 
             # --- inferred: the model's judgement, labelled as such in the UI ---
@@ -482,10 +632,15 @@ def scoring_schema(program_slugs: list[str]) -> dict:
                 "items": {"type": "string"},
                 "description": "What this funder funds, e.g. STEM, Arts, Youth, Equity.",
             },
+            # Not nullable, for the same reason `estimated_effort_hours` is not: it is
+            # the largest figure on the row, and a null cannot be compared against
+            # anything — it drops the opportunity out of the comparison rather than
+            # failing it. Also buys back a union slot; see MAX_UNION_PARAMS.
             "confidence_pct": {
-                "type": ["integer", "null"],
-                "description": "0-100: how confident you are this funder would fund a "
-                               "program listed above.",
+                "type": "integer",
+                "description": "0-100: how likely it is this funder would fund a program "
+                               "listed above. A probability, not a grade — 50 means it "
+                               "could genuinely go either way.",
             },
 
             "needs_human_check": {
@@ -503,7 +658,8 @@ def scoring_schema(program_slugs: list[str]) -> dict:
             },
         },
         "required": [
-            "score", "score_rationale", "program_match", "estimated_effort_hours",
+            "fit_score", "award_score", "timing_score",
+            "score_rationale", "program_match", "estimated_effort_hours",
             "application_lead_time_days", "time_to_funds_days",
             "award_min_stated", "award_max_stated", "award_quote",
             "award_typical_stated", "award_typical_quote",
@@ -513,6 +669,90 @@ def scoring_schema(program_slugs: list[str]) -> dict:
         ],
         "additionalProperties": False,
     }
+
+
+# The weights, as data. They were three lines of English inside a prompt and nothing in
+# the codebase enforced them, so the "0-100 weighted score" was really one holistic guess
+# by the model at a sum it had been described in prose.
+WEIGHTS: dict[str, int] = {"fit": 40, "award": 35, "timing": 25}
+
+
+@dataclass(frozen=True)
+class ScoreParts:
+    """One score, taken apart. `None` means "there was nothing to judge this on"."""
+
+    fit: int
+    award: int | None
+    timing: int | None
+
+    @property
+    def scored_on(self) -> list[str]:
+        return [k for k, v in (("fit", self.fit), ("award", self.award),
+                               ("timing", self.timing)) if v is not None]
+
+    @property
+    def missing(self) -> list[str]:
+        return [k for k in WEIGHTS if k not in self.scored_on]
+
+
+def compose_score(parts: ScoreParts) -> int:
+    """The three components into one 0-100, **renormalised over what was knowable**.
+
+    This is the fix for the thing that made the whole list unreadable.
+
+    The rubric spends 35 points on award size and 25 on whether the application can be
+    finished before the deadline. Both need the funder to have published something, and
+    `_SCORING_RULES` says plainly that most funders publish neither. So for the median
+    candidate 60 of the 100 points were unearnable, every score was really out of 40, and
+    the list topped out at 42 — which reads as "we found you nothing good" when what
+    actually happened is that grant-makers write terse web pages.
+
+    Scoring a missing component zero is a claim: it says this opportunity was tested on
+    award size and failed. It was not tested. Leaving it out of the denominator says the
+    true thing instead, and it is the same rule the rest of the app already follows —
+    §6's "amount not stated" rather than a guess. We do not invent the number, and we do
+    not punish its absence either.
+
+        fit 28/40, award null, timing 9/25
+          -> earned 37, available 65, score 57
+
+    A run where nothing is knowable but fit still produces a usable ordering, because fit
+    alone is renormalised to 0-100 and candidates are then compared on the one axis every
+    one of them has.
+    """
+    earned = 0
+    available = 0
+    for key, value in (("fit", parts.fit), ("award", parts.award),
+                       ("timing", parts.timing)):
+        if value is None:
+            continue
+        available += WEIGHTS[key]
+        earned += max(0, min(WEIGHTS[key], value))
+    if available == 0:
+        # Cannot happen through `score_one` — fit is non-nullable in the schema — but a
+        # zero denominator is not something to discover in production.
+        return 0
+    return max(0, min(100, round(100 * earned / available)))
+
+
+def basis_note(parts: ScoreParts) -> str:
+    """One sentence saying what a renormalised score was and was not scored on.
+
+    A number that quietly changed its denominator is worse than a low one: 57 out of
+    "fit and timing" and 57 out of all three are different claims, and the reader has to
+    be told which they are looking at.
+    """
+    missing = parts.missing
+    if not missing:
+        return ""
+    reason = {
+        "award": "the page states no award amount",
+        "timing": "the page gives no deadline",
+    }
+    why = " and ".join(reason.get(m, m) for m in missing)
+    dropped = " and ".join(f"{m} ({WEIGHTS[m]} points)" for m in missing)
+    return (f"Scored on {' and '.join(parts.scored_on)} only — {why}, "
+            f"so {dropped} was not counted for or against it.")
 
 
 def _client():
@@ -542,9 +782,15 @@ def _first_json(response) -> dict:
 # --- tier 2: Haiku triage -----------------------------------------------------
 
 def triage(candidate: RawCandidate, budget: Budget,
-           cfg: Config | None = None) -> tuple[bool, str]:
-    """Binary relevant/not. Cheap model, capped text, no thinking."""
-    system = (org_context(cfg) if cfg else _ORG_PREAMBLE) + _TRIAGE_RULES
+           cfg: Config) -> tuple[bool, str]:
+    """Binary relevant/not. Cheap model, capped text, no thinking.
+
+    `cfg` is required, and used to be `Config | None = None` falling back to a module
+    constant that this change deleted — so the documented call shape was a `NameError`
+    waiting for its first caller. The line below already dereferenced `cfg.triage_model`
+    unconditionally, so the optional branch could never have worked anyway.
+    """
+    system = org_context(cfg) + _TRIAGE_RULES
     body = _text_block(
         f"Funder: {candidate.funder}\n"
         f"Page title: {candidate.title}\n"
@@ -576,6 +822,7 @@ def score_one(candidate: RawCandidate, source: Source, cfg: Config,
     system = org_context(cfg) + _SCORING_RULES
     body = _text_block(
         f"Award floor for this run: ${cfg.min_award:,}\n"
+        f"Hours they can spend on one application: {cfg.max_effort_hours}\n"
         f"Today: {date.today().isoformat()}\n"
         # The "[WARM — the org has an existing relationship]" hint used to be appended
         # here. Removed with the warmth weight: telling the model about a relationship
@@ -685,7 +932,31 @@ def score_one(candidate: RawCandidate, source: Source, cfg: Config,
                      f"page — check before relying on it. {rationale}")
         needs_check = True
 
+    # Matched nothing and matched everything used to be stored identically: this was
+    # `programs or list(active)`, so a candidate the model declined to match against any
+    # program was recorded as matching all of them. That is the opposite of what it
+    # reported, it puts "For: every program you run" on a row that fits none, and it made
+    # program fit impossible to measure — which matters now that fit is a stored number.
     programs = [p for p in (data.get("program_match") or []) if p in active]
+
+    # The three components, composed here rather than trusted as a total. Bounds are
+    # applied in `compose_score`; what matters at this level is that null survives as
+    # null — coercing it to 0 is exactly the bug being fixed.
+    # `fit_score` is required and non-nullable in the schema, so a None here is the model
+    # breaking its contract rather than "there was nothing to judge this on". It still has
+    # to land as an int — fit is what keeps a run orderable when nothing else is knowable —
+    # but it goes through the same helper as the other two rather than the `int(x or 0)`
+    # idiom that `_component` exists to keep out of this file.
+    fit = _component(data.get("fit_score"))
+    parts = ScoreParts(
+        fit=0 if fit is None else fit,
+        award=_component(data.get("award_score")),
+        timing=_component(data.get("timing_score")),
+    )
+    score = compose_score(parts)
+    basis = basis_note(parts)
+    if basis:
+        rationale = f"{rationale} {basis}".strip()
 
     opp = Opportunity(
         id=stable_id(candidate.source_url, candidate.title),
@@ -695,8 +966,11 @@ def score_one(candidate: RawCandidate, source: Source, cfg: Config,
         award_max=award_max,
         deadline=deadline,
         estimated_effort_hours=data.get("estimated_effort_hours"),
-        program_match=programs or list(active),
-        score=max(0, min(100, int(data["score"]))),
+        program_match=programs,
+        score=score,
+        fit_score=parts.fit,
+        award_score=parts.award,
+        timing_score=parts.timing,
         score_rationale=rationale,
         source_url=candidate.source_url,
         verified=True,
@@ -733,6 +1007,21 @@ def _gated(data: dict, value_key: str, quote_key: str, page_text: str):
         return value, True
     log.warning("  ⚠ %s unverified (quote not on page) — dropping %r", value_key, value)
     return None, False
+
+
+def _component(value) -> int | None:
+    """A component score, keeping null as null.
+
+    `int(x or 0)` would turn "there was nothing to judge this on" into "judged, scored
+    zero" — which is the exact confusion this whole change exists to remove, so it gets
+    its own named function rather than an inline expression somebody can simplify.
+    """
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _bounded(value, ceiling: int) -> int | None:

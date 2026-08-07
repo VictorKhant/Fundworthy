@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, SECTOR_LABELS } from "../api";
 import { useConfirm } from "./Confirm";
-import { IconButton } from "./Icon";
+import Icon, { IconButton } from "./Icon";
 import { Busy } from "./Spinner";
 
 // The partner list, editable. This used to be a hardcoded array in agent/sources.py.
@@ -88,70 +88,96 @@ function Editor({ initial, sectors, onSave, onCancel, saving }) {
 }
 
 function Row({ funder, onToggle, onEdit, onBlock, selecting, selected, onSelect }) {
+  const host = funder.url ? funder.url.replace(/^https?:\/\//, "").split("/")[0] : "";
+  const sector = SECTOR_LABELS[funder.sector] || funder.sector;
   return (
-    <div className={`funder-row ${funder.active ? "" : "inactive"} ${funder.blocked ? "blocked" : ""}`}>
+    <div className={`funder-row ${funder.active ? "" : "inactive"} ${selected ? "picked" : ""}`}>
+      {/* **A button, not a native checkbox.** This one control carries the whole
+          pause/resume affordance — the thing somebody presses most often on this page —
+          and a 13px system checkbox is both hard to hit and impossible to theme, so in
+          dark mode the accent-coloured box was the browser's idea of the accent, not
+          ours. */}
       {selecting ? (
-        <label className="funder-tick" title={`Select ${funder.name}`}>
-          <input type="checkbox" checked={selected}
-                 onChange={(e) => onSelect(funder, e.target.checked)} />
-        </label>
+        <button
+          type="button"
+          className={`funder-tick ${selected ? "on" : ""}`}
+          onClick={() => onSelect(funder, !selected)}
+          aria-pressed={selected}
+          title={`Select ${funder.name}`}
+          aria-label={`Select ${funder.name}`}
+        >
+          {selected && <Icon name="check" size={13} />}
+        </button>
       ) : (
-        <label className="funder-tick"
-               title={funder.blocked ? "Blocked — put it back to search it again"
-                                     : "Untick to pause it"}>
-          <input
-            type="checkbox"
-            checked={funder.active && !funder.blocked}
-            disabled={funder.blocked}
-            onChange={(e) => onToggle(funder, e.target.checked)}
-          />
-        </label>
+        <button
+          type="button"
+          className={`funder-tick ${funder.active ? "on" : ""}`}
+          onClick={() => onToggle(funder, !funder.active)}
+          aria-pressed={funder.active}
+          title={funder.active ? "Searched weekly — press to pause it"
+                               : "Paused — press to search it again"}
+          aria-label={funder.active ? `Pause ${funder.name}` : `Search ${funder.name} again`}
+        >
+          <Icon name={funder.active ? "check" : "pause"} size={13} />
+        </button>
       )}
 
       <div className="funder-main">
         <div className="funder-name">
           {funder.name}
           {funder.warm && <span className="chip">Existing relationship</span>}
-          {funder.blocked
-            ? <span className="chip warn">Blocked</span>
-            : !funder.active && <span className="chip muted">Paused</span>}
+          {!funder.active && <span className="chip muted">Paused</span>}
           {!funder.url && <span className="chip muted">No page on file</span>}
+        </div>
+        {/* The sector moves under the name rather than holding a column of its own. As a
+            column it was empty space on every row at desktop width and an orphaned
+            fragment at mobile. */}
+        <div className="funder-sub muted">
+          {host && (
+            <a href={funder.url} target="_blank" rel="noopener noreferrer">{host} ↗</a>
+          )}
+          {host && sector && <span aria-hidden="true"> · </span>}
+          {sector}
         </div>
         {!funder.active && funder.exclude_reason && (
           <div className="muted small">Paused because: {funder.exclude_reason}</div>
         )}
-        {funder.url && (
-          <a className="small" href={funder.url} target="_blank" rel="noopener noreferrer">
-            {funder.url.replace(/^https?:\/\//, "").slice(0, 64)} ↗
-          </a>
-        )}
         {funder.notes && <div className="muted small clamp">{funder.notes}</div>}
-      </div>
-
-      <div className="funder-sector muted">
-        {SECTOR_LABELS[funder.sector] || funder.sector}
       </div>
 
       {/* Delete is not here any more. It is the only irreversible one of the three, and
           a row action next to a tick people press weekly is one they eventually press by
           accident — so it lives in "Delete several" mode and nowhere else. */}
-      {/* Icons for the two repeated actions, words for the rare one. "Put back" is
-          the reversal of something deliberate and happens once, so it says what it
-          does rather than asking somebody to recognise a glyph. */}
       <div className="row">
-        {!selecting && (funder.blocked ? (
-          <button className="text" onClick={() => onBlock(funder, false)}>
-            Put back
-          </button>
-        ) : (
+        {!selecting && (
           <>
             <IconButton name="edit" label={`Edit ${funder.name}`}
                         onClick={() => onEdit(funder)} />
             <IconButton name="block" label={`Block ${funder.name}`}
                         onClick={() => onBlock(funder, true)} />
           </>
-        ))}
+        )}
       </div>
+    </div>
+  );
+}
+
+// A blocked funder has no tick, no edit and no sector worth showing, so reusing `Row`
+// for one rendered four dead affordances per line. Its own shape: what it is, why, and
+// the single reversal.
+function BlockedRow({ funder, onBlock }) {
+  return (
+    <div className="blocked-row">
+      <span className="blocked-icon" aria-hidden="true">
+        <Icon name="block" size={13} />
+      </span>
+      <span className="blocked-main">
+        <span className="blocked-name">{funder.name}</span>
+        {funder.exclude_reason && (
+          <span className="muted small">{funder.exclude_reason}</span>
+        )}
+      </span>
+      <button className="pill" onClick={() => onBlock(funder, false)}>Put back</button>
     </div>
   );
 }
@@ -160,9 +186,10 @@ function Row({ funder, onToggle, onEdit, onBlock, selecting, selected, onSelect 
 // is how a page indicator and a slice drift apart.
 const PER_PAGE = 7;
 
-export default function Funders({ funders, sectors, onChange }) {
+export default function Funders({ funders, sectors, addSignal = 0, onChange }) {
   const [dialog, ask] = useConfirm();
   const [editing, setEditing] = useState(null);
+  const panelRef = useRef(null);
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
   const [query, setQuery] = useState("");
@@ -170,6 +197,16 @@ export default function Funders({ funders, sectors, onChange }) {
   const [selecting, setSelecting] = useState(false);
   const [picked, setPicked] = useState({});
   const [showBlocked, setShowBlocked] = useState(false);
+
+  // "Add one you know", pressed on the contribute strip in the section above. The editor
+  // lives here, so the strip sends a signal rather than trying to own a form it cannot
+  // see — and the panel scrolls itself into view, because opening a form three sections
+  // below the button that opened it is indistinguishable from the button doing nothing.
+  useEffect(() => {
+    if (!addSignal) return;
+    setEditing("new");
+    panelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [addSignal]);
 
   const guard = (fn) => async (...args) => {
     setError(null);
@@ -186,6 +223,7 @@ export default function Funders({ funders, sectors, onChange }) {
     // Ask why. "We already get money from them" and "they stopped funding us" both
     // mean don't search, and in six months nobody will remember which this was.
     const answer = await ask({
+      icon: "pause",
       title: `Pause ${f.name}?`,
       points: [
         "They stay on your list, greyed out, and are not fetched, read or scored.",
@@ -206,6 +244,7 @@ export default function Funders({ funders, sectors, onChange }) {
   const block = guard(async (f, on) => {
     if (!on) return api.funders.update(f.id, { blocked: false, active: true });
     const answer = await ask({
+      icon: "block",
       tone: "clay",
       title: `Block ${f.name}?`,
       points: [
@@ -239,6 +278,7 @@ export default function Funders({ funders, sectors, onChange }) {
   const deleteChosen = guard(async () => {
     const names = funders.filter((f) => picked[f.id]).map((f) => f.name);
     const answer = await ask({
+      icon: "bin",
       tone: "clay",
       title: `Delete ${names.length} funder${names.length === 1 ? "" : "s"}?`,
       body: names.slice(0, 6).join(", ") + (names.length > 6 ? `, and ${names.length - 6} more` : ""),
@@ -269,22 +309,13 @@ export default function Funders({ funders, sectors, onChange }) {
   const searched = listed.filter((f) => f.active).length;
 
   return (
-    <section className="panel">
+    <>
+    <section className="panel" ref={panelRef}>
       {dialog}
       <div className="panel-head">
         <h2>Funders it watches</h2>
         <div className="row">
-          {selecting ? (
-            <>
-              <Busy className="danger" busy={false} disabled={!chosen.length}
-                    onClick={deleteChosen}>
-                Delete {chosen.length || ""}
-              </Busy>
-              <button className="text" onClick={() => { setSelecting(false); setPicked({}); }}>
-                Cancel
-              </button>
-            </>
-          ) : (
+          {selecting ? null : (
             <>
               <button className="text" onClick={() => setSelecting(true)}>Delete several</button>
               <button onClick={() => setEditing("new")}>+ Add</button>
@@ -301,16 +332,41 @@ export default function Funders({ funders, sectors, onChange }) {
 
       {error && <div className="notice error">{error}</div>}
 
-      {/* Above the list so it filters before paging, which is the only order that makes
-          sense: searching page 1 of 9 for a name that is on page 6 finds nothing. */}
-      {listed.length > PER_PAGE && (
+      {/* Always here, not only past seven rows. The tick's meaning changes silently in
+          selection mode, so a list that suddenly grows a search box on its eighth entry
+          is one more thing that moves under somebody. */}
+      <div className="funder-search">
+        <Icon name="search" size={14} />
         <input
-          className="funder-search"
           value={query}
           onChange={(e) => { setQuery(e.target.value); setPage(0); }}
-          placeholder="Search your funders by name"
-          aria-label="Search your funders by name"
+          placeholder="Search a funder by name"
+          aria-label="Search a funder by name"
         />
+        {query && (
+          <IconButton name="close" label="Clear the search"
+                      onClick={() => { setQuery(""); setPage(0); }} />
+        )}
+      </div>
+
+      {/* Selection mode used to announce itself by silently changing what every tick in
+          the list means, and nothing else. The strip says what the ticks are for now, and
+          carries the two buttons that end it. */}
+      {selecting && (
+        <div className="selectbar">
+          <span>
+            {chosen.length
+              ? `${chosen.length} funder${chosen.length === 1 ? "" : "s"} chosen`
+              : "Tick the ones you want gone, then press Delete them"}
+          </span>
+          <Busy className="danger" busy={false} disabled={!chosen.length}
+                onClick={deleteChosen}>
+            Delete them{chosen.length ? ` (${chosen.length})` : ""}
+          </Busy>
+          <button className="text" onClick={() => { setSelecting(false); setPicked({}); }}>
+            Cancel
+          </button>
+        </div>
       )}
 
       {editing === "new" && (
@@ -318,7 +374,12 @@ export default function Funders({ funders, sectors, onChange }) {
                 onSave={save} onCancel={() => setEditing(null)} />
       )}
 
-      <div className="funder-list compact">
+      {/* No `compact` modifier any more. It existed for a layout where this list sat in
+          a half-width column and folded the row onto two lines — with the sector on the
+          left of the second line and the actions on the right. The sector now lives
+          under the name, so at full width that fold left the two icons floating alone on
+          a line of their own. The fold survives as a media query, where it belongs. */}
+      <div className="funder-list">
         {shown.map((f) =>
           editing && editing !== "new" && editing.id === f.id ? (
             <Editor key={f.id} initial={f} sectors={sectors} saving={saving}
@@ -342,9 +403,11 @@ export default function Funders({ funders, sectors, onChange }) {
 
       {pages > 1 && (
         <nav className="pager" aria-label="Funder list pages">
-          <button className="text" disabled={at === 0} onClick={() => setPage(at - 1)}>
-            ← Previous
-          </button>
+          {/* Chevrons rather than "← Previous" / "Next →". They are the two most
+              repeated controls on this page, which is the R10 rule for an icon, and the
+              words were wide enough to push the numbers off-centre. */}
+          <IconButton name="chevron" label="Previous page" className="pager-arrow back"
+                      disabled={at === 0} onClick={() => setPage(at - 1)} />
           <span className="pager-nums">
             {Array.from({ length: pages }, (_, i) => (
               <button key={i} className={`pager-num ${i === at ? "on" : ""}`}
@@ -354,31 +417,49 @@ export default function Funders({ funders, sectors, onChange }) {
               </button>
             ))}
           </span>
-          <button className="text" disabled={at >= pages - 1} onClick={() => setPage(at + 1)}>
-            Next →
-          </button>
+          <IconButton name="chevron" label="Next page" className="pager-arrow"
+                      disabled={at >= pages - 1} onClick={() => setPage(at + 1)} />
         </nav>
       )}
+    </section>
 
-      {/* Collapsed, with the count in the header. A blacklist is a thing you check
-          rarely and want to be sure is still there. */}
-      {blocked.length > 0 && (
-        <div className="blocklist">
-          <button className="text blocklist-head" onClick={() => setShowBlocked(!showBlocked)}
-                  aria-expanded={showBlocked}>
-            {showBlocked ? "▾" : "▸"} Blocked — {blocked.length}
-          </button>
-          {showBlocked && (
-            <div className="funder-list compact">
+    {/* Its own section, and called what the user calls it. It was a text button at the
+        foot of the panel above reading "▸ Blocked — 3", which is a footnote on the list
+        rather than the deliberate, separate thing a blacklist is. */}
+    {blocked.length > 0 && (
+      <section className={`panel blacklist ${showBlocked ? "open" : ""}`}>
+        <button className="blacklist-head" onClick={() => setShowBlocked(!showBlocked)}
+                aria-expanded={showBlocked}>
+          <span className="blacklist-caret" aria-hidden="true">
+            <Icon name="chevron" size={14} />
+          </span>
+          <span className="blacklist-icon" aria-hidden="true">
+            <Icon name="block" size={13} />
+          </span>
+          <h2>Blacklist</h2>
+          <span className="muted small">{blocked.length}</span>
+          <span className="blacklist-toggle">{showBlocked ? "Hide" : "Show"}</span>
+        </button>
+
+        {showBlocked && (
+          <>
+            {/* "…returns to the list above, searched again" and not "paused". §4e says
+                keep the Put back semantics, and those semantics are `active: true` — so
+                the sentence describes what the button does rather than the button being
+                changed to match a sentence. */}
+            <p className="muted small">
+              Never fetched, never read, never scored — and never suggested to you again.
+              Put one back and it returns to the list above, searched again.
+            </p>
+            <div className="blocked-list">
               {blocked.map((f) => (
-                <Row key={f.id} funder={f} onToggle={toggle} onEdit={setEditing}
-                     onBlock={block} selecting={selecting} selected={!!picked[f.id]}
-                     onSelect={(x, on) => setPicked({ ...picked, [x.id]: on })} />
+                <BlockedRow key={f.id} funder={f} onBlock={block} />
               ))}
             </div>
-          )}
-        </div>
-      )}
-    </section>
+          </>
+        )}
+      </section>
+    )}
+    </>
   );
 }

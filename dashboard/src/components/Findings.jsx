@@ -38,10 +38,75 @@ function Deadline({ o }) {
   );
 }
 
-export function Finding({ o }) {
+// What the score is made of, and what it could not be made of.
+//
+// The 0-100 is three parts — program fit out of 40, award size out of 35, whether the
+// application can be finished in time out of 25 — and until now only the total was kept,
+// so "why is this 38?" had no answer anywhere in the app. It turned out to matter: the
+// two components that need the funder to have published something were unearnable on
+// most pages, which capped every score near 40 and read as "we found you nothing good"
+// when the real story was that grant-makers write terse pages.
+//
+// A component that could not be scored is not shown as a zero. It is named, with the
+// points it took out of the total, because a score out of 65 and a score out of 100 are
+// different claims and the reader has to be told which one they are looking at.
+//
+// Rows scored before the breakdown existed have no parts recorded. They show nothing
+// here rather than three zeroes — see the v15 note in app/db.py.
+const PART_LABEL = {
+  fit_score: ["Program fit", 40],
+  award_score: ["Award size", 35],
+  timing_score: ["Finishing in time", 25],
+};
+
+function Breakdown({ o }) {
+  if (o.fit_score == null) return null;
+  const scored = [];
+  const missing = [];
+  for (const [key, [label, outOf]] of Object.entries(PART_LABEL)) {
+    (o[key] == null ? missing : scored).push({ key, label, outOf, value: o[key] });
+  }
+  return (
+    <div className="opp-parts">
+      <span className="opp-parts-total">
+        Score {o.score}
+        <span className="opp-parts-unit">/100</span>
+      </span>
+      {scored.map((p) => (
+        <span key={p.key} className="opp-part">
+          {p.label} <strong>{p.value}</strong>
+          <span className="opp-parts-unit">/{p.outOf}</span>
+        </span>
+      ))}
+      {/* Named, not restated. The rationale above already carries the sentence that
+          explains what a missing component means for the total (agent/score.py:
+          basis_note, appended there so it survives into the CSV and the Sheet, which
+          have no breakdown to render). Saying it a second time two lines further down
+          was the same claim twice on one card. */}
+      {missing.length > 0 && (
+        <span className="opp-part off">
+          {missing.map((p) => p.label).join(" and ")} — not scored
+        </span>
+      )}
+    </div>
+  );
+}
+
+export function Finding({ o, maxEffortHours = null }) {
   const [open, setOpen] = useState(false);
   const range = awardRange(o);
   const flagged = !!o.needs_human_check;
+  // The org's own hours-per-application figure, not a constant. It was hardcoded 10
+  // here while the setting it mirrors became per-org, so a nonprofit that told us it
+  // can spend 40 hours saw "~25h to apply — over the 10-hour cap" on a row the model
+  // had just scored as comfortably feasible: the badge contradicted the score beside it.
+  //
+  // Null means this caller does not know the figure. Then we say nothing rather than
+  // measure against a number we invented — the same rule as the rest of the card.
+  const overCap =
+    maxEffortHours != null &&
+    o.estimated_effort_hours != null &&
+    o.estimated_effort_hours > maxEffortHours;
 
   return (
     <article className={`opp ${flagged ? "flagged" : ""}`}>
@@ -109,18 +174,19 @@ export function Finding({ o }) {
             {/* Effort shows on every row, always. The scoring model is required to give a
                 number (agent/score.py), so a blank here means a row scored before that
                 rule existed — say so rather than rendering nothing, because a missing
-                chip is indistinguishable from a quick application at a glance, and the
-                10-hour cap is the decision this whole list exists to serve. */}
+                chip is indistinguishable from a quick application at a glance, and
+                whether an application fits the hours they have is the decision this
+                whole list exists to serve. */}
             {o.estimated_effort_hours != null ? (
               <Inferred
                 title={
-                  o.estimated_effort_hours > 10
-                    ? "Estimated effort for a competitive application — over the 10-hour cap"
+                  overCap
+                    ? `Estimated effort for a competitive application — over the ${maxEffortHours}h you said you can spend on one`
                     : "Estimated effort for a competitive application"
                 }
               >
                 ~{o.estimated_effort_hours}h to apply
-                {o.estimated_effort_hours > 10 && " — over the 10-hour cap"}
+                {overCap && ` — over your ${maxEffortHours}h`}
               </Inferred>
             ) : (
               <span className="chip muted" title="Scored before effort estimates were required. Re-run the search to fill it in.">
@@ -159,6 +225,8 @@ export function Finding({ o }) {
             </p>
           )}
 
+          <Breakdown o={o} />
+
           <div className="opp-meta">
             {o.award_typical != null && (
               <span className="chip">Typically {money(o.award_typical)}</span>
@@ -183,19 +251,25 @@ export function Finding({ o }) {
                 being asked there — but it cannot vanish either: it is what this list is
                 sorted by, and a list whose order has no visible cause reads as arbitrary.
 
-                "Provisional" when the funder's page stated no award amount: award size is
-                35 of the 100 points (CLAUDE.md), so that score is missing over a third
-                of its own basis and is not comparable to a fully sourced one. */}
+                This used to read "provisional … award size is 35% of the score", which
+                the composition change made false in the exact direction that matters. A
+                missing component is no longer scored zero and no longer costs the row
+                35 points; it is dropped from the denominator (agent/score.py:
+                compose_score), so the score is out of fewer parts rather than short of a
+                third of its basis. Saying "provisional" beside a breakdown that says
+                "left out rather than counted against it" was one card making two
+                opposite claims about the same number. */}
             <Inferred
               title={
                 o.section === "scored"
                   ? "Score out of 100. What this list is ranked by, weighted per CLAUDE.md."
-                  : "Score out of 100 — provisional. The funder's page did not state an " +
-                    "award amount, and award size is 35% of the score."
+                  : "Score out of 100, scored on fewer parts. The funder's page stated no " +
+                    "award amount, so award size was left out of the total rather than " +
+                    "counted against it — the breakdown above says what it was scored on."
               }
             >
               Rank score {o.score}
-              {o.section !== "scored" && " · provisional"}
+              {o.section !== "scored" && " · not scored on award size"}
             </Inferred>
             {o.funder_type && o.funder_type !== "unknown" && (
               <Inferred>{FUNDER_TYPE_LABELS[o.funder_type] || o.funder_type}</Inferred>
@@ -228,7 +302,12 @@ export function Finding({ o }) {
 // first, everything it wants a second opinion on at the very bottom. The backend already
 // sorts this way, so the split here is presentational only — the order is enforced in
 // SQL so every surface agrees.
-export default function Findings({ clear = [], needsCheck = [], emptyBody }) {
+// `helper` is the first-run orientation banner, passed in from the dashboard rather than
+// rendered at the top of the page. What it explains — the AI/sourced split — is marked
+// inline on every row below it, so it belongs against those rows and not in the position
+// the eye lands on first.
+export default function Findings({ clear = [], needsCheck = [], emptyBody, helper = null,
+                                   maxEffortHours = null }) {
   const total = clear.length + needsCheck.length;
 
   if (total === 0) {
@@ -248,6 +327,7 @@ export default function Findings({ clear = [], needsCheck = [], emptyBody }) {
           Ranked best first. "Not stated" means the funder's page didn't say — the
           researcher never guesses.
         </p>
+        {helper}
         {clear.length === 0 ? (
           <p className="muted small">
             Nothing came through clean this time. That can be a perfectly good week — the
@@ -256,7 +336,7 @@ export default function Findings({ clear = [], needsCheck = [], emptyBody }) {
         ) : (
           <div className="opps">
             {clear.map((o) => (
-              <Finding key={o.id} o={o} />
+              <Finding key={o.id} o={o} maxEffortHours={maxEffortHours} />
             ))}
           </div>
         )}
@@ -273,7 +353,7 @@ export default function Findings({ clear = [], needsCheck = [], emptyBody }) {
           </p>
           <div className="opps">
             {needsCheck.map((o) => (
-              <Finding key={o.id} o={o} />
+              <Finding key={o.id} o={o} maxEffortHours={maxEffortHours} />
             ))}
           </div>
         </section>

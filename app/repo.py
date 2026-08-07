@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 PUBLIC_SETTINGS = tuple(DEFAULT_SETTINGS.keys())
 
 _INT_SETTINGS = {"min_award", "min_deadline_runway_days", "max_opportunities",
-                 "schedule_hour"}
+                 "schedule_hour", "max_effort_hours"}
 _FLOAT_SETTINGS = {"run_budget_usd", "monthly_budget_usd"}
 _BOOL_SETTINGS = {"enabled", "schedule_enabled", "search_beyond_partners",
                   "onboarding_done", "share_funders"}
@@ -418,14 +418,17 @@ def save_opportunity(conn, opp, run_id: str | None = None, *, org_id: str) -> No
         """INSERT INTO opportunities(
                org_id, id, run_id, month_key, found_on, title, funder, source_url,
                award_min, award_max, award_typical, deadline, deadline_type,
-               estimated_effort_hours, program_match, score, score_rationale,
+               estimated_effort_hours, program_match, score,
+               fit_score, award_score, timing_score, score_rationale,
                funder_type, service_areas, geography,
                confidence_pct, contact_note, verified, needs_human_check,
                section, source_kind, application_lead_time_days, time_to_funds_days,
                fetched_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
            ON CONFLICT(org_id, id) DO UPDATE SET
                run_id=excluded.run_id, score=excluded.score,
+               fit_score=excluded.fit_score, award_score=excluded.award_score,
+               timing_score=excluded.timing_score,
                score_rationale=excluded.score_rationale,
                award_min=excluded.award_min, award_max=excluded.award_max,
                award_typical=excluded.award_typical, deadline=excluded.deadline,
@@ -447,7 +450,9 @@ def save_opportunity(conn, opp, run_id: str | None = None, *, org_id: str) -> No
             d["award_min"], d["award_max"], d.get("award_typical"),
             d["deadline"], d.get("deadline_type", "unknown"),
             d["estimated_effort_hours"], dumps(d["program_match"]),
-            d["score"], d["score_rationale"],
+            d["score"],
+            d.get("fit_score"), d.get("award_score"), d.get("timing_score"),
+            d["score_rationale"],
             d.get("funder_type", "unknown"), dumps(d.get("service_areas") or []),
             d.get("geography"),
             d.get("confidence_pct"), d.get("contact_note"),

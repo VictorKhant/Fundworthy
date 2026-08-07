@@ -17,7 +17,9 @@ from __future__ import annotations
 
 from app.db import DEFAULT_ORG_ID
 
+import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -161,10 +163,30 @@ def test_the_run_budget_is_customizable_end_to_end(tmp_path, monkeypatch):
 # --- the COO's ranking criteria (§11 Q5, answered) ----------------------------
 
 def test_the_scoring_prompt_carries_her_weights_and_nothing_else():
-    from agent.score import _SCORING_RULES
+    """The weights, asserted against the thing that now enforces them.
 
-    for line in ("40  program fit", "35  award size", "25  can this application"):
-        assert line in _SCORING_RULES, f"missing weight line: {line}"
+    This used to grep the prompt for the literal strings "40  program fit" and so on,
+    which is all it could do while the weights existed only as English inside the prompt
+    and the model returned one holistic total. That is the arrangement that let a rubric
+    spend 60 of its 100 points on evidence most funder pages do not carry without
+    anything in the suite noticing.
+
+    `WEIGHTS` is the source of truth now and `compose_score` applies it, so the check is
+    that the prompt asks for the three components the composer expects — a name drifting
+    apart from its weight is the failure worth catching, not a changed adjective.
+    """
+    from agent.score import WEIGHTS, _SCORING_RULES
+
+    assert WEIGHTS == {"fit": 40, "award": 35, "timing": 25}
+    assert sum(WEIGHTS.values()) == 100
+
+    # Matched on the pair, not on the alignment: the components are padded into a column
+    # and a whitespace change is not a regression.
+    for component, weight in (("fit_score", 40), ("award_score", 35),
+                              ("timing_score", 25)):
+        assert re.search(rf"{component}\s*,?\s+0-{weight}\b", _SCORING_RULES), \
+            f"the prompt does not ask for {component} out of {weight}"
+
     assert "funder warmth" not in _SCORING_RULES.lower() or \
         "Funder warmth is gone" in _SCORING_RULES
 
@@ -362,3 +384,46 @@ def test_a_malformed_marker_does_not_take_down_the_output_thread():
 
     for junk in ("::spend", "::spend abc", "::spend  ", "::spend NaNsense"):
         assert _spend_from(junk) is None or isinstance(_spend_from(junk), float)
+
+
+# --- the live funnel behind the three stage boxes -------------------------------
+
+def test_the_pipeline_emits_the_funnel_as_it_moves(caplog):
+    """The boxes on This week are the run now, not a summary printed after it. That only
+    works if the counters leave the child while it is still working."""
+    import json
+    import logging
+
+    from agent.models import RunLog
+    from agent.run import _emit_funnel
+    from agent.score import STAGE_MARKER
+
+    run = RunLog(started_at=datetime.now(timezone.utc))
+    with caplog.at_level(logging.INFO, logger="rise"):
+        run.candidates_parsed = 214
+        _emit_funnel(run, survivors=61)
+        run.triaged, run.scored = 61, 23
+        _emit_funnel(run, survivors=61, kept=6)
+
+    markers = [r.getMessage() for r in caplog.records if STAGE_MARKER.strip() in r.getMessage()]
+    assert len(markers) == 2
+    first, last = (json.loads(m.split(STAGE_MARKER.strip(), 1)[1]) for m in markers)
+    assert first == {"parsed": 214, "triaged": 0, "scored": 0, "survivors": 61}
+    # The two denominators only appear once there is something to divide by — a count
+    # with nothing to divide by cannot fill a bar.
+    assert last == {"parsed": 214, "triaged": 61, "scored": 23,
+                    "survivors": 61, "kept": 6}
+
+
+def test_the_runner_reads_the_funnel_and_survives_a_broken_one():
+    """Same contract as the spend marker: this drives three progress bars, so a bad line
+    costs a frame of animation and never the thread draining the child's output."""
+    from app.runner import _funnel_from
+
+    assert _funnel_from('::stage {"parsed":214,"triaged":61}') == {"parsed": 214, "triaged": 61}
+    assert _funnel_from('INFO:rise:::stage {"parsed":1}') == {"parsed": 1}
+    assert _funnel_from("  ✓ The Parker Foundation") is None
+    # Anything that is not a JSON object is dropped rather than written to the run row,
+    # where it would land in `progress` and be read back as a funnel.
+    for junk in ("::stage", "::stage {", "::stage []", "::stage 7", "::stage null"):
+        assert _funnel_from(junk) is None

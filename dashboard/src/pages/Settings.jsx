@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Confirm, { useConfirm } from "../components/Confirm";
+import Icon from "../components/Icon";
 import JoinOrg from "../components/JoinOrg";
 import Organization from "../components/Organization";
 import Spinner, { Busy } from "../components/Spinner";
@@ -32,7 +33,7 @@ const STEPS = [
   <>Paste it below and press Save. Whoever's account it is pays the bill.</>,
 ];
 
-function KeyPanel({ state, onChange }) {
+function KeyPanel({ state, onChange, inputRef }) {
   const [dialog, ask] = useConfirm();
   const [key, setKey] = useState("");
   // Which of the three is running, not just "something is". They take visibly different
@@ -74,6 +75,7 @@ function KeyPanel({ state, onChange }) {
 
   async function remove() {
     const answer = await ask({
+      icon: "bin",
       tone: "clay",
       title: "Remove the saved key?",
       points: [
@@ -160,6 +162,7 @@ function KeyPanel({ state, onChange }) {
         <label className="field">
           <span>{state.has_api_key ? "Replace it with a new key" : "Paste your key"}</span>
           <input
+            ref={inputRef}
             type="password"
             value={key}
             autoComplete="off"
@@ -193,27 +196,113 @@ function KeyPanel({ state, onChange }) {
   );
 }
 
+// Which AI it uses.
+//
+// The model picker on This week offers whatever `state.model_choices` holds, and there
+// was nowhere at all to change what that is — the per-stage half of R5 shipped and the
+// provider half did not, which left "pick a model" as a control with no upstream.
+//
+// **Only Anthropic is live, and the other three say so rather than being absent.** That
+// is the honest shape of it today: connecting one of them needs a provider column on the
+// stored key, one adapter interface in `agent/score.py`, per-provider pricing and a
+// `resolve_api_key` that returns which provider a key belongs to. None of that is built.
+// A disabled card that names the thing is a signpost; leaving the card out entirely
+// would make the picker's "add a provider under Settings" line point at nothing.
+const PROVIDERS = [
+  {
+    key: "anthropic",
+    name: "Anthropic",
+    mark: "A",
+    models: "Claude Haiku, Sonnet, Opus",
+    live: true,
+  },
+  { key: "openai", name: "OpenAI", mark: "O", models: "GPT models" },
+  { key: "deepseek", name: "DeepSeek", mark: "D", models: "DeepSeek models" },
+  { key: "qwen", name: "Qwen", mark: "Q", models: "Qwen models" },
+];
+
+function Providers({ state, onGoKey }) {
+  return (
+    <section className="panel raised">
+      <h2>Which AI it uses</h2>
+      <p className="settings-lede">
+        Connect a provider here and its models become choosable on the three boxes on{" "}
+        <strong>This week</strong>. You can mix them — a cheap model for the quick read, a
+        stronger one for scoring.
+      </p>
+
+      <div className="providers">
+        {PROVIDERS.map((p) => {
+          const connected = p.live && state.key_available;
+          return (
+            <div key={p.key}
+                 className={`provider ${connected ? "on" : ""} ${p.live ? "" : "soon"}`}>
+              <div className="provider-head">
+                <span className="provider-mark" aria-hidden="true">{p.mark}</span>
+                <span className="provider-name">{p.name}</span>
+                {connected && (
+                  <span className="provider-check" aria-hidden="true">
+                    <Icon name="check" size={13} />
+                  </span>
+                )}
+              </div>
+              <p className="provider-models">
+                {p.live ? p.models : "Not connected yet"}
+              </p>
+              {p.live ? (
+                <button className="pill" onClick={onGoKey}>
+                  {state.has_api_key ? "Replace key" : "Add a key"}
+                </button>
+              ) : (
+                <button className="pill" disabled
+                        title="Fundworthy only reads with Claude today">
+                  Add a key
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <p className="muted small">
+        Only Claude is connected today — the other three are what this panel is for once
+        Fundworthy can read with them.
+      </p>
+    </section>
+  );
+}
+
 function OrgPanel({ settings, onChange }) {
   const [draft, setDraft] = useState({
     org_name: settings.org_name || "",
     org_location: settings.org_location || "",
+    max_effort_hours: settings.max_effort_hours ?? 10,
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    setDraft({ org_name: settings.org_name || "", org_location: settings.org_location || "" });
-  }, [settings.org_name, settings.org_location]);
+    setDraft({
+      org_name: settings.org_name || "",
+      org_location: settings.org_location || "",
+      max_effort_hours: settings.max_effort_hours ?? 10,
+    });
+  }, [settings.org_name, settings.org_location, settings.max_effort_hours]);
 
   const dirty =
     draft.org_name !== (settings.org_name || "") ||
-    draft.org_location !== (settings.org_location || "");
+    draft.org_location !== (settings.org_location || "") ||
+    Number(draft.max_effort_hours) !== Number(settings.max_effort_hours ?? 10);
 
   async function save() {
     setSaving(true);
     setError(null);
     try {
-      await api.settings.save(draft);
+      await api.settings.save({
+        ...draft,
+        // The number input hands back a string, and the API validates an int.
+        max_effort_hours: Number(draft.max_effort_hours) || 10,
+      });
       await onChange();
     } catch (e) {
       setError(e.message);
@@ -255,6 +344,25 @@ function OrgPanel({ settings, onChange }) {
           <span className="muted small">
             Only decides which funders we show you first. It never hides a grant from
             you — that is the funder list's job, and yours.
+          </span>
+        </label>
+
+        {/* Not cosmetic: this is a quarter of the score. It used to be the constant 10
+            inside the scoring prompt — one nonprofit's staffing, applied to everybody —
+            so an org with more capacity had every large application marked infeasible
+            and an org with less had them marked comfortable. */}
+        <label className="field">
+          <span>Hours you can spend on one application</span>
+          <input
+            type="number"
+            min="1"
+            max="200"
+            value={draft.max_effort_hours}
+            onChange={(e) => setDraft({ ...draft, max_effort_hours: e.target.value })}
+          />
+          <span className="muted small">
+            Everyone's time added together. A grant that would take longer than this is
+            ranked lower — it is a quarter of the score.
           </span>
         </label>
       </div>
@@ -744,6 +852,15 @@ function DeleteAccount() {
 }
 
 export default function Settings({ state, onChange }) {
+  // Anthropic's "Add a key" on the provider panel is the same key box that is already on
+  // this page, so it scrolls to it and puts the cursor in it rather than duplicating a
+  // write-only field that no endpoint can read back.
+  const keyBox = useRef(null);
+  const goKey = () => {
+    keyBox.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    keyBox.current?.focus({ preventScroll: true });
+  };
+
   return (
     <>
       <header>
@@ -753,7 +870,8 @@ export default function Settings({ state, onChange }) {
         </p>
       </header>
 
-      <KeyPanel state={state} onChange={onChange} />
+      <KeyPanel state={state} onChange={onChange} inputRef={keyBox} />
+      <Providers state={state} onGoKey={goKey} />
       <OrgPanel settings={state.settings} onChange={onChange} />
       <Organization spend={state.spend} onChange={onChange} />
 

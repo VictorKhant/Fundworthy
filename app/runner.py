@@ -29,8 +29,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import repo
-from agent.score import SPEND_MARKER
-from .db import db_path, dumps, session
+from agent.score import SPEND_MARKER, STAGE_MARKER
+from .db import db_path, dumps, loads, session
 from .secrets import SOURCE_ENVIRONMENT, resolve_api_key
 
 log = logging.getLogger(__name__)
@@ -186,6 +186,23 @@ def _spend_from(line: str) -> float | None:
         return None
 
 
+def _funnel_from(line: str) -> dict | None:
+    """Pull the live funnel out of a `::stage {"parsed":214,…}` marker, or return None.
+
+    Tolerant for the same reason as `_spend_from`: this drives three progress bars, and
+    a malformed marker should cost a frame of animation rather than the thread draining
+    the child's output.
+    """
+    marker = STAGE_MARKER.strip()
+    if marker not in line:
+        return None
+    try:
+        value = loads(line.rsplit(marker, 1)[1].strip(), None)
+    except Exception:  # noqa: BLE001
+        return None
+    return value if isinstance(value, dict) else None
+
+
 _INTERESTING = ("✓", "✗", "⚠", "scored", "Crawling", "candidates survived",
                 "Archive", "Sources", "dropped", "Budget", "Wrote", "RUN SUMMARY")
 
@@ -198,6 +215,10 @@ class _Slot:
     run_id: str
     org_id: str
     lines: deque[str] = field(default_factory=lambda: deque(maxlen=MAX_LOG_LINES))
+    # The live funnel from the child's `::stage` markers, so every write to `progress`
+    # carries the latest one. Only `_pump` touches it, and there is exactly one pump
+    # thread per slot, so the two writers below cannot race each other.
+    funnel: dict = field(default_factory=dict)
 
     @property
     def alive(self) -> bool:
@@ -422,9 +443,17 @@ class RunManager:
                 if spend is not None:
                     self._write_spend(slot.run_id, spend)
                     continue
+                # The funnel behind the three stage boxes. Same deal: consumed and
+                # dropped, because `::stage {"parsed":214,…}` in the middle of the log
+                # is exactly the machine chatter the boxes exist to replace.
+                funnel = _funnel_from(line)
+                if funnel is not None:
+                    slot.funnel = funnel
+                    self._write_funnel(slot)
+                    continue
                 slot.lines.append(line)
                 if any(token in line for token in _INTERESTING):
-                    self._write_progress(slot.run_id, line)
+                    self._write_progress(slot, line)
         except Exception as exc:  # noqa: BLE001
             log.warning("run %s: output pump failed (%s)", slot.run_id, exc)
         finally:
@@ -446,13 +475,43 @@ class RunManager:
         except Exception as exc:  # noqa: BLE001
             log.debug("could not write live spend for %s: %s", run_id, exc)
 
-    def _write_progress(self, run_id: str, message: str) -> None:
+    def _write_funnel(self, slot: "_Slot") -> None:
+        """The three counters onto their own columns, and the denominators into
+        `progress`.
+
+        `candidates_parsed`, `triaged` and `scored` are real columns the finished run
+        already fills, so writing them as the run goes means the stage boxes read the
+        same fields live that they read afterwards — one shape of data, not two.
+
+        `survivors` and `kept` have nowhere of their own and do not want a migration for
+        something that is meaningless the moment the run ends. They ride in the progress
+        JSON, which is already free-form and already this thread's to write.
+        """
         try:
             with session() as conn:
-                repo.update_run(conn, run_id, progress=dumps(
-                    {"phase": "running", "message": message[:300]}))
+                repo.update_run(
+                    conn, slot.run_id,
+                    candidates_parsed=int(slot.funnel.get("parsed", 0)),
+                    triaged=int(slot.funnel.get("triaged", 0)),
+                    scored=int(slot.funnel.get("scored", 0)),
+                    progress=dumps({"phase": "running",
+                                    "message": slot.lines[-1] if slot.lines else "",
+                                    "funnel": slot.funnel}),
+                )
+        except Exception as exc:  # noqa: BLE001 — a stalled bar, never a dead run
+            log.debug("could not write funnel for %s: %s", slot.run_id, exc)
+
+    def _write_progress(self, slot: "_Slot", message: str) -> None:
+        try:
+            with session() as conn:
+                repo.update_run(conn, slot.run_id, progress=dumps(
+                    {"phase": "running", "message": message[:300],
+                     # Carried, not dropped. Both writers land on the same column, and
+                     # without this every interesting log line would blank the funnel
+                     # and the bars would flicker back to zero between candidates.
+                     "funnel": slot.funnel}))
         except Exception as exc:  # noqa: BLE001 — progress is cosmetic, never fatal
-            log.debug("could not write progress for %s: %s", run_id, exc)
+            log.debug("could not write progress for %s: %s", slot.run_id, exc)
 
     def _finalize(self, run_id: str, code: int) -> None:
         """The agent writes its own run row through the sink. This only has to catch

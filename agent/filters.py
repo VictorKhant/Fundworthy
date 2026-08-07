@@ -207,7 +207,7 @@ def apply_filters(page: ParsedPage, funder: str, cfg: Config) -> FilterResult:
                 True,
                 Reject.DEADLINE_TOO_SOON,
                 f"{days}d — under the {cfg.min_deadline_runway_days}d floor; "
-                "not enough runway for a 10-hour application",
+                f"not enough runway for a {cfg.max_effort_hours}-hour application",
             )
 
     # §11 Q4 is unanswered — we do not know what match the organization can meet, so we cannot

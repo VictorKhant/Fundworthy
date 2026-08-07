@@ -113,6 +113,11 @@ class SettingsIn(BaseModel):
     scoring_model: str | None = Field(None, max_length=80)
     org_name: str | None = Field(None, max_length=200)
     org_location: str | None = Field(None, max_length=200)
+    # Hours this org can spend on one application. Decides 25 of the 100 scoring points
+    # and used to be the constant `10` in the prompt — the pilot COO's answer, applied to
+    # every tenant. Bounded here because a 0 makes everything infeasible and a 100,000
+    # makes everything free.
+    max_effort_hours: int | None = Field(None, ge=1, le=200)
     # The weekly schedule. Validated here rather than trusted: `schedule_hour` reaches a
     # `.replace(hour=...)` in the scheduler, and the timezone reaches ZoneInfo — which
     # handles a bad name gracefully, but there is no reason to make it.
@@ -706,8 +711,13 @@ def read_archive(month: str | None = None, org: str = Depends(current_org)) -> d
         summary = archive.month_summary(conn, org_id=org)
         rows = repo.list_opportunities(conn, org_id=org, month=month) if month else []
         months = repo.available_months(conn, org_id=org)
-    return {**summary, "months_available": months,
-            "month": month, "opportunities": rows}
+        # The effort chip on every row is measured against the org's own hours-per-
+        # application figure, so the archive has to carry it as well as the dashboard.
+        # Without it this page would either invent a cap or drop the comparison, and
+        # the archive renders the same component as This week.
+        hours = repo.get_settings(conn, org_id=org).get("max_effort_hours")
+    return {**summary, "months_available": months, "month": month,
+            "opportunities": rows, "max_effort_hours": hours}
 
 
 # --- runs ---------------------------------------------------------------------

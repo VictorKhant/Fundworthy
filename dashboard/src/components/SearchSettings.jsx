@@ -75,18 +75,6 @@ export default function SearchSettings({
           `sectors_active` stays in the schema and the API so old rows still read back.
           Which funders get searched is the funder list: pause, block, delete. */}
 
-      <label className="field inline">
-        <input
-          type="checkbox"
-          checked={draft.search_beyond_partners}
-          onChange={(e) => set("search_beyond_partners", e.target.checked)}
-        />
-        <span>
-          Also look beyond the funders on my list
-          <small className="muted"> — being built; for now this searches your list only</small>
-        </span>
-      </label>
-
       <div className="searchpanel-foot compact">
         {/* Two switches, and separating them was the point.
 
@@ -103,6 +91,21 @@ export default function SearchSettings({
           Search automatically every week
           <small className="muted">
             {" "}— off by default. You can always search by hand with the button above.
+          </small>
+        </label>
+
+        {/* Beside the other switch rather than on a full-width row of its own above the
+            foot. It is off, it is unbuilt, and it was taking a whole line between the
+            knobs grid and the save row to say so. */}
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={draft.search_beyond_partners}
+            onChange={(e) => set("search_beyond_partners", e.target.checked)}
+          />
+          Also look beyond the funders on my list
+          <small className="muted">
+            {" "}— being built; for now this searches your list only
           </small>
         </label>
 

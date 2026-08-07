@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api } from "../api";
+import { api, money } from "../api";
+import Icon, { IconButton } from "./Icon";
 import Spinner from "./Spinner";
 
 // What one step of the search did, opened from its box.
@@ -32,6 +33,23 @@ const REASON_LABEL = {
 const label = (reason) =>
   REASON_LABEL[reason] || reason.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
 
+// Why the ones that got through, got through. The panel only ever had the second half —
+// the reasons things were set aside — which quietly makes a rejection log out of a page
+// that is supposed to explain a step. A person looking at "23 of 61" wants both halves,
+// and the pass rule is the one that tells them whether their own settings are doing what
+// they meant. Every sentence here is the free-tier filter list, the triage question and
+// the scoring threshold stated in the words they are actually implemented in.
+// The floor is theirs, not the default. Every other sentence here is fixed, but an org
+// that set its floor to $25,000 being told its own filter is $10,000 would be the one
+// kind of wrong this panel exists to prevent.
+const PASSED = (floor) => ({
+  1: `Every one of these named a grant, was open, was over your ${money(floor)} floor, `
+   + "and had enough runway to write an application.",
+  2: "The model found language matching one of your ticked programs on the page itself.",
+  3: "Scored 55 or better on award size, program fit, effort and deadline runway — and "
+   + "every stated figure was found word-for-word on the funder's page.",
+});
+
 const PARAGRAPH = {
   1: "These pages were fetched and checked without any AI, so this step is free however "
    + "much it throws away. Anything set aside here never cost you a penny — and if a "
@@ -44,7 +62,7 @@ const PARAGRAPH = {
    + "cheaper checks, so it is usually a deadline the parser could not see earlier.",
 };
 
-export default function StageDetail({ stage, run, flow, cost, onClose }) {
+export default function StageDetail({ stage, run, flow, cost, floor = 10000, onClose }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [expanded, setExpanded] = useState(null);
@@ -71,6 +89,10 @@ export default function StageDetail({ stage, run, flow, cost, onClose }) {
     setExpanded(null);
     setShowAll({});
     load();
+    // The ✕ is the only way out other than Esc now that the footer Close is gone, so
+    // focus has to land on it — otherwise a keyboard user opens this and is left in the
+    // document behind it.
+    panel.current?.querySelector(".dialog-x")?.focus({ preventScroll: true });
   }, [stage, load]);
 
   useEffect(() => {
@@ -92,21 +114,49 @@ export default function StageDetail({ stage, run, flow, cost, onClose }) {
   const groups = (data?.groups || []).filter((g) => g.stage === stage.n);
   const rows = data?.rejects || [];
   const setAside = Math.max((flow?.came || 0) - (flow?.through || 0), 0);
+  // What the longest bar is measured against. Proportional to the biggest reason rather
+  // than to the total, because a run where one reason accounts for 90% would otherwise
+  // render every other bar as a stub too short to compare.
+  const widest = Math.max(1, ...groups.map((g) => g.total));
 
   return (
     <div className="dialog-scrim" onMouseDown={(e) => e.target === e.currentTarget && close()}>
       <div className="dialog stagedetail" role="dialog" aria-modal="true"
            aria-labelledby="stage-title" ref={panel}>
-        <h2 id="stage-title">{stage.title}</h2>
+        <h2 id="stage-title">
+          <span className={`stage-badge n${stage.n}`} aria-hidden="true">{stage.n}</span>
+          {stage.title}
+          <IconButton name="close" label="Close" className="dialog-x" onClick={close} />
+        </h2>
 
+        {/* Four bordered figures, not four words in a sentence. They are the only
+            numbers in this panel and they were set as an inline run of text, which is
+            the one shape that guarantees nobody compares them. */}
         <div className="stage-figures">
-          <span><strong>{flow?.came ?? 0}</strong> came in</span>
-          <span><strong>{flow?.through ?? 0}</strong> went through</span>
-          <span><strong>{setAside}</strong> set aside</span>
-          <span><strong>{stage.n === 1 ? "$0.00" : `$${(cost || 0).toFixed(4)}`}</strong> spent</span>
+          <span className="figure">
+            <strong>{flow?.came ?? 0}</strong>
+            came in
+          </span>
+          <span className="figure went">
+            <strong>{flow?.through ?? 0}</strong>
+            went through
+          </span>
+          <span className="figure aside">
+            <strong>{setAside}</strong>
+            set aside
+          </span>
+          <span className="figure">
+            <strong>{stage.n === 1 ? "$0.00" : `$${(cost || 0).toFixed(4)}`}</strong>
+            {stage.n === 1 ? "this step is free" : "spent"}
+          </span>
         </div>
 
         <p className="dialog-body">{PARAGRAPH[stage.n]}</p>
+
+        {/* Both halves. The panel used to carry only the rejections, which turns an
+            account of a step into a list of what it threw away. */}
+        <h3 className="sub">Why it let those through</h3>
+        <p className="stage-passed">{PASSED(floor)[stage.n]}</p>
 
         {error && <div className="notice error">{error}</div>}
         {!data && !error && (
@@ -129,22 +179,36 @@ export default function StageDetail({ stage, run, flow, cost, onClose }) {
           </p>
         )}
 
+        {groups.length > 0 && <h3 className="sub">Why it set the rest aside</h3>}
+
         <ul className="reasonlist">
           {groups.map((g) => {
             const mine = rows.filter((r) => r.reason === g.reason);
             const isOpen = expanded === g.reason;
-            const visible = showAll[g.reason] ? mine : mine.slice(0, 5);
+            // Three, not five. The drawer is a spot check — "is this rejection right?" —
+            // and five rows of a hundred is the same answer as three with more scrolling
+            // between one reason and the next.
+            const visible = showAll[g.reason] ? mine : mine.slice(0, 3);
             return (
-              <li key={g.reason} className="reason">
+              <li key={g.reason} className={`reason ${isOpen ? "on" : ""}`}>
                 <button
                   type="button"
                   className="reason-head"
                   onClick={() => setExpanded(isOpen ? null : g.reason)}
                   aria-expanded={isOpen}
                 >
-                  <span className="reason-caret" aria-hidden="true">{isOpen ? "▾" : "▸"}</span>
-                  <span className="reason-name">{label(g.reason)}</span>
+                  <span className="reason-caret" aria-hidden="true">
+                    <Icon name="chevron" size={13} />
+                  </span>
+                  {/* The count leads, as a clay numeral, and the bar on the right is
+                      what makes "64 below your floor, 13 faith-based" legible without
+                      reading either number. */}
                   <span className="reason-count">{g.total}</span>
+                  <span className="reason-name">{label(g.reason)}</span>
+                  <span className="reason-bar" aria-hidden="true">
+                    <span className="reason-bar-fill"
+                          style={{ width: `${Math.round((g.total / widest) * 100)}%` }} />
+                  </span>
                 </button>
 
                 {isOpen && (
@@ -158,27 +222,46 @@ export default function StageDetail({ stage, run, flow, cost, onClose }) {
                     </p>
                   ) : (
                     <>
+                      {/* **The funder's name is the link**, not the page title. It was
+                          the other way round, which buries the one word somebody is
+                          scanning for — you recognise "San Diego Foundation", not
+                          "Community Enhancement Program FY26 Guidelines". */}
                       <ul className="rejectlist">
                         {visible.map((r, i) => (
                           <li key={`${r.url}-${i}`}>
-                            <span className="reject-funder">{r.funder}</span>
                             {r.url ? (
-                              <a href={r.url} target="_blank" rel="noopener noreferrer">
-                                {r.title || r.url}
+                              <a className="reject-funder" href={r.url}
+                                 target="_blank" rel="noopener noreferrer">
+                                {r.funder} ↗
                               </a>
                             ) : (
-                              <span>{r.title}</span>
+                              <span className="reject-funder">{r.funder}</span>
                             )}
+                            {r.title && <span className="reject-title">{r.title}</span>}
                             {r.detail && <span className="reject-detail">{r.detail}</span>}
+                            {r.url && (
+                              <span className="reject-host">
+                                {r.url.replace(/^https?:\/\//, "").split("/")[0]}
+                              </span>
+                            )}
                           </li>
                         ))}
                       </ul>
-                      {mine.length > visible.length && (
+                      {mine.length > visible.length ? (
                         <button
-                          className="text small"
+                          className="pill reject-more"
                           onClick={() => setShowAll({ ...showAll, [g.reason]: true })}
                         >
                           Show the other {mine.length - visible.length}
+                          <Icon name="chevron" size={12} />
+                        </button>
+                      ) : mine.length > 3 && (
+                        <button
+                          className="pill reject-more on"
+                          onClick={() => setShowAll({ ...showAll, [g.reason]: false })}
+                        >
+                          Show fewer
+                          <Icon name="chevron" size={12} />
                         </button>
                       )}
                     </>
@@ -188,10 +271,6 @@ export default function StageDetail({ stage, run, flow, cost, onClose }) {
             );
           })}
         </ul>
-
-        <div className="dialog-actions">
-          <button className="primary" onClick={close} autoFocus>Close</button>
-        </div>
       </div>
     </div>
   );
