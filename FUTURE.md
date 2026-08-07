@@ -662,7 +662,12 @@ dashboard cannot write to and had never been switched on.
 
   What it inherits from `RunManager`: scheduling stops if the process is down, and a
   second uvicorn worker would double-fire. Both are fixed by the same job queue.
-- **Protect `main`** on GitHub: require a PR, no force-push.
+- ~~**Protect `main`** on GitHub: require a PR, no force-push.~~ **Done**, and confirmed
+  the way you would want to confirm it: a direct `git push origin main` was refused by the
+  remote — *"Changes must be made through a pull request. Required status check `test` is
+  expected."* So the `test` job in `.github/workflows/deploy.yml` is a real gate rather
+  than a convention, and every change reaches the VM through a PR. Noted here because the
+  §6b design notes below still list it as outstanding.
 
 ---
 
@@ -725,7 +730,8 @@ above: whatever else happens, no run is left showing a spinner for ever.
 
 ### Also needed for the pipeline itself
 
-- **Protect `main`** on GitHub: PR required, no direct pushes, no force-push.
+- ~~**Protect `main`** on GitHub: PR required, no direct pushes, no force-push.~~ **Done**
+  — see §6 above; the remote refuses a direct push and requires the `test` check.
 - **Run the test suite in the Action before deploying.** The suite is offline and takes
   ~3 seconds; there is no excuse for it not gating a deploy.
 - **Deploy key, not a password.** A dedicated SSH key in GitHub Secrets, with its public
