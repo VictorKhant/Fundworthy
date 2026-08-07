@@ -191,6 +191,165 @@ def test_one_bad_page_among_good_ones_does_not_stop_the_run(monkeypatch):
     assert run.rejected_by_filter.get("triage_error") == 1
 
 
+def _crawl_with(monkeypatch, run, cfg, pages, adapter_rejects=()):
+    """Drive the real `crawl()` over a fixed set of parsed pages from one indexed source."""
+    import asyncio
+
+    from agent.apis import ApiResult
+
+    source = Source(name="CA", funder="State of California", url="https://ca.invalid",
+                    tier=Tier.INDEXED, confidence=Confidence.CONFIRMED,
+                    adapter="ca_grants_portal")
+    monkeypatch.setattr(runmod, "resolve_sources", lambda c, r: ([source], []))
+    monkeypatch.setattr(runmod, "excluded_funders", lambda org_id: set())
+
+    async def fake_adapter(src, fetcher, cfg):
+        result = ApiResult(note="stubbed")
+        for reason in adapter_rejects:
+            result.reject(reason)
+        result.pages.extend(pages)
+        return result
+
+    monkeypatch.setattr(runmod, "_run_adapter", fake_adapter)
+    return asyncio.run(runmod.crawl(cfg, run, follow_links=False))
+
+
+def test_stage_one_adds_up_exactly(monkeypatch):
+    """**The reconciliation invariant.** Stage 1 shows "came in", "went through" and a
+    "set aside" derived as came-minus-through, above a breakdown of reasons. Those reasons
+    must total exactly the set-aside figure, or the panel built to explain a thin week
+    contradicts itself — which is precisely what a real run did on the live site.
+
+    Three of the four things that can happen to a candidate are exercised at once here:
+    an adapter refusing a record before it is ever a page, a page the free filters throw
+    out, and the same URL arriving twice."""
+    run, cfg = _run(), _cfg()
+
+    good = _page("https://ca.invalid/a")              # survives
+    duplicate = _page("https://ca.invalid/a")          # same URL again
+    thin = ParsedPage(url="https://ca.invalid/b", title="Nav", text="tiny")  # thin page
+
+    kept = _crawl_with(monkeypatch, run, cfg, [good, duplicate, thin],
+                       adapter_rejects=["ca_category_off_mission",
+                                        "ca_not_open_to_nonprofits"])
+
+    assert len(kept) == 1 and run.survivors == 1
+    # 3 pages considered + 2 records the adapter refused
+    assert run.candidates_parsed == 5
+
+    set_aside = run.candidates_parsed - run.survivors
+    explained = sum(run.rejected_by_filter.values())
+    assert set_aside == explained == 4, (
+        f"stage 1 says {set_aside} set aside but its breakdown explains {explained}: "
+        f"{run.rejected_by_filter}"
+    )
+    # And the duplicate is a named reason rather than an unexplained gap.
+    assert run.rejected_by_filter["already_seen_this_run"] == 1
+
+
+def test_a_duplicate_url_is_named_not_silently_dropped(monkeypatch):
+    """The specific leak. `consider()` counted the page in `candidates_parsed` and
+    returned without recording anything, so two funders linking one grant inflated
+    "set aside" by one with no line item to account for it."""
+    run, cfg = _run(), _cfg()
+    page = _page("https://ca.invalid/shared")
+
+    _crawl_with(monkeypatch, run, cfg, [page, _page("https://ca.invalid/shared")])
+
+    rows = [r for r in run.rejects if r.reason == "already_seen_this_run"]
+    assert len(rows) == 1, "the duplicate left no row behind"
+    assert rows[0].stage == 1, "it is a free-tier skip, so it belongs to stage 1"
+    assert "twice" in rows[0].detail
+    # It must NOT be conflated with the monthly archive dedup, which is a different
+    # thing with a different meaning to the reader.
+    assert "already_seen_this_month" not in run.rejected_by_filter
+    assert run.duplicates_skipped == 0, (
+        "duplicates_skipped is the monthly-archive counter and drives its own sentence "
+        "on the dashboard — a within-run duplicate must not inflate it"
+    )
+
+
+def test_a_page_rejected_twice_is_counted_twice_and_still_adds_up(monkeypatch):
+    """The other duplicate case, which already worked and must keep working: when the
+    FIRST occurrence was rejected the URL never entered `survivors`, so the second goes
+    through the filter chain again and is rejected again. Two intakes, two reasons —
+    still balanced."""
+    run, cfg = _run(), _cfg()
+    thin_a = ParsedPage(url="https://ca.invalid/nav", title="Nav", text="tiny")
+    thin_b = ParsedPage(url="https://ca.invalid/nav", title="Nav", text="tiny")
+
+    _crawl_with(monkeypatch, run, cfg, [thin_a, thin_b])
+
+    assert run.candidates_parsed == 2 and run.survivors == 0
+    assert run.rejected_by_filter.get("thin_landing_page") == 2
+    assert "already_seen_this_run" not in run.rejected_by_filter
+    assert run.candidates_parsed - run.survivors == sum(run.rejected_by_filter.values())
+
+
+def test_the_survivor_count_outlives_the_run_and_is_not_confused_with_triaged(monkeypatch):
+    """Stage 1 claims "N pages were worth paying to read". That is `survivors`, and it
+    only ever existed in the live progress JSON — so a finished run fell back to
+    `triaged`, which is how many we then got round to. The two differ on any run that
+    stopped early, and the consecutive-error breaker made the gap enormous: a run halted
+    after 5 failures reported "5 went through" of 344.
+
+    Here: 40 pages survive the free filters, the breaker stops after 5. `survivors` must
+    say 40 and `triaged` must say 5 — they are different facts."""
+    run, cfg = _run(), _cfg()
+
+    def boom(candidate, budget, cfg):
+        raise RuntimeError("authentication_error: invalid x-api-key")
+
+    monkeypatch.setattr(runmod, "triage", boom)
+
+    survivors = _survivors(40)
+    # What `crawl()` records before anything is read.
+    run.survivors = len(survivors)
+    runmod.evaluate(survivors, cfg, run, Budget(ceiling_usd=1.0), use_llm=True)
+
+    assert run.survivors == 40, "the free filters passed 40 pages"
+    assert run.triaged == runmod.CONSECUTIVE_ERROR_LIMIT, "we only read 5 of them"
+    assert run.survivors != run.triaged, (
+        "these must not collapse into one number — that collapse is the bug"
+    )
+    assert run.to_dict()["survivors"] == 40, "and it has to survive to the sink"
+
+
+def test_crawl_records_the_survivor_count(monkeypatch):
+    """Set on the real `crawl()`, on the early-return path too (indexed databases only,
+    no HTML sources) — that is a real run and its stage 1 box has to be right as well."""
+    import asyncio
+
+    from agent.apis import ApiResult
+    from agent.parse import ParsedPage
+
+    run, cfg = _run(), _cfg()
+    api_source = Source(name="CA", funder="State of California",
+                        url="https://ca.invalid", tier=Tier.INDEXED,
+                        confidence=Confidence.CONFIRMED, adapter="ca_grants_portal")
+
+    monkeypatch.setattr(runmod, "resolve_sources", lambda c, r: ([api_source], []))
+    monkeypatch.setattr(runmod, "excluded_funders", lambda org_id: set())
+
+    async def fake_adapter(source, fetcher, cfg):
+        result = ApiResult(note="stubbed")
+        for i in range(3):
+            page = ParsedPage(url=f"https://ca.invalid/g{i}", title=f"Grant {i}",
+                              text="y" * 3000)
+            page.amounts = [type("E", (), {"value": 50_000, "snippet": "$",
+                                           "kind": "amount"})()]
+            result.pages.append(page)
+        return result
+
+    monkeypatch.setattr(runmod, "_run_adapter", fake_adapter)
+
+    kept = asyncio.run(runmod.crawl(cfg, run, follow_links=False))
+
+    assert run.survivors == len(kept) == 3, (
+        f"crawl kept {len(kept)} pages but recorded survivors={run.survivors}"
+    )
+
+
 def test_a_scoring_failure_leaves_a_note_a_person_can_read(monkeypatch):
     """`run.notes` is the only place the run speaks in sentences, and the dashboard now
     renders it. The note has to name the funder and carry the real error."""

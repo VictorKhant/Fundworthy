@@ -86,7 +86,13 @@ export default function Stages({
   // on a run that read everything, and they are not on a run that stopped at the result
   // cap — where "how many pages were worth paying to read" is the survivor count and
   // "how many did we get round to" is the triaged one. Stage 1's label says the former.
-  const survived = funnel?.survivors ?? triaged;
+  // Live funnel first, then the persisted column (v16), then `triaged` for rows written
+  // before that column existed. The fallback used to be `triaged` alone, which is only
+  // the same number on a run that read everything — so a run the consecutive-error
+  // breaker stopped after 5 reported "5 went through" of 344 when the free filters had
+  // passed far more and we simply never got to them. `|| triaged` and not `?? triaged`
+  // on purpose: an old row reads back 0 from the DEFAULT, not null.
+  const survived = funnel?.survivors ?? (run.survivors || triaged);
   const kept = funnel?.kept
     ?? ((run.opportunities_scored || 0) + (run.opportunities_not_stated || 0));
 

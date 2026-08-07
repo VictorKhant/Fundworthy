@@ -126,13 +126,16 @@ process's memory as the thing actually blocking a second uvicorn worker (§3, §
   the $1 ceiling before anything notices. This works directly against the "no exceptions"
   framing in §5.
 - **A run that fails leaves nothing to explain why, which is the one case the log exists
-  for.** Two compounding gaps: `write_run_log`'s failure path (`agent/run.py:890`) only logs
-  and never marks the run as failed, so a broken sink write still exits 0 and the dashboard
-  shows a "done" run with blank stats and no stop reason; and the "technical log" the UI and
-  CLAUDE.md describe as "still the only thing that explains a run that died halfway"
-  (`app/runner.py:282`) is pure in-process memory, deleted synchronously the instant the
-  child's stdout closes — well under the frontend's 1.5s poll interval — so it is essentially
-  never available after the fact, only while someone happens to be watching live.
+  for.** Two compounding gaps. The second is **fixed (2026-08-07)**: the "technical log"
+  CLAUDE.md calls "still the only thing that explains a run that died halfway" was
+  in-process memory deleted the instant the child's stdout closed, so it was empty for
+  every finished run — it is now persisted to `runs.log_tail` (v16, last 200 lines) and
+  served by `GET /api/runs/current`, fetched on demand when the disclosure is opened.
+  Reported from the live site by the user opening it after a run and finding nothing.
+
+  **Still open:** `write_run_log`'s failure path (`agent/run.py`) only logs and never marks
+  the run as failed, so a broken sink write still exits 0 and the dashboard shows a "done"
+  run with blank stats and no stop reason.
 - **A funder's retry backoff hits the exact host that just asked to be left alone, harder.**
   `Fetcher.get()`'s retry loop (`agent/fetch.py:167`) re-walks the *entire* redirect chain
   from the original URL on every attempt instead of resuming from the failure, so a 429/503
@@ -305,6 +308,18 @@ no shared cross-tenant fetch cache (§9), the vite/esbuild dev-dependency `npm a
 
 ### P3 — minor, worth a cleanup pass
 
+- ~~**Stage 1 still does not reconcile exactly, and the remaining gap is duplicate
+  URLs.**~~ **Fixed (2026-08-07).** `consider()` incremented `candidates_parsed` and then
+  returned early on `if page.url in survivors` without recording a reason, so a page two
+  funders both link — or a redirect landing somewhere already read — raised "came in"
+  without raising "went through" or anything in the breakdown. It now records
+  `already_seen_this_run` ("The same page came up twice in this search"), deliberately
+  distinct from `already_seen_this_month`, which is the monthly archive dedup and drives
+  its own sentence on the dashboard. **Stage 1 now adds up exactly**, and
+  `tests/test_pipeline_reporting.py::test_stage_one_adds_up_exactly` asserts the invariant
+  itself — `candidates_parsed − survivors == sum(rejected_by_filter)` — over a crawl that
+  exercises an adapter refusal, a free-filter reject and a duplicate at once, so any future
+  exit path that forgets to name its reason fails there rather than on somebody's screen.
 - **A count-only reject group is hardcoded to stage 1** (`app/main.py:782`,
   `groups.append({"reason": key, "stage": 1, ...})`). That is correct for the case it was
   written for — an API adapter aggregates its own rejects, and those genuinely are

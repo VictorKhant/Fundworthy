@@ -78,6 +78,7 @@ class SqliteSink:
                 candidates_parsed=d["candidates_parsed"],
                 rejected_by_filter=dumps(d["rejected_by_filter"]),
                 rejects=dumps(d.get("rejects") or []),
+                survivors=d.get("survivors", 0),
                 triaged=d.get("triaged", 0),
                 scored=d.get("scored", 0),
                 usd_by_stage=dumps(d.get("usd_by_stage") or {}),

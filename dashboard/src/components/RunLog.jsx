@@ -10,12 +10,19 @@ import Spinner from "./Spinner";
 // line arrives for thirty seconds. A still page and a crashed page look identical, and
 // this is the longest wait in the product.
 
+// `log` is `null` while the stored transcript is still being fetched and `[]` once we
+// know there isn't one. Those are different sentences: "loading" and "this run kept no
+// log" read identically as an empty <pre>, and an empty box is how somebody concludes the
+// feature is broken rather than that the data is genuinely absent.
 export default function RunLog({ isRunning, log }) {
   const ref = useRef(null);
 
   useEffect(() => {
     if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
   }, [log]);
+
+  const lines = log || [];
+  const loading = !isRunning && log === null;
 
   return (
     <div className="runlog">
@@ -25,7 +32,16 @@ export default function RunLog({ isRunning, log }) {
           ? "Searching — this takes a few minutes. You can leave the page; it keeps going."
           : "What the last search did"}
       </div>
-      <pre ref={ref}>{(log || []).join("\n")}</pre>
+      {loading ? (
+        <p className="muted small">Loading the log…</p>
+      ) : lines.length === 0 ? (
+        <p className="muted small">
+          No log was kept for this search. Searches from before this was recorded do not
+          have one — the next search will.
+        </p>
+      ) : (
+        <pre ref={ref}>{lines.join("\n")}</pre>
+      )}
     </div>
   );
 }

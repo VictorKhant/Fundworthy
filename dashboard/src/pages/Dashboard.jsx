@@ -126,6 +126,25 @@ export default function Dashboard({ state, onChange, onGoto }) {
   // ReferenceError rather than an undefined.
   useEffect(() => { if (isRunning) setLogOpen(true); }, [isRunning]);
 
+  // The log of a run that has already finished, fetched only when somebody opens it.
+  //
+  // `live.log` is the streaming buffer and it is empty for a finished run — the whole
+  // buffer lives in the API process's memory and is reaped as the child exits, so on a
+  // fresh page load there is nothing to show and the disclosure opened onto blank space.
+  // The run row now carries a `log_tail` (v16), but it is deliberately NOT in
+  // /api/state — hundreds of lines on every dashboard load for something almost nobody
+  // opens. So: fetch it on demand, once, the same way the stage boxes fetch rejects.
+  const [storedLog, setStoredLog] = useState(null);
+  useEffect(() => {
+    if (!logOpen || isRunning || storedLog !== null) return undefined;
+    let live_ = true;
+    api.runs
+      .current()
+      .then((d) => { if (live_) setStoredLog(d.log || []); })
+      .catch(() => { if (live_) setStoredLog([]); });
+    return () => { live_ = false; };
+  }, [logOpen, isRunning, storedLog]);
+
   // Why a search would not work, straight from the server — the same list, in the same
   // words, that pressing the button would have failed with. Pressing it used to be the
   // only way to find out: the run started, crawled politely for five to ten minutes, and
@@ -372,9 +391,16 @@ export default function Dashboard({ state, onChange, onGoto }) {
           that explains a run that died halfway, so it stays reachable — and it opens
           automatically while a run is going, because the boxes say what is happening and
           this says what is happening to it. */}
-      {logOpen && (isRunning || live.log?.length > 0) && (
+      {/* Renders whenever it is open, not only when there are lines to show. The old
+          condition (`isRunning || live.log?.length > 0`) meant clicking "Show the
+          technical log" on a finished run flipped the label to "Hide" and rendered
+          nothing at all — the one case somebody opens it for. */}
+      {logOpen && (
         <div className="runlog-open">
-          <RunLog isRunning={isRunning} log={live.log} />
+          <RunLog
+            isRunning={isRunning}
+            log={live.log?.length ? live.log : storedLog}
+          />
         </div>
       )}
 

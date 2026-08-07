@@ -372,6 +372,11 @@ class RunLog:
     candidates_parsed: int = 0
     rejected_by_filter: dict[str, int] = field(default_factory=dict)
     rejects: list[Reject] = field(default_factory=list)
+    # Survived the free filters — "worth paying to read". Deliberately separate from
+    # `triaged`, which is how many we then got round to reading: they are equal only on a
+    # run that read everything, and differ on every run that stopped early (result cap,
+    # budget ceiling, consecutive-error breaker). Stage 1 reports this one.
+    survivors: int = 0
     triaged: int = 0              # reached tier 2 (Haiku)
     scored: int = 0               # reached tier 3 (Sonnet)
     usd_by_stage: dict[str, float] = field(default_factory=dict)
@@ -464,6 +469,7 @@ class RunLog:
             "candidates_parsed": self.candidates_parsed,
             "rejected_by_filter": dict(self.rejected_by_filter),
             "rejects": [asdict(r) for r in self.rejects],
+            "survivors": self.survivors,
             "triaged": self.triaged,
             "scored": self.scored,
             "usd_by_stage": {k: round(v, 4) for k, v in self.usd_by_stage.items()},

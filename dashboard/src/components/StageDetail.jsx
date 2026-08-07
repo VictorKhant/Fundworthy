@@ -24,6 +24,9 @@ const REASON_LABEL = {
   deadline_passed: "The deadline had already passed",
   on_the_remove_list: "You had taken this funder off the search",
   already_seen_this_month: "Already on this month's list",
+  // Two funders linking the same grant, or a redirect landing somewhere already read.
+  // Not the same as the line above, which is the monthly archive dedup.
+  already_seen_this_run: "The same page came up twice in this search",
   thin_landing_page: "The page had almost nothing on it",
   triage_not_an_opportunity: "Not an open funding opportunity",
   claim_could_not_be_confirmed: "Kept, but a claim could not be confirmed",

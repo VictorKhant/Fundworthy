@@ -517,7 +517,7 @@ def update_run(conn, run_id: str, **fields) -> None:
     if not fields:
         return
     for json_field in ("rejected_by_filter", "notes", "progress", "source_health",
-                       "rejects", "usd_by_stage"):
+                       "rejects", "usd_by_stage", "log_tail"):
         if json_field in fields and not isinstance(fields[json_field], str):
             fields[json_field] = dumps(fields[json_field])
     sets = ", ".join(f"{k}=?" for k in fields)
@@ -532,6 +532,7 @@ def _run_out(row) -> dict:
     d["source_health"] = loads(d.get("source_health"), [])
     d["rejects"] = loads(d.get("rejects"), [])
     d["usd_by_stage"] = loads(d.get("usd_by_stage"), {})
+    d["log_tail"] = loads(d.get("log_tail"), [])
     return d
 
 
