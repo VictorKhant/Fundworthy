@@ -39,12 +39,12 @@ from agent.score import (WEIGHTS, ScoreParts, _preamble, basis_note,  # noqa: E4
 # --- composition: the fix for the 42-point ceiling ----------------------------
 
 def test_all_three_components_compose_to_the_stated_weights():
-    """40/35/25 used to be three lines of English inside a prompt. Nothing enforced
+    """60/30/10 used to be three lines of English inside a prompt. Nothing enforced
     them, so the "weighted score" was one holistic guess at a sum described in prose."""
     assert sum(WEIGHTS.values()) == 100
-    assert compose_score(ScoreParts(fit=40, award=35, timing=25)) == 100
+    assert compose_score(ScoreParts(fit=60, award=30, timing=10)) == 100
     assert compose_score(ScoreParts(fit=0, award=0, timing=0)) == 0
-    assert compose_score(ScoreParts(fit=20, award=17, timing=13)) == 50
+    assert compose_score(ScoreParts(fit=30, award=15, timing=5)) == 50
 
 
 def test_a_missing_component_leaves_the_denominator_instead_of_scoring_zero():
@@ -52,16 +52,17 @@ def test_a_missing_component_leaves_the_denominator_instead_of_scoring_zero():
     offered a small grant; it has published a terse page.
 
     Same candidate, same fit, same timing. The only difference is whether the funder
-    happened to print a number — and under the old rule that alone cost 35 points."""
-    with_award = ScoreParts(fit=28, award=20, timing=9)
-    without = ScoreParts(fit=28, award=None, timing=9)
+    happened to print a number — and under the old rule that alone would have cost it
+    outright."""
+    with_award = ScoreParts(fit=42, award=21, timing=7)
+    without = ScoreParts(fit=42, award=None, timing=7)
 
-    assert compose_score(with_award) == 57       # 57/100 of the full scale
-    assert compose_score(without) == 57          # 37/65, renormalised
+    assert compose_score(with_award) == 70       # 70/100 of the full scale
+    assert compose_score(without) == 70          # 49/70, renormalised
 
     # And the old behaviour, for contrast: scoring the null as a zero.
-    as_zero = ScoreParts(fit=28, award=0, timing=9)
-    assert compose_score(as_zero) == 37
+    as_zero = ScoreParts(fit=42, award=0, timing=7)
+    assert compose_score(as_zero) == 49
     assert compose_score(without) > compose_score(as_zero)
 
 
@@ -72,10 +73,10 @@ def test_the_observed_ceiling_is_gone():
 
     Under renormalisation an excellent opportunity on a terse page reaches the top of the
     scale, which is the true statement about it."""
-    excellent_but_terse = ScoreParts(fit=38, award=None, timing=None)
+    excellent_but_terse = ScoreParts(fit=57, award=None, timing=None)
     assert compose_score(excellent_but_terse) == 95
 
-    old_ceiling = 100 * 40 // 100  # fit alone, out of the full 100
+    old_ceiling = 100 * WEIGHTS["fit"] // 100  # fit alone, out of the full 100
     assert compose_score(excellent_but_terse) > old_ceiling
 
 
@@ -101,7 +102,7 @@ def test_a_renormalised_score_says_what_it_was_scored_on():
     """57 out of "fit and timing" and 57 out of all three are different claims. A number
     that quietly changed its denominator is worse than a low one."""
     note = basis_note(ScoreParts(fit=28, award=None, timing=9))
-    assert "award" in note and "35 points" in note
+    assert "award" in note and "30 points" in note
     assert "no award amount" in note
     assert basis_note(ScoreParts(fit=28, award=20, timing=9)) == "", \
         "a fully-scored opportunity needs no caveat"
@@ -190,7 +191,7 @@ def test_the_prompt_does_not_tell_the_model_to_score_low():
 
 
 def test_the_hours_cap_is_the_orgs_own():
-    """25 of the 100 points are measured against it, and it was the constant 10 — one
+    """10 of the 100 points are measured against it, and it was the constant 10 — one
     nonprofit's staffing applied to every tenant."""
     assert "40 collective team-hours" not in _preamble(_cfg())
     assert "about 40 collective" in _preamble(_cfg(max_effort_hours=40))

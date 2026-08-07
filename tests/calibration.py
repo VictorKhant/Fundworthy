@@ -350,7 +350,7 @@ class Outcome:
 
     @property
     def parts(self) -> str:
-        """`40/35/25` with a dash for a component the page gave nothing to judge."""
+        """`60/30/10` with a dash for a component the page gave nothing to judge."""
         if self.fit is None and self.award is None and self.timing is None:
             return ""
         cell = lambda v: "—" if v is None else str(v)  # noqa: E731

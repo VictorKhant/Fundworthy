@@ -483,6 +483,21 @@ button.text:hover:not(:disabled) { color: var(--accent-deep); }
 .run-outcome.attention { border-left-color: var(--clay-deep); }
 .run-outcome.attention .run-outcome-dot { background: var(--clay-deep); }
 
+/* The run's own notes. Clay-edged rather than accent-edged: what survives the filter in
+   Dashboard.jsx is by definition something that wants a person, not a statistic. */
+.run-notes {
+  margin: 0 0 18px; padding: 10px 14px;
+  background: var(--panel); border: 1px solid var(--line);
+  border-left: 3px solid var(--clay-deep);
+  border-radius: 10px;
+  font-size: 13px; color: var(--body);
+}
+.run-notes-head {
+  margin: 0 0 6px; font-weight: 600; font-size: 13px;
+}
+.run-notes ul { margin: 0; padding-left: 18px; }
+.run-notes li { margin: 3px 0; }
+
 .minibar {
   width: 64px; height: 5px; border-radius: 999px; background: var(--track);
   display: inline-block; overflow: hidden; margin-bottom: 0; flex-shrink: 0;

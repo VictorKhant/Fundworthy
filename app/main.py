@@ -165,6 +165,9 @@ class FunderIn(BaseModel):
     funder_type: str | None = None
     warm: bool | None = None
     active: bool | None = None
+    # Without this, Pydantic silently drops `blocked` from the request body before
+    # `_set()` ever sees it — the Block button in the dashboard would save nothing.
+    blocked: bool | None = None
     tier: int | None = Field(None, ge=0, le=3)
     programs: list[str] | None = None
     notes: str | None = None

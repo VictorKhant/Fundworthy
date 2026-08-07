@@ -28,6 +28,12 @@ const REASON_LABEL = {
   triage_not_an_opportunity: "Not an open funding opportunity",
   claim_could_not_be_confirmed: "Kept, but a claim could not be confirmed",
   no_award_stated: "No award amount anywhere on the page",
+  // Not a verdict about the page — a failure of ours. These two used to be invisible:
+  // the count went nowhere and the exception went to a log line and one run note that
+  // nothing renders, so a search whose every model call failed showed an empty
+  // "nothing was set aside" panel. Each row now carries the actual error as its detail.
+  triage_error: "Could not be read — the quick read failed",
+  scoring_error: "Could not be scored — the full read failed",
 };
 
 const label = (reason) =>

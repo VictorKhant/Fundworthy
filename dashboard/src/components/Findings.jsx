@@ -40,23 +40,24 @@ function Deadline({ o }) {
 
 // What the score is made of, and what it could not be made of.
 //
-// The 0-100 is three parts — program fit out of 40, award size out of 35, whether the
-// application can be finished in time out of 25 — and until now only the total was kept,
-// so "why is this 38?" had no answer anywhere in the app. It turned out to matter: the
-// two components that need the funder to have published something were unearnable on
-// most pages, which capped every score near 40 and read as "we found you nothing good"
-// when the real story was that grant-makers write terse pages.
+// The 0-100 is three parts — program fit out of 60, award size out of 30, whether the
+// application can be finished in time out of 10 (agent/score.py: WEIGHTS; keep this in
+// sync by hand, there is nothing enforcing the two agree) — and until now only the total
+// was kept, so "why is this 38?" had no answer anywhere in the app. It turned out to
+// matter: the two components that need the funder to have published something were
+// unearnable on most pages, which capped every score near 40 and read as "we found you
+// nothing good" when the real story was that grant-makers write terse pages.
 //
 // A component that could not be scored is not shown as a zero. It is named, with the
-// points it took out of the total, because a score out of 65 and a score out of 100 are
+// points it took out of the total, because a score out of 70 and a score out of 100 are
 // different claims and the reader has to be told which one they are looking at.
 //
 // Rows scored before the breakdown existed have no parts recorded. They show nothing
 // here rather than three zeroes — see the v15 note in app/db.py.
 const PART_LABEL = {
-  fit_score: ["Program fit", 40],
-  award_score: ["Award size", 35],
-  timing_score: ["Finishing in time", 25],
+  fit_score: ["Program fit", 60],
+  award_score: ["Award size", 30],
+  timing_score: ["Finishing in time", 10],
 };
 
 function Breakdown({ o }) {
