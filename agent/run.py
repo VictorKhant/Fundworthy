@@ -335,6 +335,7 @@ async def crawl(cfg: Config, run: RunLog,
 
         # --- tiers 1-3: the HTML crawl ---------------------------------------
         if not html_sources:
+            run.survivors = len(survivors)
             run.finalize_health()
             return list(survivors.values())
 
@@ -389,6 +390,10 @@ async def crawl(cfg: Config, run: RunLog,
                     log.debug("subpage %s could not be read: %r", url, exc)
 
     _note_match_requirements(run, match_flagged)
+    # Stage 1's number, recorded before anything reads a page. Set on both return paths
+    # deliberately: the early one (no HTML sources, only indexed databases) is a real run
+    # and its box has to be right too.
+    run.survivors = len(survivors)
     run.finalize_health()
     return list(survivors.values())
 

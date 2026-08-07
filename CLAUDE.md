@@ -85,6 +85,23 @@ design constraint:
   make it less explicable. A record an adapter refused was a candidate considered and
   declined for free, exactly like a page that fails `apply_filters`, so `crawl()` now
   counts it in both.
+- **"Worth paying to read" is its own persisted number, not `triaged`** (`runs.survivors`,
+  schema v16). They are the same only on a run that read everything: `survivors` is what
+  the free filters passed, `triaged` is how many of those we then got round to. It used to
+  live only in the live `progress` JSON — on the reasoning that it was "meaningless the
+  moment the run ends", which was exactly backwards — so a finished run fell back to
+  `triaged`. Harmless while every run read its whole list, and badly wrong the moment one
+  stopped early: a run the consecutive-error breaker halted after 5 failures reported
+  **"5 went through" of 344** when the free filters had actually passed 157. Written live
+  *and* by the sink, so the boxes read the same field during a run and after it.
+- **The technical log outlives the run** (`runs.log_tail`, v16, last 200 lines). It was a
+  `deque` on `RunManager`'s in-process slot, deleted in the same `finally` block that reaps
+  the child — so for every finished run, which is every run somebody wants to read a log
+  for, "Show the technical log" opened onto nothing. `_persist_log` writes it before the
+  slot is dropped; `GET /api/runs/current` serves the live buffer while running and the
+  stored tail afterwards. Deliberately **not** on `/api/state` — hundreds of lines on every
+  dashboard load for something almost nobody opens — so the dashboard fetches it on demand
+  when the disclosure is opened, the same way stage boxes fetch rejects.
 - **A tier that fails says so in the same place a tier that rejects says so.** A
   `triage()` or `score_one()` call that raised was counted in a local `scoring_errors`,
   written to the log, and summarised once in `run.notes` — none of which any dashboard

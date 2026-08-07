@@ -732,10 +732,13 @@ def list_runs(limit: int = 20, org: str = Depends(current_org)) -> dict:
 
 
 def _run_summary(run: dict | None) -> dict | None:
-    """A run row without its reject list. See the note at the /api/state call site."""
+    """A run row without its reject list or its log. See the note at the /api/state call
+    site: both are hundreds of rows nobody reads until they open something, and
+    /api/state is fetched on every dashboard load. `GET /api/runs/{id}/rejects` and
+    `GET /api/runs/current` serve them on demand."""
     if run is None:
         return None
-    return {k: v for k, v in run.items() if k != "rejects"}
+    return {k: v for k, v in run.items() if k not in ("rejects", "log_tail")}
 
 
 @api.get("/runs/{run_id}/rejects")
@@ -807,7 +810,13 @@ def current_run(org: str = Depends(current_org)) -> dict:
     with session() as conn:
         run = repo.get_run(conn, mine, org_id=org) if mine \
             else repo.latest_run(conn, org_id=org)
-    return {"running": bool(mine), "run": run, "log": MANAGER.log_tail(org)}
+    # While a run is going the live buffer is the log. Once it ends, that buffer is gone
+    # within microseconds (the slot is reaped as the child exits), so fall back to what
+    # `_persist_log` wrote onto the row — otherwise "Show the technical log" is empty for
+    # every finished run, which is every run anybody actually wants to read it for.
+    live = MANAGER.log_tail(org)
+    return {"running": bool(mine), "run": run,
+            "log": live or (run or {}).get("log_tail") or []}
 
 
 @api.post("/runs", status_code=202)

@@ -38,6 +38,11 @@ log = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MAX_LOG_LINES = 400
 
+# How much of that in-memory buffer is written to the run row when the run ends. Smaller
+# than MAX_LOG_LINES on purpose: this one is read back out of the database by a request,
+# and the reason a run failed is at the END of its output, never at the start.
+PERSISTED_LOG_LINES = 200
+
 # How many orgs may crawl at once. Not a tenancy rule — a machine guard. Each run is a
 # subprocess doing HTTP and HTML parsing, and the target box is a 2-4 core free-tier VM.
 # Raise it on a bigger machine; replace the whole thing with a job queue past a handful
@@ -458,10 +463,30 @@ class RunManager:
             log.warning("run %s: output pump failed (%s)", slot.run_id, exc)
         finally:
             code = slot.proc.wait()
+            # Before `_finalize`, and before the slot is dropped: this buffer is the only
+            # copy of the child's output, and the two lines below are what destroy it.
+            # CLAUDE.md calls the technical log "the only thing that explains a run that
+            # died halfway" — and it was in memory that outlived the run by microseconds,
+            # so for the one run anybody needed it for it was always already gone.
+            self._persist_log(slot)
             self._finalize(slot.run_id, code)
             with self._lock:
                 if self._slots.get(slot.org_id) is slot:
                     del self._slots[slot.org_id]
+
+    def _persist_log(self, slot: "_Slot") -> None:
+        """The tail of the child's stdout onto the run row, so it survives the process.
+
+        Best-effort and last-N, like everything else this thread writes: a search must not
+        fail because its transcript could not be saved, and a five-minute crawl's full
+        output is not something to hand to every dashboard that asks for a run row.
+        """
+        try:
+            with session() as conn:
+                repo.update_run(conn, slot.run_id,
+                                log_tail=dumps(list(slot.lines)[-PERSISTED_LOG_LINES:]))
+        except Exception as exc:  # noqa: BLE001 — a lost transcript, never a dead run
+            log.debug("could not persist the log for %s: %s", slot.run_id, exc)
 
     def _write_spend(self, run_id: str, spent: float) -> None:
         """The live figure the status strip reads, written straight onto the run row.
@@ -483,21 +508,34 @@ class RunManager:
         already fills, so writing them as the run goes means the stage boxes read the
         same fields live that they read afterwards — one shape of data, not two.
 
-        `survivors` and `kept` have nowhere of their own and do not want a migration for
-        something that is meaningless the moment the run ends. They ride in the progress
-        JSON, which is already free-form and already this thread's to write.
+        `survivors` **used to** ride only in the progress JSON, on the reasoning that it
+        was meaningless once the run ended. That was wrong, and expensively so: stage 1's
+        entire claim is "N pages were worth paying to read", and with nothing persisted a
+        finished run fell back to `triaged` — a different number on any run that stopped
+        early. It is a real column now (v16) and is written here as well, so the boxes
+        read the same field live that they read afterwards.
+
+        `kept` genuinely is transient — it is `len(out)` mid-loop, and the finished run
+        has `opportunities_scored` + `opportunities_not_stated` for the same thing — so it
+        stays in the JSON.
         """
+        fields = {
+            "candidates_parsed": int(slot.funnel.get("parsed", 0)),
+            "triaged": int(slot.funnel.get("triaged", 0)),
+            "scored": int(slot.funnel.get("scored", 0)),
+            "progress": dumps({"phase": "running",
+                               "message": slot.lines[-1] if slot.lines else "",
+                               "funnel": slot.funnel}),
+        }
+        # Only when the emitter actually sent it. Every `_emit_funnel` call site passes
+        # `survivors` today, but a `.get(..., 0)` here would mean the first one that
+        # forgets silently overwrites a real count with zero — and a wrong number in this
+        # column is exactly the class of bug the column was added to fix.
+        if "survivors" in slot.funnel:
+            fields["survivors"] = int(slot.funnel["survivors"])
         try:
             with session() as conn:
-                repo.update_run(
-                    conn, slot.run_id,
-                    candidates_parsed=int(slot.funnel.get("parsed", 0)),
-                    triaged=int(slot.funnel.get("triaged", 0)),
-                    scored=int(slot.funnel.get("scored", 0)),
-                    progress=dumps({"phase": "running",
-                                    "message": slot.lines[-1] if slot.lines else "",
-                                    "funnel": slot.funnel}),
-                )
+                repo.update_run(conn, slot.run_id, **fields)
         except Exception as exc:  # noqa: BLE001 — a stalled bar, never a dead run
             log.debug("could not write funnel for %s: %s", slot.run_id, exc)
 

@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path("data/rise.db")
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 # The org that owns everything written before tenancy existed. A single-tenant install
 # (and every row in the pilot's live database) belongs to it, so adding org scoping is a
@@ -305,7 +305,22 @@ CREATE TABLE IF NOT EXISTS runs (
     triaged            INTEGER NOT NULL DEFAULT 0,
     scored             INTEGER NOT NULL DEFAULT 0,
     usd_by_stage       TEXT NOT NULL DEFAULT '{}',
-    progress           TEXT NOT NULL DEFAULT '{}'
+    progress           TEXT NOT NULL DEFAULT '{}',
+    -- How many pages survived the free filters, i.e. were worth paying to read. This is
+    -- NOT `triaged`: triaged is how many we then got round to, and the two differ on any
+    -- run that stopped early (the result cap, the budget, the consecutive-error breaker).
+    -- It used to live only in the live `progress` JSON on the reasoning that it was
+    -- "meaningless the moment the run ends" — the opposite is true. Stage 1's whole
+    -- claim is "N pages were worth paying to read", and with nothing persisted the box
+    -- fell back to `triaged`, so a run the breaker stopped after 5 reported 5 of 344
+    -- rather than 5 read of 157 that qualified.
+    survivors          INTEGER NOT NULL DEFAULT 0,
+    -- The child's own stdout, kept so "Show the technical log" still has something to
+    -- show once the run is over. It lived in `RunManager`'s in-process slot, which is
+    -- deleted the instant the subprocess exits — so the one thing CLAUDE.md calls "the
+    -- only thing that explains a run that died halfway" was unavailable for exactly the
+    -- run somebody needed it for. Capped when written, not here.
+    log_tail           TEXT NOT NULL DEFAULT '[]'
 );
 """
 
@@ -837,6 +852,32 @@ def _migrate(conn: sqlite3.Connection) -> None:
             if col not in opp_cols:
                 conn.execute(f"ALTER TABLE opportunities ADD COLUMN {col} INTEGER")
         current = 15
+
+    if current < 16:
+        # v16 makes two things outlive the process that produced them, because both were
+        # being reported wrongly the moment a run ended.
+        #
+        # `survivors` — stage 1's "N pages worth paying to read". It only ever existed in
+        # the live `progress` JSON, so a finished run fell back to `triaged`, which is a
+        # different number on any run that stopped early. The consecutive-error breaker
+        # made that visible and ugly: a run halted after 5 failures reported "5 went
+        # through / 339 set aside" of 344, when the free filters had actually passed far
+        # more and we simply never read them.
+        #
+        # `log_tail` — the child's stdout. It lived in `RunManager`'s in-process slot,
+        # deleted synchronously when the subprocess exits, so "Show the technical log"
+        # was empty for every finished run. Nothing is backfilled: a run that has already
+        # ended never had its output written down, and there is nowhere to recover it
+        # from. Old rows read back as 0 and [], and the UI falls back to `triaged` and to
+        # showing nothing rather than to inventing either.
+        run_cols = {r["name"] for r in conn.execute("PRAGMA table_info(runs)")}
+        if "survivors" not in run_cols:
+            conn.execute("ALTER TABLE runs ADD COLUMN survivors "
+                         "INTEGER NOT NULL DEFAULT 0")
+        if "log_tail" not in run_cols:
+            conn.execute("ALTER TABLE runs ADD COLUMN log_tail "
+                         "TEXT NOT NULL DEFAULT '[]'")
+        current = 16
 
     conn.execute(
         "INSERT INTO meta(key, value) VALUES('schema_version', ?) "
