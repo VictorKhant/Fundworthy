@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path("data/rise.db")
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 # The org that owns everything written before tenancy existed. A single-tenant install
 # (and every row in the pilot's live database) belongs to it, so adding org scoping is a
@@ -266,6 +266,13 @@ CREATE TABLE IF NOT EXISTS opportunities (
     application_lead_time_days INTEGER,
     time_to_funds_days     INTEGER,
     fetched_at             TEXT NOT NULL,
+    -- Where to click to apply — deliberately separate from source_url, which stays the
+    -- funder's own page (§6). A funder that runs applications through a portal vendor
+    -- (Fluxx, Submittable...) on a different host needs this to be a different URL.
+    -- Found for free from a real href on the fetched page (agent/parse.py:
+    -- find_apply_link), not sourced from a model, so it carries no quote and no
+    -- verify.py gate. NULL means the page had nothing that scored as a likely one.
+    apply_url              TEXT,
     PRIMARY KEY (org_id, id)
 );
 
@@ -374,6 +381,17 @@ DEFAULT_SETTINGS: dict[str, str] = {
     # frozen into every org's settings row the day they signed up.
     "triage_model": "",
     "scoring_model": "",
+    # The reasoning-depth dial for each paid tier (Anthropic's `output_config.effort`),
+    # independent of which model runs it. Empty means "let the model default" — same
+    # shape as triage_model/scoring_model above, and validated the same way in
+    # app/main.py before it is stored, so a stale or hand-written value can never
+    # reach the API and 400 out an entire run.
+    "triage_effort": "",
+    "scoring_effort": "",
+    # When on, a run keeps scoring survivors until the budget or the funder list runs
+    # out instead of stopping at max_opportunities. Off by default — see
+    # agent/config.py: Config.ultra_mode for why the cap is the norm, not the setting.
+    "ultra_mode": "0",
     # Who this install is for. Empty by default and shown as "Your organization" until
     # someone fills it in — the UI used to hardcode the organization's name in a dozen
     # places, which is wrong for anyone else and was never a fact the code should have
@@ -878,6 +896,23 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE runs ADD COLUMN log_tail "
                          "TEXT NOT NULL DEFAULT '[]'")
         current = 16
+
+    if current < 17:
+        # v17: apply_url, the link the dashboard should actually send someone to when
+        # they click "Apply". It is not source_url — §6 requires that to stay the
+        # funder's own page — and a great many funders route applications through a
+        # third-party portal (Fluxx, Submittable, SM Apply...) on a different host, which
+        # source_url can never point at without breaking the rule that makes it
+        # trustworthy. Found for free from a real href already on the fetched page
+        # (agent/parse.py: find_apply_link), so it needs no model call and no verify.py
+        # gate — it is self-evidencing the same way a quoted sentence is. Nothing is
+        # backfilled: a row scored before this existed was never checked for one, and
+        # NULL — "we didn't find a clear apply link on this page" — is the honest,
+        # already-supported answer, not a gap to paper over.
+        opp_cols = {r["name"] for r in conn.execute("PRAGMA table_info(opportunities)")}
+        if "apply_url" not in opp_cols:
+            conn.execute("ALTER TABLE opportunities ADD COLUMN apply_url TEXT")
+        current = 17
 
     conn.execute(
         "INSERT INTO meta(key, value) VALUES('schema_version', ?) "

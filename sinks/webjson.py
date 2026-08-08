@@ -33,7 +33,7 @@ PUBLIC_FIELDS = (
     "fit_score", "award_score", "timing_score",
     "score_rationale", "funder_type", "service_areas", "geography",
     "confidence_pct", "contact_note",
-    "source_url", "verified", "needs_human_check", "found_on", "section",
+    "source_url", "apply_url", "verified", "needs_human_check", "found_on", "section",
     "source_kind", "application_lead_time_days", "time_to_funds_days",
 )
 

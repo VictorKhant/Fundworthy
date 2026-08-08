@@ -47,7 +47,8 @@ def _run() -> RunLog:
 def _page(url: str, *, amount: int | None = 50_000) -> ParsedPage:
     page = ParsedPage(url=url, title="A grant", text="x" * 3000)
     if amount is not None:
-        page.amounts = [type("E", (), {"value": amount, "snippet": "$", "kind": "amount"})()]
+        page.amounts = [type("E", (), {"value": amount, "snippet": "$", "kind": "amount",
+                                       "floor_only": False})()]
     return page
 
 
@@ -337,7 +338,7 @@ def test_crawl_records_the_survivor_count(monkeypatch):
             page = ParsedPage(url=f"https://ca.invalid/g{i}", title=f"Grant {i}",
                               text="y" * 3000)
             page.amounts = [type("E", (), {"value": 50_000, "snippet": "$",
-                                           "kind": "amount"})()]
+                                           "kind": "amount", "floor_only": False})()]
             result.pages.append(page)
         return result
 

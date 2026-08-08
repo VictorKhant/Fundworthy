@@ -124,6 +124,22 @@ class Config:
     # to the default rather than breaking the search.
     triage_model: str = ""
     scoring_model: str = ""
+    # The reasoning-depth dial for each paid tier, independent of which model runs
+    # it — "" means "let the model default" (in practice "high"). Silently ignored
+    # on Haiku, which cannot take an effort level at all; see
+    # `agent.score._model_supports_effort`.
+    triage_effort: str = ""
+    scoring_effort: str = ""
+    # When on, the result cap (`max_opportunities`) stops deciding when a run ends —
+    # `evaluate()` keeps scoring survivors until the budget ceiling or the funder
+    # list itself runs out, instead of stopping at a target count. Off by default:
+    # the cap exists because CLAUDE.md's whole premise is that a SHORT list is a
+    # feature, not a shortfall, and this is the one switch that deliberately
+    # abandons that for someone who has decided they would rather spend the whole
+    # budget than stop early. Named for what it does, not for a vague "more"
+    # promise: it does not search sources ultra mode did not already have — a
+    # 20-funder list still tops out at 20 candidates regardless of this setting.
+    ultra_mode: bool = False
     source: str = "defaults"                 # "database" | "sheet" | "defaults"
     # Whose run this is. Carried on the config rather than threaded through every
     # function signature because every stage of the pipeline already receives a Config,
@@ -305,9 +321,18 @@ def load_from_db(db_path=None, *, org_id: str | None = None) -> Config | None:
         settings.get("max_effort_hours"), Config.max_effort_hours)))
     # Imported here, not at the top: `agent.score` imports this module, so a top-level
     # import of it is a cycle.
-    from .score import SCORING_MODEL, TRIAGE_MODEL
+    from .score import SCORING_MODEL, TRIAGE_MODEL, EFFORT_IDS
     cfg.triage_model = _known_model(settings.get("triage_model"), TRIAGE_MODEL)
     cfg.scoring_model = _known_model(settings.get("scoring_model"), SCORING_MODEL)
+    # An effort id from an older build, or written by hand, that this build no
+    # longer offers falls back to "" (let the model default) rather than reaching
+    # the API with a value it might reject — the same discipline `_known_model`
+    # already applies to a stale model id.
+    triage_effort = str(settings.get("triage_effort") or "").strip()
+    cfg.triage_effort = triage_effort if triage_effort in EFFORT_IDS else ""
+    scoring_effort = str(settings.get("scoring_effort") or "").strip()
+    cfg.scoring_effort = scoring_effort if scoring_effort in EFFORT_IDS else ""
+    cfg.ultra_mode = bool(settings.get("ultra_mode"))
     cfg.programs = [
         ProgramCard(
             slug=c["slug"], name=c["name"], summary=c.get("summary", ""),

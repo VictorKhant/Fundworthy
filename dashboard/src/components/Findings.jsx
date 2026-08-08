@@ -289,6 +289,20 @@ export function Finding({ o, maxEffortHours = null }) {
             <a href={o.source_url} target="_blank" rel="noopener noreferrer" className="strong-link">
               Open the funder's page ↗
             </a>
+            {/* A second, separate link — never a replacement for the one above.
+                `source_url` has to stay the funder's own page (CLAUDE.md §6), and a
+                great many funders run applications through a portal on a different
+                domain entirely (Fluxx, Submittable...), so the actual "start here" link
+                can be a different URL. Found for free from a real link on the fetched
+                page, not from a model — there is nothing here for verify.py to check,
+                the same way there is nothing to check about a URL that exists. Shown
+                only when one was found; nothing is invented when the page had no clear
+                apply link on it. */}
+            {o.apply_url && o.apply_url !== o.source_url && (
+              <a href={o.apply_url} target="_blank" rel="noopener noreferrer" className="strong-link">
+                Go to the application ↗
+              </a>
+            )}
             {/* Flagged rows already carry this on the collapsed footer, next to the
                 link they exist to push you towards. */}
             {!flagged && <span className="muted">Found {o.found_on}</span>}

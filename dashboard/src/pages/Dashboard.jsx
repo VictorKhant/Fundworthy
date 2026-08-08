@@ -380,6 +380,7 @@ export default function Dashboard({ state, onChange, onGoto }) {
           settings={state.settings}
           choices={state.model_choices || {}}
           defaults={state.model_defaults || {}}
+          effortChoices={state.effort_choices || []}
           logOpen={logOpen}
           onToggleLog={() => setLogOpen(!logOpen)}
           onChange={onChange}

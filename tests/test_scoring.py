@@ -208,6 +208,48 @@ def test_the_award_scale_has_anchors():
     assert "ten times the floor" in _SCORING_RULES
 
 
+def test_the_effort_hours_estimate_is_anchored_to_requirements_not_award_size():
+    """estimated_effort_hours used to have no scale at all — "estimate from the ask
+    and the award size if the page is thin" invites anchoring the hours guess to a
+    number (the award) that has nothing to do with how much paperwork an application
+    takes. A $5,000 grant needing audited financials is more work than a $500,000
+    grant needing a two-paragraph letter, and a scale with no anchors resolves toward
+    whichever correlation is easiest to imagine, not the one that's actually true."""
+    from agent.score import _SCORING_RULES
+
+    assert "letter of interest" in _SCORING_RULES.lower()
+    assert "audited financial" in _SCORING_RULES.lower()
+    assert "board resolution" in _SCORING_RULES.lower()
+    assert "the funder's size" in _SCORING_RULES or "the funder's reputation" in _SCORING_RULES
+
+
+def test_award_score_ignores_a_past_grants_dollar_figure():
+    """Found live, not by inspection: Hilton Foundation's real housing-priorities page
+    describes a $2.4M grant already given to someone else in 2022 as a case study.
+    Before this guardrail, a live scoring call read that figure as evidence of what a
+    NEW applicant could receive and returned award_score=30/30 — full marks — on a
+    page its own rationale correctly called "a past grant record" with "no open
+    call." Re-run after the fix: award_score came back null, both times, and the
+    total score corrected from 53 to 37 with nothing else about the page changed."""
+    from agent.score import _SCORING_RULES
+
+    assert "already disbursed" in _SCORING_RULES
+    assert "not evidence of what YOU would receive" in _SCORING_RULES
+
+
+def test_time_to_funds_days_defaults_to_null_not_a_guess():
+    """The user's own complaint: this number reads as a fact and is usually a guess.
+    Most funder pages state nothing about their internal review or disbursement
+    timeline, so null has to be the DEFAULT the prompt reaches for, not an escape
+    hatch for a hard case — otherwise "estimate from what the page says" quietly
+    becomes "estimate from what grants usually take," which is not a fact about this
+    funder at all."""
+    from agent.score import _SCORING_RULES
+
+    assert "null is the common, correct answer" in _SCORING_RULES.lower()
+    assert "general knowledge" in _SCORING_RULES.lower()
+
+
 # --- the metrics themselves ---------------------------------------------------
 
 def test_spearman_handles_the_ties_a_compressed_run_produces():

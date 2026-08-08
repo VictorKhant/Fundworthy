@@ -18,9 +18,12 @@ from agent.parse import Evidence, ParsedPage
 
 
 def _page(*, title="A Grant", url="https://example.invalid/grants", text="",
-          award_max=None, deadline=None) -> ParsedPage:
+          award_max=None, deadline=None, deadlines=None) -> ParsedPage:
     amounts = [Evidence(value=award_max, snippet="$", kind="amount")] if award_max is not None else []
-    deadlines = [Evidence(value=deadline, snippet="due", kind="deadline")] if deadline is not None else []
+    if deadlines is None:
+        deadlines = [Evidence(value=deadline, snippet="due", kind="deadline")] if deadline is not None else []
+    else:
+        deadlines = [Evidence(value=d, snippet="due", kind="deadline") for d in deadlines]
     return ParsedPage(url=url, title=title, text=text, amounts=amounts, deadlines=deadlines)
 
 
@@ -66,6 +69,46 @@ def test_a_missing_deadline_is_flagged_never_rejected():
     result = apply_filters(page, "Example Foundation", Config())
     assert not result.rejected
     assert Flag.DEADLINE_NOT_STATED in result.flags
+
+
+# --- a closed grant must not read as "deadline not stated" ---------------------
+#
+# `ParsedPage.earliest_deadline` only ever returns a future date, so a page whose ONLY
+# stated deadline had already passed used to collapse into the exact same branch as a
+# page that never mentioned a date at all — flagged, shown, and indistinguishable from
+# an open opportunity that simply didn't publish a due date. Found on real, currently
+# live funder pages (agent/sd_funders.py: Imperial Valley Community Foundation,
+# San Diego Workforce Partnership, ACTA's Living Cultures Grant, among others) whose
+# stated deadlines had already passed and were being shown as "not stated" rather than
+# rejected as closed.
+
+def test_a_page_with_only_a_past_deadline_is_rejected_as_closed():
+    page = _page(award_max=50_000, deadline=date.today() - timedelta(days=90))
+    result = apply_filters(page, "Example Foundation", Config())
+    assert result.rejected
+    assert result.reason is Reject.DEADLINE_PASSED
+    assert Flag.DEADLINE_NOT_STATED not in result.flags, (
+        "a closed grant must be rejected, not flagged as if no deadline existed"
+    )
+
+
+def test_a_page_with_a_past_round_and_an_open_round_is_not_rejected():
+    """A funder describing last cycle's closed deadline alongside this cycle's open
+    one must not be treated as closed — the future date is the one that matters, and
+    it is found normally by `earliest_deadline` before the past-only check ever runs."""
+    page = _page(award_max=50_000, deadlines=[
+        date.today() - timedelta(days=90),
+        date.today() + timedelta(days=60),
+    ])
+    result = apply_filters(page, "Example Foundation", Config())
+    assert not result.rejected
+
+
+def test_the_past_deadline_reject_names_the_actual_date():
+    closed = date.today() - timedelta(days=30)
+    page = _page(award_max=50_000, deadline=closed)
+    result = apply_filters(page, "Example Foundation", Config())
+    assert result.detail == closed.isoformat()
 
 
 def test_a_religious_organization_is_rejected_on_the_funder_name():

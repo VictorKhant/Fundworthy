@@ -479,6 +479,7 @@ def _unscored(page: ParsedPage, source: Source, cfg: Config, note: str) -> Oppor
         score=0,
         score_rationale=note,
         source_url=page.url,
+        apply_url=page.apply_url,
         verified=True,
         needs_human_check=True,
         fetched_at=datetime.now(timezone.utc),
@@ -518,9 +519,21 @@ def evaluate(survivors: list[tuple[ParsedPage, Source]], cfg: Config, run: RunLo
     # The two denominators the boxes divide by, sent once before the loop so stage 2's
     # bar has a total to fill against from its first tick rather than after its first
     # candidate.
+    if cfg.ultra_mode:
+        run.notes.append(
+            "Ultra mode: ignoring the result cap. This run keeps scoring survivors "
+            "until the budget runs out or the funder list does, not until "
+            f"{cfg.max_opportunities} results are found."
+        )
     _emit_funnel(run, survivors=len(ranked), kept=0)
     for page, source in ranked:
-        if per_kind is not None:
+        if cfg.ultra_mode:
+            # The whole point of the setting: neither the plain cap below nor
+            # balanced mode's per-kind cap gets to end the run early. Only BUDGET
+            # (a real BudgetExceeded, caught below) or SOURCES_EXHAUSTED (the loop
+            # running out of `ranked`) may stop it now — see `Config.ultra_mode`.
+            pass
+        elif per_kind is not None:
             # Balanced mode: each kind gets its own cap, and a candidate from a kind
             # that is already full is skipped *before* triage — paying Haiku to read
             # something we have already decided not to keep is pure waste.

@@ -256,6 +256,33 @@ def test_save_and_read_back_every_new_attribute(db):
     assert got["days_left"] == 60
 
 
+def test_apply_url_survives_the_round_trip_and_stays_separate_from_source_url(db):
+    """v17. Deliberately a different URL from `source_url` in this test, the same way
+    it is on a real funder page that routes applications through a portal vendor —
+    saving them identical would not catch a query or a migration that silently
+    collapsed the two columns into one."""
+    opp = _opp(source_url="https://example.invalid/grants",
+              apply_url="https://portal.example-vendor.com/apply/123")
+    with session(db) as conn:
+        repo.save_opportunity(conn, opp, run_id="run1", org_id=DEFAULT_ORG_ID)
+        got = repo.list_opportunities(conn, org_id=DEFAULT_ORG_ID)[0]
+
+    assert got["apply_url"] == "https://portal.example-vendor.com/apply/123"
+    assert got["source_url"] == "https://example.invalid/grants"
+    assert got["apply_url"] != got["source_url"]
+
+
+def test_apply_url_is_null_when_the_page_had_no_clear_apply_link(db):
+    """The honest default. `_opp()`'s own default leaves `apply_url` unset — this
+    confirms that reads back as None rather than an empty string or a KeyError, since
+    every OLD row (written before v17) is in exactly this state."""
+    with session(db) as conn:
+        repo.save_opportunity(conn, _opp(), run_id="run1", org_id=DEFAULT_ORG_ID)
+        got = repo.list_opportunities(conn, org_id=DEFAULT_ORG_ID)[0]
+
+    assert got["apply_url"] is None
+
+
 def test_rerunning_updates_rather_than_duplicates(db):
     with session(db) as conn:
         repo.save_opportunity(conn, _opp(score=50), run_id="run1", org_id=DEFAULT_ORG_ID)

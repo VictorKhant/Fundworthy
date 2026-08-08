@@ -1745,6 +1745,22 @@ button.iconbtn.dialog-x { margin-left: auto; width: 32px; height: 32px; flex-shr
 }
 .modelpicker-more svg { flex-shrink: 0; margin-top: 2px; color: var(--accent); }
 
+/* The reasoning-effort dial, in the same dialog as the model choice it modifies
+   rather than a separate surface — both answer "how does this step run". */
+.modelpicker-effort { margin: 2px 0 12px; }
+.modelpicker-effort-heading {
+  font-size: 12.5px; font-weight: 600; color: var(--muted); margin: 0 0 8px;
+  text-transform: uppercase; letter-spacing: 0.02em;
+}
+/* Same option styling as the model list, tightened — five short rows here would
+   otherwise read as heavier than the model choice they modify. */
+.modellist-compact .modelopt { padding: 8px 12px; }
+.modellist-compact .modelopt-name { font-size: 13px; }
+.modelpicker-effort-note {
+  padding: 10px 12px; border-radius: 11px; background: var(--panel);
+  border: 1px solid var(--line); margin: 2px 0 12px;
+}
+
 /* --- funder list: search, paging, the blacklist (R7) ------------------------- */
 
 /* Always visible, not gated on the list passing seven rows. A list that grows a search

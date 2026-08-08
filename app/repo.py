@@ -27,7 +27,7 @@ _INT_SETTINGS = {"min_award", "min_deadline_runway_days", "max_opportunities",
                  "schedule_hour", "max_effort_hours"}
 _FLOAT_SETTINGS = {"run_budget_usd", "monthly_budget_usd"}
 _BOOL_SETTINGS = {"enabled", "schedule_enabled", "search_beyond_partners",
-                  "onboarding_done", "share_funders"}
+                  "onboarding_done", "share_funders", "ultra_mode"}
 _JSON_SETTINGS = {"sectors_active"}
 
 
@@ -417,6 +417,7 @@ def save_opportunity(conn, opp, run_id: str | None = None, *, org_id: str) -> No
     conn.execute(
         """INSERT INTO opportunities(
                org_id, id, run_id, month_key, found_on, title, funder, source_url,
+               apply_url,
                award_min, award_max, award_typical, deadline, deadline_type,
                estimated_effort_hours, program_match, score,
                fit_score, award_score, timing_score, score_rationale,
@@ -424,12 +425,13 @@ def save_opportunity(conn, opp, run_id: str | None = None, *, org_id: str) -> No
                confidence_pct, contact_note, verified, needs_human_check,
                section, source_kind, application_lead_time_days, time_to_funds_days,
                fetched_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
            ON CONFLICT(org_id, id) DO UPDATE SET
                run_id=excluded.run_id, score=excluded.score,
                fit_score=excluded.fit_score, award_score=excluded.award_score,
                timing_score=excluded.timing_score,
                score_rationale=excluded.score_rationale,
+               apply_url=excluded.apply_url,
                award_min=excluded.award_min, award_max=excluded.award_max,
                award_typical=excluded.award_typical, deadline=excluded.deadline,
                deadline_type=excluded.deadline_type,
@@ -447,6 +449,7 @@ def save_opportunity(conn, opp, run_id: str | None = None, *, org_id: str) -> No
         (
             org_id, d["id"], run_id, month_key(), d.get("found_on") or stamp[:10],
             d["title"], d["funder"], d["source_url"],
+            d.get("apply_url"),
             d["award_min"], d["award_max"], d.get("award_typical"),
             d["deadline"], d.get("deadline_type", "unknown"),
             d["estimated_effort_hours"], dumps(d["program_match"]),

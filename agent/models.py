@@ -111,6 +111,8 @@ class RawCandidate:
     http_status: int | None = None
     fetched_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     parse_notes: list[str] = field(default_factory=list)
+    # Carried through from ParsedPage — see the note on Opportunity.apply_url below.
+    apply_url: str | None = None
 
 
 @dataclass
@@ -140,6 +142,17 @@ class Opportunity:
     verified: bool               # did we read the funder's own page?
     needs_human_check: bool      # ambiguous deadline/amount → flag, don't guess
     fetched_at: datetime
+
+    # Where to click to actually apply — deliberately separate from `source_url`, which
+    # §6 requires to stay the funder's own page. A great many funders run applications
+    # through a dedicated portal (Fluxx, Submittable, SM Apply…) on a different host
+    # entirely, and `source_url` cannot become that link without breaking the rule that
+    # makes it trustworthy in the first place. Found the free way, not the sourced way:
+    # it is a real href pulled straight out of the fetched HTML by `agent/parse.py:
+    # find_apply_link` — self-evidencing the same way a quoted sentence is, so it needs
+    # no model and no verify.py gate. None means the page had nothing that scored as a
+    # likely apply link, which is the honest answer on a page with no clear one.
+    apply_url: str | None = None
 
     # --- the columns the user asked for, added after the follow-up conversation.
     #
@@ -257,6 +270,7 @@ class Opportunity:
             "confidence_pct": self.confidence_pct,
             "contact_note": self.contact_note,
             "source_url": self.source_url,
+            "apply_url": self.apply_url,
             "verified": self.verified,
             "needs_human_check": self.needs_human_check,
             "fetched_at": self.fetched_at.isoformat(),
