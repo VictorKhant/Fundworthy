@@ -139,6 +139,31 @@ design constraint:
   adapter interface in `agent/score.py` and per-provider pricing, and none of that is
   built. A card that names the thing is a signpost; leaving them out would make the model
   picker's "add a provider" line point at nothing.
+- **How hard the chosen model thinks is a second, separate dial** in the same picker
+  (`triage_effort` / `scoring_effort`, Anthropic's `output_config.effort` — Default /
+  Low / Medium / High / Max), because a stage's cost and quality depend on both *which*
+  model runs it and *how much it reasons before answering*, and conflating the two into
+  one control would hide the second axis entirely. **Haiku cannot take an effort level
+  at all** — sending one is a live 400, not a preference — and this was a real, shipping
+  bug independent of the new setting: `score_one()` sent `thinking={"type": "adaptive"}`
+  unconditionally, so picking Haiku as the *scoring* model, a real choice
+  `MODEL_CHOICES[3]` has always offered, made every scoring call in the run fail and the
+  run abort once `CONSECUTIVE_ERROR_LIMIT` was reached — with no relation to whether
+  anyone had ever touched an effort setting. `agent/score.py: _model_supports_effort`
+  gates both `triage()` and `score_one()` now, and the picker explains the gap on Haiku
+  ("does not support a reasoning-depth setting") rather than rendering controls that
+  would break the next search.
+- **Ultra mode** (`ultra_mode`, off by default, "Adjust search settings" on This week):
+  spend the whole search budget instead of stopping at "most results to bring back".
+  CLAUDE.md's whole premise is that a short list is a feature, not a shortfall, so the
+  cap is the norm and this is the one switch that deliberately abandons it for someone
+  who has decided otherwise. It changes exactly one thing in `evaluate()`: the
+  `len(out) >= cfg.max_opportunities` check (and balanced mode's per-kind cap) never
+  fires, so `StopReason.TARGET_MET` can no longer end the run — only `BUDGET` (a real
+  `BudgetExceeded`) or `SOURCES_EXHAUSTED` (the ranked candidate list itself running
+  out) can. It does not reach further than the funder list already does: a 20-funder
+  list still tops out at 20 candidates regardless of the setting, and the run's own
+  notes say so when it is on.
 - Spend **moves while a search runs**, with a LIVE marker beside it — an unlabelled
   number changing by itself reads as a glitch. It used to be written only at the end.
 - One themed confirm dialog (`components/Confirm.jsx`) instead of `window.confirm` —
@@ -423,6 +448,19 @@ the UI so it can't be mistaken for a fact off the funder's page).
   named public database, and the UI shows which.
 - `needs_human_check` rows sort **last** and are shown as their own block.
 
+**A third kind of field, alongside sourced and inferred: self-evidenced.** `apply_url`
+(schema v17) is neither — no model reads it and no quote gates it, because it is a real
+`href` already sitting in the fetched HTML, found for free by `agent/parse.py:
+find_apply_link`. It exists because `source_url` must stay the funder's own page (the
+rule above), and a great many funders route the actual application through a portal
+vendor — Fluxx, Submittable, SM Apply, GrantRequest — on a different host entirely.
+Measured against 62 real pages from the shipped funder registry, 8 of them (13%) had
+their real apply link off-domain; `source_url` could never point there without breaking
+the rule that makes it trustworthy, so it is a second, separate fact instead. The
+dashboard shows it as **"Go to the application ↗"**, next to and clearly distinct from
+**"Open the funder's page ↗"** — never a replacement, and never shown when nothing on the
+page scored as a likely apply link.
+
 **Storage & dedup** (`app/db.py`): `opportunities.id = stable_id(source_url, title)`, and
 the primary key is `(org_id, id)`, so "have we shown **this org** this already this
 month?" is an index probe in the free tier — a repeat costs $0.00. Findings are
@@ -454,6 +492,172 @@ module docstring calls out by name, since a filter that rejects a missing amount
 the pipeline and one that passes it silently defeats the floor — and `tests/test_filters.py`
 now exercises it directly rather than only through `tests/calibration.py`, which pytest
 never collects on its own.
+
+**A closed grant used to read identically to one that never stated a deadline at all.**
+`ParsedPage.earliest_deadline` only ever returns a future date — correct for what it's
+for — but that meant a page whose *only* stated deadline had already passed collapsed
+into the exact same branch as a page with no deadline anywhere: flagged
+`deadline_not_stated`, scored, and shown as if still open. Found on real, currently-live
+pages in the shipped funder registry — Imperial Valley Community Foundation, San Diego
+Workforce Partnership, ACTA's Living Cultures Grant, and others — whose stated deadlines
+had genuinely passed and were reaching the user with nothing marking them closed.
+`ParsedPage.most_recent_past_deadline` is now checked whenever no future one exists, and
+`apply_filters` rejects on it as `Reject.DEADLINE_PASSED` — a reject that used to be
+provably unreachable (`earliest_deadline`'s own guarantee made the `days < 0` branch
+dead code). A page describing both a closed round and an open one is unaffected: the
+future date is found first and this path never runs.
+
+**The deadline and amount extractors missed most `label: value` and label-above-value
+layouts**, which measured against the same 62-page sample is how *most* funders publish
+this, not an edge case. `agent/parse.py: _sentences()` split on a bare `:` as if it ended
+a sentence, so "Deadline to apply: May 1, 2027" — one fact, one line — came apart into a
+cue with no date and a date with no cue, and `extract_deadlines`/`extract_amounts`
+require both in the same piece. Fixed at the root (the colon no longer splits) plus a
+second, narrow pass (`_paired_with_nearby_value`) for the label-on-its-own-line case a
+looser split alone cannot safely reach — loosening newline-splitting too was tried and
+reverted, because it let a real multi-row timeline table (open date, submission
+deadline, notification date, all one cue away from each other) collapse into one
+"sentence" and pull in dates that were never the deadline. Two more real, load-bearing
+edge cases came out of testing this against live pages: an "Applications open" date sharing
+a run-on sentence with the real deadline used to win the `min()` in `earliest_deadline`
+simply for being earlier (`_nearest_cue_wins` now requires the closer *preceding* label,
+not just any cue anywhere in the sentence), and May's abbreviation being identical to its
+full spelling ("may") meant every May deadline was recorded twice.
+
+**A 2-digit year could parse a hundred years wrong, on a real currently-shipped page.**
+California's CalVIP grant states "Proposals due 6/27/25" — `dateparser`, under the
+`PREFER_DATES_FROM: "future"` setting `_parse_date` always uses, read this as
+**2125-06-27**, not 2025. That is dangerous in a specific direction: `earliest_deadline`
+only returns future dates and takes the `min()`, so a date wrongly parsed a century ahead
+would always look like the deadline with unlimited runway — exactly backwards for a grant
+whose real 2025 deadline had already passed. Found building the golden-fixture harness
+below, not by looking for it. `_parse_date` now expands a bare 2-digit year to `20XX`
+itself before either parser sees it, since a date on a page fetched today never
+legitimately means a year a century out.
+
+**The golden-fixture accuracy harness** (`tests/test_golden_fixtures.py`,
+`tests/fixtures/`) is real funder HTML — not synthetic prose — with hand-labelled ground
+truth a human established by reading the actual fetched page, checked against what the
+pipeline actually extracts. This is the gap `tests/calibration.py`'s own docstring names
+in itself ("THE FIXTURES BELOW ARE NOT MAURI'S... placeholders"): that harness is real
+pages but synthetic fixtures; this one is real pages with real, verified expectations.
+Two of the bugs above (the century-off date, the open-date-vs-deadline confusion) were
+found *while building it*, against pages nobody had gone looking for a problem on. Stage 1
+(fetch, parse, the free filters) needs no key and runs in the offline suite; stages 2/3
+need a live Anthropic key the same way `calibration.py`'s full run does, so the harness
+records a written, checkable prediction for what the model *should* do
+(`tests/fixtures/manifest.py: expect_relevant_to_housing_org`) and a `--live` mode to
+check it, rather than asserting something nobody has verified.
+
+**`estimated_effort_hours` is anchored to what the application asks for, not the award
+size.** It had no scale at all — "estimate from the ask and the award size if the page is
+thin" invited anchoring the hours guess to a number that has nothing to do with how much
+paperwork an application takes. It now names four concrete bands (LOI-only ~2-4h;
+standard proposal ~6-10h; proposal plus audited financials/board resolution/letters of
+support ~15-25h; multiple heavy attachments or a multi-stage review ~30h+), the same way
+the award scale got explicit anchors above. **`time_to_funds_days` is told, explicitly,
+that null is the common and correct answer** — most funder pages state nothing about
+their internal review or disbursement timeline, and the prompt used to invite "estimate
+from what the page says" without being blunt that "the page says nothing" is what
+actually happens most of the time, which is exactly the shape of prompt that produces a
+confident guess dressed as a fact.
+
+**Both verified live** (2026-08-07, real Anthropic key, real funder pages, ~$0.10 total):
+`time_to_funds_days` came back `null` on every one of 4 scored pages — none of them
+stated a review cycle or notification date, and the model correctly declined to invent
+one rather than treating null as a fallback for a hard case. `estimated_effort_hours`
+landed inside the anchored bands on every page (8h for a thin government overview, 20h
+for two substantive private-foundation pages, 30h for the one describing the heaviest
+ask), not the flat, undifferentiated numbers the unanchored prompt produced before.
+
+**The same live run found a real bug the reasoning above hadn't anticipated:**
+`award_score` came back **30/30** — full marks — for a page whose own rationale said
+"this is a past grant record" with "no open call." Hilton Foundation's housing-priorities
+page shows a $2.4M grant already given to someone else in 2022 as a case study — the free
+tier's `_AWARD_DISQUALIFIER` already correctly refuses to read that as `page.award_max`,
+but the *scoring* prompt had no equivalent instruction, so Sonnet's own `award_score`
+judgement used the same historical figure as if it were an offer to a new applicant.
+Fixed by extending the null rule: a page whose only dollar figures describe money already
+disbursed is null, exactly like a page naming no figure at all. Re-verified twice after
+the fix, same page: `award_score` came back null both times and the total score corrected
+from an inflated 53 to a correct 37 — nothing else about the page changed. The manifest
+entries this was found on (`tests/fixtures/manifest.py`: `hilton_foundation`,
+`enterprise_community`, `melville_trust`) also had their own relevance predictions
+corrected during the same run — the original predictions conflated "is this funder a
+good topical fit" with "does this specific fetched page describe an actionable open
+call," which triage correctly treats as different questions; a foundation's homepage is
+not an open call regardless of how well its mission matches. That conflation was
+structural, not just a wrong prediction on three rows: the manifest had one field,
+`expect_relevant_to_housing_org`, doing both jobs. It is now two —
+`expect_actionable: bool | None` ("would a human call THIS fetched page something you
+can apply to right now") and `expect_relevant: dict[str, bool | None]` (per program
+slug, "is this a plausible topical fit") — so a future fixture cannot repeat the mistake
+by construction; the live check computes the expected triage answer as their
+conjunction (`actionable AND relevant to at least one active program`), the same
+question `_TRIAGE_RULES` actually asks.
+
+**A single stated floor was reported as the ceiling, on a real currently-shipped page.**
+Hearst Foundations' Health funding-priorities page states exactly one dollar figure:
+"Minimum grant size is $100,000." `ParsedPage.award_max` and `award_min` both resolved
+to `min()`/`max()` over the same one-item evidence list, so a stated *floor* — the least
+you could receive — was reported as the *ceiling*, telling a nonprofit a large health
+funder capped every award at $100,000 when the page makes no such claim. Found while
+expanding the golden-fixture set (below), not by looking for it. `agent/parse.py:
+_FLOOR_ONLY_CUE` / `Evidence.floor_only` now marks a sentence that states only a floor
+("minimum...", "at least $X", "grants starting at $X") with no ceiling anywhere in the
+same sentence (a range, or "up to $X", cancels it — both numbers are real evidence for
+their own side, unchanged), and `award_max` excludes floor-only evidence while
+`award_min` still includes it. Same real sentence, before and after:
+`award_max=100_000, award_min=100_000` → `award_max=None, award_min=100_000`. Re-verified
+live: Sonnet's own extraction agreed independently (`award_min_stated=100000,
+award_max_stated=null`) even before this fix touched the free tier, which only ever fed
+the deterministic floor filter and the `--no-llm` placeholder — the paid tier was reading
+it correctly on its own.
+
+**Picking Haiku to score was a live 400 on every candidate, silently.** `MODEL_CHOICES[3]`
+has always offered Haiku as a scoring model ("cheapest, but scoring is the judgement you
+are actually paying for"), but `score_one()` sent `thinking={"type": "adaptive"}`
+unconditionally — which Haiku rejects outright, not a documented limitation. An org that
+picked it would have every single scoring call fail and the run abort once
+`CONSECUTIVE_ERROR_LIMIT` (five) was reached, with a note about "tier 3 could not read"
+and no indication the model choice itself was the cause. Confirmed live (both the break
+and the fix): `score_one()` with `scoring_model=haiku` raised `BadRequestError: adaptive
+thinking is not supported on this model` before the fix and returned a real score (42,
+fit 8/60) after it. `agent/score.py: _model_supports_effort` is the one gate both
+`triage()` and `score_one()` now check before adding `thinking`/`effort` to a call —
+found and fixed alongside the new per-stage effort setting (above), but a pre-existing
+bug independent of it.
+
+**The Opus scoring option was a retiring model.** `claude-opus-4-1` retires 2026-08-05;
+`MODEL_CHOICES[3]`'s Opus entry pointed at it. Migrated to `claude-opus-5`, which is also
+cheaper ($5/$25 per Mtok vs. the old model's $15/$75) — a straight improvement, not just
+a retirement fix. The picker's own cost note ("five times Sonnet's price") was corrected
+to match: Opus 5 is a consistent ~1.67x Sonnet's price on both input and output, not 5x.
+
+**The golden-fixture harness grew from 12 real pages, one program, to 34 real pages,
+four program cards across two organizations** — New Destiny Housing's HASS plus RISE San
+Diego's ARTS/RULFP/RESILIENCE (`tests/fixtures/manifest.py`: `PROGRAMS`,
+`ORG_FOR_PROGRAM`, real cards from `app/db.py: SEED_PROGRAMS`, not invented) — so a
+page's relevance to one program and its irrelevance to the other three are asserted on
+the same real fetch, not assumed by omission. Every fixture is now judged on two
+separate axes (`expect_actionable`, `expect_relevant` — see above), and
+`test_golden_fixtures.py --live` computes recall/precision/accuracy against their
+conjunction instead of a bare agreement count. Live-run once against both orgs
+(2026-08-07, ~$0.18 total): **100% recall, 88.5% accuracy, 40% precision, 12.5% false
+positive rate at the triage stage** (TP=4 FP=6 TN=42 FN=0, n=52). The six "false
+positives" are not the same failure repeated six times: `sdge-guidelines` (a real, if
+informal, corporate-giving process that explicitly rules out arts funding by name)
+correctly self-corrects at scoring — fit 14/60, score 23/100. The other five (`hud_coc`,
+`robin_hood_nyc`, `ca-arts-council`, `creativewest-grants`, `kellogg_leadership`) are
+directory/overview pages for a **genuinely strong topical fit** — HUD's CoC really is
+the core federal vehicle for exactly what HASS does; Robin Hood really is NYC's largest
+anti-poverty funder — and triage answering yes on a thin-but-real page is the documented,
+intended behaviour (`_TRIAGE_RULES`: "Answer TRUE when it is a real, open call, even if
+the page is thin"). Scoring confirms this rather than contradicting it: all five landed
+fit-only (award/timing null, exactly the renormalisation rule above), scores 63–87,
+`needs_human_check` set on the ones that were truly empty of content. Triage's job is a
+permissive first pass on a strong-fit page it cannot yet confirm has a specific open
+call; scoring is where the real precision happens, and on this sample it did.
 
 **There is no sector filter either, and it went the same way** (R8). Four checkboxes —
 "warm_partner / foundation / government / arts_agency" — narrowed the funder list, on a
@@ -686,7 +890,10 @@ Everything else (funders, programs, this month's findings) is already seeded.
 │                                 discover funders, settings, first-run tutorial)
 ├── tests/                       pytest — calibration.py is the ranking test,
 │                                 test_tenancy.py is the org-isolation test,
-│                                 test_filters.py is the free-tier filter test
+│                                 test_filters.py is the free-tier filter test,
+│                                 test_golden_fixtures.py + fixtures/ is the real-page
+│                                 accuracy harness (real funder HTML, hand-labelled
+│                                 ground truth, run `--live` for the model-tier check)
 ├── docs/DEPLOY-ORACLE.md        putting it on an Oracle free-tier VM
 ├── docs/ACCESS.md               getting into the running system (SSH · Firebase · Oracle)
 ├── docs/UPGRADE.md              deploying the tenancy update onto a live box

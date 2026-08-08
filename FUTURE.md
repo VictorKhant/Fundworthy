@@ -939,3 +939,28 @@ the site, which is simply what "not enough visitors yet" looks like.
 - **Nothing tells a user what a run cost them**, before or after.
 - **No privacy policy, terms, or data-retention statement**, and no way for an org to
   delete its data. We now hold other organisations' information on a US cloud VM.
+- ~~**`estimated_effort_hours` and `time_to_funds_days` were re-prompted from a static
+  reading of real pages, not from a live model run.**~~ **Verified (2026-08-07)**, once
+  the account-wide usage cap blocking this lifted. `time_to_funds_days` came back null on
+  every one of 4 real pages scored live — none stated a review cycle, and the model
+  correctly declined to guess rather than treating null as a fallback. `estimated_effort_hours`
+  landed inside its anchored bands on all 4 (8h / 20h / 20h / 30h, not flat undifferentiated
+  numbers). The same live run also found a bug the reasoning pass hadn't anticipated:
+  `award_score` came back 30/30 on a page whose own rationale said "past grant record,
+  no open call" — Sonnet's scoring prompt had no equivalent of the free tier's
+  `_AWARD_DISQUALIFIER`, so a $2.4M historical case-study figure on Hilton Foundation's
+  page was read as an offer to a new applicant. Fixed and re-verified twice: award_score
+  now comes back null on that same page, and the total score corrected from an inflated
+  53 to 37. See CLAUDE.md §5 and `tests/fixtures/manifest.py`.
+- **`sinks/sheets.py` does not carry `apply_url`** (schema v17). Deliberately skipped —
+  CLAUDE.md already calls this sink legacy ("never run in production, superseded by the
+  dashboard"), and its row format is a positional list (`HEADERS` + `_row()`) where
+  adding a column risks an off-by-one in a code path nobody exercises. Worth doing in the
+  same pass that finally removes or actively maintains this sink, not before.
+- **The golden-fixture harness (`tests/test_golden_fixtures.py`) covers 11 real pages,
+  all San Diego/national-housing.** `--live` has been run once, for real (2026-08-07):
+  6/6 triage predictions agreed after correcting three that were wrong for a genuinely
+  interesting reason (see CLAUDE.md §5). It is a template, not a ceiling — the same
+  pattern (real HTML, hand-verified ground truth, offline stage-1 assertions plus a
+  `--live` stage-2/3 extension) is the right way to grow coverage as more bug reports come in,
+  rather than starting over with synthetic strings each time.

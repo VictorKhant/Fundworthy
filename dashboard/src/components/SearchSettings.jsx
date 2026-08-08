@@ -125,6 +125,25 @@ export default function SearchSettings({
           </small>
         </label>
 
+        {/* Off by default, deliberately: CLAUDE.md's whole premise is that a short
+            list is a feature, not a shortfall, and this one switch abandons that on
+            purpose for someone who has decided they would rather spend the whole
+            budget than stop at "most results to bring back" above. It does not
+            reach further than your funder list already does — a short list still
+            tops out at what's on it, whatever this is set to. */}
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={draft.ultra_mode}
+            onChange={(e) => set("ultra_mode", e.target.checked)}
+          />
+          Spend the whole search budget (Ultra mode)
+          <small className="muted">
+            {" "}— ignores "most results to bring back" above and keeps scoring until
+            the budget or your funder list runs out
+          </small>
+        </label>
+
         {/* This used to read "it searches every Wednesday night", which was a sentence
             rather than a setting: nothing scheduled anything, and the only way a search
             happened was somebody pressing Re-run. Now it is three controls and there is

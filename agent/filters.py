@@ -195,13 +195,30 @@ def apply_filters(page: ParsedPage, funder: str, cfg: Config) -> FilterResult:
         )
 
     # --- deadline. Same rule.
+    #
+    # `earliest_deadline` only ever returns a FUTURE date, so a page whose only stated
+    # deadline had already passed used to collapse into this same "no deadline" branch —
+    # AMOUNT_NOT_STATED's sibling flag, meant for a funder who never publishes a date at
+    # all, not for a grant that is provably closed. A closed grant flagged that way is
+    # not merely unranked, it is invisible: nothing about it says "this already closed,"
+    # so it costs a triage call, a scoring call, and reaches the user looking exactly
+    # like an open opportunity that simply never mentioned a deadline.
+    #
+    # `most_recent_past_deadline` is checked only here, when no future date exists — a
+    # page describing both a closed round and an upcoming one is untouched, because
+    # `earliest_deadline` already found the future one and this branch never runs.
     deadline = page.earliest_deadline
     if deadline is None:
+        past = page.most_recent_past_deadline
+        if past is not None:
+            return FilterResult(True, Reject.DEADLINE_PASSED, past.isoformat())
         flags.append(Flag.DEADLINE_NOT_STATED)
     else:
+        # `days < 0` cannot happen here — `earliest_deadline` only ever returns a date
+        # `>= today`, so this branch is unreachable by construction. It used to be
+        # checked for anyway, silently proving nothing (Reject.DEADLINE_PASSED's real
+        # path is the one above now).
         days = (deadline - date.today()).days
-        if days < 0:
-            return FilterResult(True, Reject.DEADLINE_PASSED, deadline.isoformat())
         if days < cfg.min_deadline_runway_days:
             return FilterResult(
                 True,

@@ -201,7 +201,8 @@ def test_warmth_no_longer_buys_a_candidate_the_scoring_budget():
 
     def page(url, amount):
         p = ParsedPage(url=url, title="t", text="x" * 2000)
-        p.amounts = [type("E", (), {"value": amount, "snippet": "", "kind": "amount"})()]
+        p.amounts = [type("E", (), {"value": amount, "snippet": "", "kind": "amount",
+                                    "floor_only": False})()]
         return p
 
     def src(name, warm):
@@ -343,6 +344,360 @@ def test_an_unknown_stored_model_falls_back_instead_of_killing_the_run(tmp_path,
 
     cfg = load_from_db(org_id=DEFAULT_ORG_ID)
     assert cfg.scoring_model == SCORING_MODEL, "an unusable setting must not be obeyed"
+
+
+# --- per-stage reasoning effort --------------------------------------------------
+#
+# Haiku rejects `thinking: {type: "adaptive"}` and `output_config.effort` outright —
+# a live 400, not a documented gap (confirmed against the real API while building
+# this feature). `score_one` used to send `thinking={"type": "adaptive"}`
+# unconditionally, which meant picking Haiku as the scoring model — a real, offered
+# choice in MODEL_CHOICES[3] — made every scoring call in a run fail. The tests below
+# pin the fix and the new per-stage effort setting down with a fake API client, so a
+# regression here fails offline rather than on somebody's first live run.
+
+class _FakeContentBlock:
+    def __init__(self, text):
+        self.type = "text"
+        self.text = text
+
+
+class _FakeUsage:
+    input_tokens = 10
+    output_tokens = 10
+
+
+class _FakeResponse:
+    def __init__(self, payload):
+        self.content = [_FakeContentBlock(payload)]
+        self.usage = _FakeUsage()
+
+
+class _FakeMessages:
+    def __init__(self, payload):
+        self._payload = payload
+        self.calls: list[dict] = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return _FakeResponse(self._payload)
+
+
+class _FakeClient:
+    def __init__(self, payload):
+        self.messages = _FakeMessages(payload)
+
+
+def test_every_offered_effort_level_is_a_real_stored_value():
+    from agent.score import EFFORT_CHOICES, EFFORT_IDS
+
+    assert EFFORT_IDS == {c["id"] for c in EFFORT_CHOICES}
+    assert "" in EFFORT_IDS, "the picker must offer 'let the model default'"
+    assert {"low", "medium", "high", "max"} <= EFFORT_IDS
+
+
+def test_model_support_gate_matches_the_real_api_boundary():
+    from agent.score import _model_supports_effort
+
+    assert _model_supports_effort("anthropic:claude-haiku-4-5") is False
+    assert _model_supports_effort("claude-haiku-4-5") is False  # bare, no prefix
+    assert _model_supports_effort("anthropic:claude-sonnet-4-6") is True
+    assert _model_supports_effort("anthropic:claude-opus-5") is True
+
+
+def test_scoring_never_sends_thinking_or_effort_to_haiku(monkeypatch):
+    """The bug this whole section exists to pin down: picking Haiku as the scoring
+    model used to make every single call fail, regardless of the effort setting."""
+    import agent.score as score_module
+    from agent.models import RawCandidate
+    from agent.sources import Confidence, Source, Tier
+
+    payload = ('{"fit_score": 10, "award_score": null, "timing_score": null, '
+              '"score_rationale": "x", "program_match": [], '
+              '"estimated_effort_hours": 5, "application_lead_time_days": null, '
+              '"time_to_funds_days": null, "award_min_stated": null, '
+              '"award_max_stated": null, "award_quote": null, '
+              '"award_typical_stated": null, "award_typical_quote": null, '
+              '"deadline_stated": null, "deadline_quote": null, '
+              '"deadline_type": "unknown", "deadline_type_quote": null, '
+              '"geography_stated": null, "geography_quote": null, '
+              '"contact_note": "", "contact_quote": "", '
+              '"funder_type": "unknown", "service_areas": [], '
+              '"confidence_pct": 50, "needs_human_check": false}')
+    fake = _FakeClient(payload)
+    monkeypatch.setattr(score_module, "_client", lambda: fake)
+
+    cfg = Config(programs=[ProgramCard(slug="p", name="P")],
+                scoring_model="anthropic:claude-haiku-4-5", scoring_effort="max")
+    candidate = RawCandidate(
+        source_url="https://x.invalid", title="A grant", funder="X", text="x" * 100,
+        tier=int(Tier.WARM), programs_hint=[], apply_url=None,
+    )
+    source = Source(name="X", funder="X", url="https://x.invalid",
+                    tier=Tier.WARM, confidence=Confidence.CONFIRMED)
+    budget = score_module.Budget(ceiling_usd=10.0)
+
+    score_module.score_one(candidate, source, cfg, budget)
+
+    sent = fake.messages.calls[0]
+    assert "thinking" not in sent, "Haiku 400s on thinking — must never be sent"
+    assert "effort" not in sent["output_config"], "Haiku 400s on effort — must never be sent"
+
+
+def test_scoring_sends_the_configured_effort_on_a_model_that_supports_it(monkeypatch):
+    import agent.score as score_module
+    from agent.models import RawCandidate
+    from agent.sources import Confidence, Source, Tier
+
+    payload = ('{"fit_score": 10, "award_score": null, "timing_score": null, '
+              '"score_rationale": "x", "program_match": [], '
+              '"estimated_effort_hours": 5, "application_lead_time_days": null, '
+              '"time_to_funds_days": null, "award_min_stated": null, '
+              '"award_max_stated": null, "award_quote": null, '
+              '"award_typical_stated": null, "award_typical_quote": null, '
+              '"deadline_stated": null, "deadline_quote": null, '
+              '"deadline_type": "unknown", "deadline_type_quote": null, '
+              '"geography_stated": null, "geography_quote": null, '
+              '"contact_note": "", "contact_quote": "", '
+              '"funder_type": "unknown", "service_areas": [], '
+              '"confidence_pct": 50, "needs_human_check": false}')
+    fake = _FakeClient(payload)
+    monkeypatch.setattr(score_module, "_client", lambda: fake)
+
+    cfg = Config(programs=[ProgramCard(slug="p", name="P")],
+                scoring_model="anthropic:claude-sonnet-4-6", scoring_effort="max")
+    candidate = RawCandidate(
+        source_url="https://x.invalid", title="A grant", funder="X", text="x" * 100,
+        tier=int(Tier.WARM), programs_hint=[], apply_url=None,
+    )
+    source = Source(name="X", funder="X", url="https://x.invalid",
+                    tier=Tier.WARM, confidence=Confidence.CONFIRMED)
+    budget = score_module.Budget(ceiling_usd=10.0)
+
+    score_module.score_one(candidate, source, cfg, budget)
+
+    sent = fake.messages.calls[0]
+    assert sent["thinking"] == {"type": "adaptive"}
+    assert sent["output_config"]["effort"] == "max"
+
+
+def test_scoring_defaults_to_medium_effort_unset_exactly_as_before(monkeypatch):
+    """An org that has never touched the new setting must see byte-identical
+    behaviour to before this feature existed."""
+    import agent.score as score_module
+    from agent.models import RawCandidate
+    from agent.sources import Confidence, Source, Tier
+
+    payload = ('{"fit_score": 10, "award_score": null, "timing_score": null, '
+              '"score_rationale": "x", "program_match": [], '
+              '"estimated_effort_hours": 5, "application_lead_time_days": null, '
+              '"time_to_funds_days": null, "award_min_stated": null, '
+              '"award_max_stated": null, "award_quote": null, '
+              '"award_typical_stated": null, "award_typical_quote": null, '
+              '"deadline_stated": null, "deadline_quote": null, '
+              '"deadline_type": "unknown", "deadline_type_quote": null, '
+              '"geography_stated": null, "geography_quote": null, '
+              '"contact_note": "", "contact_quote": "", '
+              '"funder_type": "unknown", "service_areas": [], '
+              '"confidence_pct": 50, "needs_human_check": false}')
+    fake = _FakeClient(payload)
+    monkeypatch.setattr(score_module, "_client", lambda: fake)
+
+    cfg = Config(programs=[ProgramCard(slug="p", name="P")])  # scoring_effort unset
+    candidate = RawCandidate(
+        source_url="https://x.invalid", title="A grant", funder="X", text="x" * 100,
+        tier=int(Tier.WARM), programs_hint=[], apply_url=None,
+    )
+    source = Source(name="X", funder="X", url="https://x.invalid",
+                    tier=Tier.WARM, confidence=Confidence.CONFIRMED)
+    budget = score_module.Budget(ceiling_usd=10.0)
+
+    score_module.score_one(candidate, source, cfg, budget)
+
+    assert fake.messages.calls[0]["output_config"]["effort"] == "medium"
+
+
+def test_triage_stays_thinkingless_by_default_exactly_as_before(monkeypatch):
+    import agent.score as score_module
+    from agent.models import RawCandidate
+    from agent.sources import Tier
+
+    fake = _FakeClient('{"is_opportunity": true, "reason": "looks real"}')
+    monkeypatch.setattr(score_module, "_client", lambda: fake)
+
+    cfg = Config(programs=[ProgramCard(slug="p", name="P")])  # triage_effort unset
+    candidate = RawCandidate(
+        source_url="https://x.invalid", title="A grant", funder="X", text="x" * 100,
+        tier=int(Tier.WARM), programs_hint=[], apply_url=None,
+    )
+    budget = score_module.Budget(ceiling_usd=10.0)
+
+    score_module.triage(candidate, budget, cfg)
+
+    sent = fake.messages.calls[0]
+    assert "thinking" not in sent
+    assert "effort" not in sent["output_config"]
+    assert sent["max_tokens"] == score_module.TRIAGE_MAX_TOKENS
+
+
+def test_triage_effort_is_a_no_op_on_haiku_but_real_on_sonnet(monkeypatch):
+    import agent.score as score_module
+    from agent.models import RawCandidate
+    from agent.sources import Tier
+
+    fake = _FakeClient('{"is_opportunity": true, "reason": "looks real"}')
+    monkeypatch.setattr(score_module, "_client", lambda: fake)
+
+    candidate = RawCandidate(
+        source_url="https://x.invalid", title="A grant", funder="X", text="x" * 100,
+        tier=int(Tier.WARM), programs_hint=[], apply_url=None,
+    )
+    budget = score_module.Budget(ceiling_usd=10.0)
+
+    # Haiku (the default/recommended triage model): the setting is silently ignored.
+    cfg_haiku = Config(programs=[ProgramCard(slug="p", name="P")],
+                       triage_model="anthropic:claude-haiku-4-5", triage_effort="high")
+    score_module.triage(candidate, budget, cfg_haiku)
+    sent = fake.messages.calls[-1]
+    assert "thinking" not in sent
+    assert "effort" not in sent["output_config"]
+
+    # Sonnet: the setting takes effect, and gets the extra token headroom to think in.
+    cfg_sonnet = Config(programs=[ProgramCard(slug="p", name="P")],
+                        triage_model="anthropic:claude-sonnet-4-6", triage_effort="high")
+    score_module.triage(candidate, budget, cfg_sonnet)
+    sent = fake.messages.calls[-1]
+    assert sent["thinking"] == {"type": "adaptive"}
+    assert sent["output_config"]["effort"] == "high"
+    assert sent["max_tokens"] == score_module.TRIAGE_MAX_TOKENS_WITH_THINKING
+
+
+def test_a_stale_effort_setting_falls_back_instead_of_reaching_the_api(tmp_path, monkeypatch):
+    """The same discipline as `_known_model` for a stale model id: an effort level
+    Fundworthy no longer offers must fall back to '' rather than reach Anthropic and
+    400 out every candidate."""
+    monkeypatch.setenv("FUNDWORTHY_DB_PATH", str(tmp_path / "rise.db"))
+    monkeypatch.setenv("FUNDWORTHY_KEYFILE", str(tmp_path / ".fernet-key"))
+
+    from agent.config import load_from_db
+    from app.db import init_db, session
+
+    init_db()
+    with session() as conn:
+        conn.execute(
+            "INSERT INTO settings(org_id, key, value, updated_at) VALUES(?,?,?,?) "
+            "ON CONFLICT(org_id, key) DO UPDATE SET value=excluded.value",
+            (DEFAULT_ORG_ID, "scoring_effort", "ludicrous", "2026-01-01"))
+
+    cfg = load_from_db(org_id=DEFAULT_ORG_ID)
+    assert cfg.scoring_effort == ""
+
+
+# --- Ultra mode ------------------------------------------------------------------
+
+def test_ultra_mode_keeps_going_past_the_result_cap(monkeypatch):
+    """With Ultra mode on, `max_opportunities` must not end the run — only the
+    budget or the funder list running out may."""
+    import agent.run as runmod
+    from agent.models import RunLog, StopReason
+    from agent.parse import ParsedPage
+    from agent.score import Budget
+    from agent.sources import Confidence, Source, Tier
+
+    monkeypatch.setattr(runmod, "triage", lambda c, b, cf: (True, "yes"))
+    monkeypatch.setattr(runmod, "score_one",
+                        lambda c, s, cf, b: runmod._unscored(
+                            ParsedPage(url=c.source_url, title=c.title, text=c.text),
+                            s, cf, "test"))
+
+    pages = [
+        (ParsedPage(url=f"https://x.invalid/{i}", title=f"Grant {i}", text="x" * 3000),
+         Source(name=f"F{i}", funder=f"F{i}", url=f"https://x.invalid/{i}",
+                tier=Tier.WARM, confidence=Confidence.CONFIRMED))
+        for i in range(6)
+    ]
+    cfg = Config(programs=[ProgramCard(slug="p", name="P")], max_opportunities=2,
+                ultra_mode=True)
+    run = RunLog(started_at=__import__("datetime").datetime.now(
+        __import__("datetime").timezone.utc))
+    budget = Budget(ceiling_usd=10.0)
+
+    out = runmod.evaluate(pages, cfg, run, budget, use_llm=True)
+
+    assert len(out) == 6, "ultra mode must not stop at max_opportunities"
+    assert run.stop_reason != StopReason.TARGET_MET
+    assert run.stop_reason == StopReason.SOURCES_EXHAUSTED
+    assert any("Ultra mode" in n for n in run.notes)
+
+
+def test_without_ultra_mode_the_cap_still_stops_the_run(monkeypatch):
+    """The regression guard: Ultra mode off must behave exactly as before."""
+    import agent.run as runmod
+    from agent.models import RunLog, StopReason
+    from agent.parse import ParsedPage
+    from agent.score import Budget
+    from agent.sources import Confidence, Source, Tier
+
+    monkeypatch.setattr(runmod, "triage", lambda c, b, cf: (True, "yes"))
+    monkeypatch.setattr(runmod, "score_one",
+                        lambda c, s, cf, b: runmod._unscored(
+                            ParsedPage(url=c.source_url, title=c.title, text=c.text),
+                            s, cf, "test"))
+
+    pages = [
+        (ParsedPage(url=f"https://x.invalid/{i}", title=f"Grant {i}", text="x" * 3000),
+         Source(name=f"F{i}", funder=f"F{i}", url=f"https://x.invalid/{i}",
+                tier=Tier.WARM, confidence=Confidence.CONFIRMED))
+        for i in range(6)
+    ]
+    cfg = Config(programs=[ProgramCard(slug="p", name="P")], max_opportunities=2)
+    run = RunLog(started_at=__import__("datetime").datetime.now(
+        __import__("datetime").timezone.utc))
+    budget = Budget(ceiling_usd=10.0)
+
+    out = runmod.evaluate(pages, cfg, run, budget, use_llm=True)
+
+    assert len(out) == 2
+    assert run.stop_reason == StopReason.TARGET_MET
+    assert not any("Ultra mode" in n for n in run.notes)
+
+
+def test_ultra_mode_still_stops_on_budget(monkeypatch):
+    """Ultra mode's own promise: spend the whole budget, not the whole internet."""
+    import agent.run as runmod
+    from agent.models import RunLog, StopReason
+    from agent.parse import ParsedPage
+    from agent.score import Budget, BudgetExceeded
+    from agent.sources import Confidence, Source, Tier
+
+    calls = {"n": 0}
+
+    def fake_score_one(c, s, cf, b):
+        calls["n"] += 1
+        if calls["n"] > 3:
+            raise BudgetExceeded("out of money")
+        return runmod._unscored(
+            ParsedPage(url=c.source_url, title=c.title, text=c.text), s, cf, "test")
+
+    monkeypatch.setattr(runmod, "triage", lambda c, b, cf: (True, "yes"))
+    monkeypatch.setattr(runmod, "score_one", fake_score_one)
+
+    pages = [
+        (ParsedPage(url=f"https://x.invalid/{i}", title=f"Grant {i}", text="x" * 3000),
+         Source(name=f"F{i}", funder=f"F{i}", url=f"https://x.invalid/{i}",
+                tier=Tier.WARM, confidence=Confidence.CONFIRMED))
+        for i in range(10)
+    ]
+    cfg = Config(programs=[ProgramCard(slug="p", name="P")], max_opportunities=2,
+                ultra_mode=True)
+    run = RunLog(started_at=__import__("datetime").datetime.now(
+        __import__("datetime").timezone.utc))
+    budget = Budget(ceiling_usd=10.0)
+
+    out = runmod.evaluate(pages, cfg, run, budget, use_llm=True)
+
+    assert len(out) == 3
+    assert run.stop_reason == StopReason.BUDGET
 
 
 # --- live spend during a run ---------------------------------------------------

@@ -51,11 +51,17 @@ SCORING_MODEL = "anthropic:claude-sonnet-4-6"
 PRICING = {
     "anthropic:claude-haiku-4-5":   {"input": 1.00, "output": 5.00},
     "anthropic:claude-sonnet-4-6":  {"input": 3.00, "output": 15.00},
-    "anthropic:claude-opus-4-1":    {"input": 15.00, "output": 75.00},
+    "anthropic:claude-opus-5":      {"input": 5.00, "output": 25.00},
 }
 
 # What the picker offers, per stage, and what each one is for in one line. Ordered
 # cheapest first, which is also the order of §5's argument.
+#
+# The Opus option was `claude-opus-4-1`, which retired 2026-08-05 (superseded by
+# `claude-opus-5`) — an org with that saved in `scoring_model` would have had every
+# scoring call 404 starting the day this file was last touched before the migration.
+# `claude-opus-5` is also the cheaper of the two ($5/$25 per MTok vs. the old model's
+# $15/$75), so this is a straight improvement, not just a retirement fix.
 MODEL_CHOICES = {
     2: [
         {"id": "anthropic:claude-haiku-4-5", "label": "Haiku",
@@ -71,11 +77,52 @@ MODEL_CHOICES = {
         {"id": "anthropic:claude-sonnet-4-6", "label": "Sonnet",
          "note": "The recommended choice. Reads the page in full and explains its score.",
          "recommended": True},
-        {"id": "anthropic:claude-opus-4-1", "label": "Opus",
-         "note": "The most careful reader, and five times Sonnet's price. On a long "
-                 "funder list this will hit your per-search limit before the list ends."},
+        {"id": "anthropic:claude-opus-5", "label": "Opus",
+         "note": "The most careful reader, at roughly two-thirds more than Sonnet's "
+                 "price. On a long funder list this will hit your per-search limit "
+                 "sooner than Sonnet does."},
     ],
 }
+
+# The reasoning-depth dial (Anthropic's `output_config.effort`), offered per stage,
+# separate from *which model* runs the stage. Capped at "max" rather than exposing
+# Opus's "xhigh" tier: Sonnet 4.6 — the recommended, default choice on both stages —
+# only goes up to "max" (`xhigh` arrived with a later model generation), so a picker
+# that also offered "xhigh" would silently do nothing extra on the model most people
+# actually use. "" means "don't ask for a level" — not the same as "low": omitting
+# `effort` lets the model default, which is "high" on every model this pipeline can
+# select.
+EFFORT_CHOICES = [
+    {"id": "", "label": "Default",
+     "note": "Whatever the model defaults to (in practice, \"high\")."},
+    {"id": "low", "label": "Low",
+     "note": "Fastest and cheapest. Less reliable on a genuinely hard call."},
+    {"id": "medium", "label": "Medium",
+     "note": "A middle ground between speed and care."},
+    {"id": "high", "label": "High",
+     "note": "The recommended choice for scoring — the judgement you're paying for."},
+    {"id": "max", "label": "Max",
+     "note": "Slowest and most expensive. Diminishing returns past \"high\" on most "
+             "pages, and will hit your per-search spend limit sooner."},
+]
+# The valid stored values for `triage_effort`/`scoring_effort` — public, the same way
+# `PRICING`'s keys are the valid stored values for `triage_model`/`scoring_model`, so
+# app/main.py can validate a write the same way it already validates a model id.
+EFFORT_IDS = {c["id"] for c in EFFORT_CHOICES}
+
+
+def _model_supports_effort(model_id: str) -> bool:
+    """Haiku rejects `thinking: {type: "adaptive"}` and `output_config.effort`
+    outright — a live 400, not a documented gap — on every Haiku version this
+    pipeline can select. Sonnet and Opus both accept them. This is checked before
+    EVERY thinking/effort-bearing call in this file, not just when a user has set an
+    effort level: `score_one` used to send `thinking={"type": "adaptive"}`
+    unconditionally, which meant picking Haiku as the scoring model — a real,
+    offered choice in MODEL_CHOICES[3] — made every single scoring call fail and the
+    run abort after `CONSECUTIVE_ERROR_LIMIT` failures, silently, regardless of
+    whether anyone had touched the new effort setting at all.
+    """
+    return "haiku" not in api_model(model_id).lower()
 
 
 def model_label(model_id: str) -> str:
@@ -118,6 +165,12 @@ def price_for(model_id: str) -> dict[str, float]:
 TRIAGE_TEXT_CAP = 8_000     # chars ≈ 2k tokens (§8: "cap at ~2k tokens per candidate")
 SCORING_TEXT_CAP = 12_000
 TRIAGE_MAX_TOKENS = 512
+# `max_tokens` caps thinking + response together on every model this pipeline can
+# select. 512 is plenty for a bare "true/false + 15 words" reply, but leaves no room
+# to think — fine for the no-effort default (still "no thinking" exactly as before),
+# wrong the moment a user asks triage to reason first. Used only when `triage_effort`
+# is actually set and the chosen model supports it.
+TRIAGE_MAX_TOKENS_WITH_THINKING = 2_000
 SCORING_MAX_TOKENS = 8_000  # headroom: max_tokens caps thinking + response on Sonnet 4.6
 
 # Sonnet 4.6 will not cache a prefix shorter than 2048 tokens — a cache_control marker
@@ -312,8 +365,16 @@ components that go missing are worth 40 of the 100 points, so nothing could ever
 60. A null takes that component out of the total instead of failing it. Use it freely
 and without apology; it costs the opportunity nothing.
 
-  award_score is null   when the page states no award amount, no range and no typical
-                        award. Do not estimate one from the funder's size or reputation.
+  award_score is null   when the page states no CURRENT, OPEN award amount, range or
+                        typical award for a new applicant. Do not estimate one from the
+                        funder's size or reputation, and do not estimate one from a
+                        PAST grant the page describes — a case study, an "Awarded Date"
+                        record, a past grantee's dollar figure — even when a number is
+                        right there in the text. A funder's foundation once gave someone
+                        else $2.4M is not evidence of what YOU would receive; it is a
+                        fact about a different applicant on a different day. If the only
+                        dollar figures on the page describe money already disbursed, this
+                        is null, the same as if the page named no figure at all.
   timing_score is null  when the page gives no deadline and no rolling-basis statement,
                         so there is no calendar to judge the application against.
   fit_score is NEVER null. You always have the page and their programs in front of you,
@@ -339,9 +400,11 @@ Against their floor, which is given below. Use these anchors, and interpolate:
   ten times the floor   ~30 / 30
   below the floor         0 / 30   (rare — these are usually filtered out before you)
 
-Use the typical or the maximum award, whichever the page actually states; if it states a
-range, use the midpoint. A larger award is worth more because the hours cost the same
-either way — that is the whole reason this component exists.
+Use the typical or the maximum award a NEW applicant could receive, whichever the page
+actually states for an OPEN call; if it states a range, use the midpoint. A larger award
+is worth more because the hours cost the same either way — that is the whole reason this
+component exists. This must be a figure describing what is currently on offer, never a
+figure describing what was already given to someone else — see the null rule above.
 
 --- timing_score, 0-10, or null ---
 
@@ -378,12 +441,32 @@ list are real answers.
 The one exception is estimated_effort_hours, which is ALWAYS required. Never leave it
 out. Every opportunity on this list gets compared against their hours-per-application
 figure, given below with the page, so an application with no estimate cannot be weighed
-against one that has it — it silently drops out of the only comparison that matters. If the page is
-thin, estimate from what the funder is asking for and how much money is at stake: a
-two-page letter of interest is not a full proposal with audited financials. A rough
-number you would defend is far more useful to them than no number. If the page is an
-index or overview rather than a single application, estimate the typical application it
-leads to.
+against one that has it — it silently drops out of the only comparison that matters. If
+the page is an index or overview rather than a single application, estimate the typical
+application it leads to.
+
+Anchor the number to what the page actually says the application REQUIRES, the same way
+you anchor award_score to the floor. Do not estimate from the funder's size, reputation,
+or how much money is at stake — estimate from the concrete list of what they ask an
+applicant to produce:
+
+  ~2-4h   a short online form or a letter of interest/inquiry only — name, contact,
+          one paragraph on the project. Nothing else requested.
+  ~6-10h  a standard written proposal: a narrative (1-3 pages), a budget, an
+          organizational description. The common case when the page names a "proposal"
+          or "application" with no further attachments listed.
+  ~15-25h a full proposal PLUS attachments that take real preparation on their own —
+          any combination of audited financial statements, a detailed project budget
+          with narrative, letters of support you have to solicit from others, or a
+          logic model / evaluation plan.
+  ~30h+   a full proposal plus MULTIPLE heavy attachments — audited financials AND a
+          board resolution AND letters of support, or a page that describes a
+          multi-stage review (LOI then invited full proposal).
+
+Interpolate between these; do not round to the nearest anchor. If the page lists none of
+these specifics at all — genuinely nothing about what to submit — give your best estimate
+for an ordinary written proposal rather than guessing wildly in either direction, and say
+in the rationale that the page did not describe the requirements.
 
 Also:
 - deadline_type is "fixed" when the page names one date, "rolling" when it says
@@ -411,9 +494,15 @@ Also:
   the "finish in time" component at or near zero and say so plainly in the rationale.
 - time_to_funds_days is your estimate of how long AFTER submitting before the money
   would actually reach their bank account — decision timeline plus disbursement. A
-  nonprofit's cash flow depends on this and funders rarely state it, so estimate from
-  what the page says about review cycles and award dates. This is a judgement, and it
-  is labelled as one; null if you have nothing to go on.
+  nonprofit's cash flow depends on this, which is exactly why it must not be a
+  confident-sounding guess dressed as a fact: null it unless the page gives you
+  something concrete to reason FROM — a stated notification date, a review-cycle
+  length ("decisions in 8-10 weeks"), a disbursement schedule, or an award
+  announcement date you can measure against the deadline. Do not estimate from
+  general knowledge of "how long grants usually take" with nothing on the page
+  backing it — that is not a judgement about this funder, it is a guess about
+  funders in general wearing this funder's name. Most pages state nothing here.
+  Null is the common, correct answer, not a fallback for a hard case.
 - score_rationale is one sentence, no preamble, no hedging, written for someone deciding
   whether to spend a day on this. It must not contain any dollar figure or date that is
   not in the page text above. Do not write "awards are typically around $X" from your own
@@ -495,9 +584,13 @@ def scoring_schema(program_slugs: list[str]) -> dict:
             "award_score": {
                 "type": ["integer", "null"],
                 "description": (
-                    "0-30, award size against their floor. NULL when the page states no "
-                    "amount, no range and no typical award — a funder that does not "
-                    "publish a figure has not offered a small grant. Never estimate one."
+                    "0-30, award size against their floor, for a NEW applicant's OPEN "
+                    "call. NULL when the page states no current amount, no range and no "
+                    "typical award — a funder that does not publish a figure has not "
+                    "offered a small grant. Also NULL when the only figures on the page "
+                    "describe a PAST, already-disbursed grant (a case study, an "
+                    "'Awarded Date' record) — that is a fact about a different "
+                    "applicant, not an offer to you. Never estimate from either."
                 ),
             },
             "timing_score": {
@@ -527,8 +620,12 @@ def scoring_schema(program_slugs: list[str]) -> dict:
                 # out of the decision this whole list exists to serve.
                 "type": "integer",
                 "description": "Whole WORKING HOURS for a competitive application. Always "
-                               "required — estimate from the ask and the award size if the "
-                               "page is thin. Never omit or return null.",
+                               "required. Anchor to what the page says the application "
+                               "REQUIRES (LOI-only ~2-4h; standard proposal ~6-10h; proposal "
+                               "plus audited financials/board resolution/letters of support "
+                               "~15-25h; multiple heavy attachments or multi-stage review "
+                               "~30h+), not to the award size or the funder's reputation. "
+                               "Never omit or return null.",
             },
             "application_lead_time_days": {
                 "type": ["integer", "null"],
@@ -543,7 +640,11 @@ def scoring_schema(program_slugs: list[str]) -> dict:
                 "description": (
                     "Your estimate of days from SUBMITTING to the money reaching the "
                     "bank — review cycle plus disbursement. A judgement, not a quote. "
-                    "Null if the page gives nothing to go on."
+                    "NULL unless the page states something concrete to reason from (a "
+                    "notification date, a stated review-cycle length, a disbursement "
+                    "schedule). Most pages state nothing here — null is the common, "
+                    "correct answer, not a fallback for a hard case. Do not estimate "
+                    "from general knowledge of how grants usually work."
                 ),
             },
 
@@ -799,12 +900,19 @@ def _first_json(response) -> dict:
 
 def triage(candidate: RawCandidate, budget: Budget,
            cfg: Config) -> tuple[bool, str]:
-    """Binary relevant/not. Cheap model, capped text, no thinking.
+    """Binary relevant/not. Cheap model, capped text, no thinking by default.
 
     `cfg` is required, and used to be `Config | None = None` falling back to a module
     constant that this change deleted — so the documented call shape was a `NameError`
     waiting for its first caller. The line below already dereferenced `cfg.triage_model`
     unconditionally, so the optional branch could never have worked anyway.
+
+    `cfg.triage_effort` is opt-in reasoning depth for this tier, and it stays opt-in
+    on purpose: the whole point of triage is a cheap, fast yes/no, and turning on
+    thinking by default would undo that for everyone to serve the minority who
+    deliberately pick a stronger triage model. Silently a no-op — not an error — on
+    Haiku, the recommended and default choice here, which cannot take an effort level
+    at all (`_model_supports_effort`); the picker in Settings says so.
     """
     system = org_context(cfg) + _TRIAGE_RULES
     body = _text_block(
@@ -814,14 +922,24 @@ def triage(candidate: RawCandidate, budget: Budget,
         f"{candidate.text[:TRIAGE_TEXT_CAP]}"
     )
     model = cfg.triage_model or TRIAGE_MODEL
-    budget.check(model, _estimate_tokens(system + body), TRIAGE_MAX_TOKENS)
+    effort = cfg.triage_effort if cfg.triage_effort in EFFORT_IDS else ""
+    thinking_on = bool(effort) and _model_supports_effort(model)
+    max_tokens = TRIAGE_MAX_TOKENS_WITH_THINKING if thinking_on else TRIAGE_MAX_TOKENS
+    budget.check(model, _estimate_tokens(system + body), max_tokens)
+
+    kwargs: dict = {
+        "output_config": {"format": {"type": "json_schema", "schema": TRIAGE_SCHEMA}},
+    }
+    if thinking_on:
+        kwargs["thinking"] = {"type": "adaptive"}
+        kwargs["output_config"]["effort"] = effort
 
     resp = _client().messages.create(
         model=api_model(model),
-        max_tokens=TRIAGE_MAX_TOKENS,
+        max_tokens=max_tokens,
         system=system,
         messages=[{"role": "user", "content": body}],
-        output_config={"format": {"type": "json_schema", "schema": TRIAGE_SCHEMA}},
+        **kwargs,
     )
     cost = budget.record(model, resp.usage.input_tokens, resp.usage.output_tokens)
     data = _first_json(resp)
@@ -834,7 +952,17 @@ def triage(candidate: RawCandidate, budget: Budget,
 
 def score_one(candidate: RawCandidate, source: Source, cfg: Config,
               budget: Budget) -> Opportunity:
-    """Full score + rationale. The system prompt is cached across candidates."""
+    """Full score + rationale. The system prompt is cached across candidates.
+
+    `cfg.scoring_effort` replaces what used to be a hardcoded `"medium"` — still the
+    default when unset. Thinking and effort are both skipped when the chosen model is
+    Haiku: MODEL_CHOICES[3] genuinely offers Haiku as a scoring model ("cheapest, but
+    scoring is the judgement you are actually paying for"), and this call used to send
+    `thinking={"type": "adaptive"}` unconditionally — which is a live 400 on Haiku, not
+    a documented gap (`_model_supports_effort`). Before this fix, picking Haiku here
+    made every scoring call in the run fail and the run abort once
+    `CONSECUTIVE_ERROR_LIMIT` was reached, regardless of anything to do with effort.
+    """
     system = org_context(cfg) + _SCORING_RULES
     body = _text_block(
         f"Award floor for this run: ${cfg.min_award:,}\n"
@@ -855,17 +983,21 @@ def score_one(candidate: RawCandidate, source: Source, cfg: Config,
         # Worth caching: the same prompt is reused across every candidate this run.
         system_block["cache_control"] = {"type": "ephemeral"}
 
+    output_config: dict = {
+        "format": {"type": "json_schema", "schema": scoring_schema(cfg.programs_active)},
+    }
+    kwargs: dict = {"output_config": output_config}
+    if _model_supports_effort(model):
+        kwargs["thinking"] = {"type": "adaptive"}
+        effort = cfg.scoring_effort if cfg.scoring_effort in EFFORT_IDS else ""
+        output_config["effort"] = effort or "medium"
+
     resp = _client().messages.create(
         model=api_model(model),
         max_tokens=SCORING_MAX_TOKENS,
         system=[system_block],
         messages=[{"role": "user", "content": body}],
-        thinking={"type": "adaptive"},
-        output_config={
-            "format": {"type": "json_schema",
-                       "schema": scoring_schema(cfg.programs_active)},
-            "effort": "medium",
-        },
+        **kwargs,
     )
     cost = budget.record(model, resp.usage.input_tokens, resp.usage.output_tokens)
     data = _first_json(resp)
@@ -989,6 +1121,7 @@ def score_one(candidate: RawCandidate, source: Source, cfg: Config,
         timing_score=parts.timing,
         score_rationale=rationale,
         source_url=candidate.source_url,
+        apply_url=candidate.apply_url,
         verified=True,
         needs_human_check=needs_check,
         fetched_at=datetime.now(timezone.utc),

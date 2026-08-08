@@ -50,7 +50,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from agent.models import MAX_REJECTS
-from agent.score import MODEL_CHOICES, PRICING, SCORING_MODEL, TRIAGE_MODEL
+from agent.score import (EFFORT_CHOICES, EFFORT_IDS, MODEL_CHOICES, PRICING,
+                         SCORING_MODEL, TRIAGE_MODEL)
 from . import archive, auth, export, repo, scheduler, secrets
 from .db import (DEFAULT_ORG_ID, SECTORS, InviteError, create_invite, import_starter_list,
                  init_db, list_invites, month_key, org_for_user, org_members, org_owner,
@@ -111,6 +112,13 @@ class SettingsIn(BaseModel):
     # KeyError inside the run rather than here, which is the worst place to find out.
     triage_model: str | None = Field(None, max_length=80)
     scoring_model: str | None = Field(None, max_length=80)
+    # The reasoning-depth dial for each tier, independent of the model above.
+    # Validated against EFFORT_IDS below the same way the model ids are.
+    triage_effort: str | None = Field(None, max_length=20)
+    scoring_effort: str | None = Field(None, max_length=20)
+    # Spend the whole budget instead of stopping at max_opportunities. See
+    # agent/config.py: Config.ultra_mode.
+    ultra_mode: bool | None = None
     org_name: str | None = Field(None, max_length=200)
     org_location: str | None = Field(None, max_length=200)
     # Hours this org can spend on one application. Decides 25 of the 100 scoring points
@@ -282,6 +290,14 @@ def write_settings(body: SettingsIn, org: str = Depends(current_org)) -> dict:
             raise HTTPException(
                 400, f"{chosen} is not a model Fundworthy knows the price of, so it "
                      "cannot be kept inside your spending limit.")
+    # An effort id the API doesn't offer would reach the Anthropic call and 400 out
+    # every triage or scoring request in the run — caught here instead, the same way
+    # an unpriced model is.
+    for field_name in ("triage_effort", "scoring_effort"):
+        chosen = changes.get(field_name)
+        if chosen and chosen not in EFFORT_IDS:
+            raise HTTPException(
+                400, f"{chosen!r} is not an effort level Fundworthy offers.")
     with session() as conn:
         settings = repo.update_settings(conn, changes, org_id=org)
     # Turning sharing on is what schedules the reachability checks. Nothing this org
@@ -867,6 +883,10 @@ def state(org: str = Depends(current_org)) -> dict:
             # and a model offered here with no PRICING entry would abort a run.
             "model_choices": MODEL_CHOICES,
             "model_defaults": {"2": TRIAGE_MODEL, "3": SCORING_MODEL},
+            # Same reasoning as model_choices above: the picker's options come from
+            # the pipeline, so a level Fundworthy doesn't actually support can never
+            # be offered in the UI in the first place.
+            "effort_choices": EFFORT_CHOICES,
             "programs": repo.list_programs(conn, org_id=org),
             "funders": repo.list_funders(conn, org_id=org),
             "month": month_key(),

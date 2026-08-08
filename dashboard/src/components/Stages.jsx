@@ -57,7 +57,7 @@ const STAGES = [
 
 export default function Stages({
   run, isRunning, cap = 6, settings = {}, choices = {}, defaults = {},
-  logOpen, onToggleLog, onChange,
+  effortChoices = [], logOpen, onToggleLog, onChange,
 }) {
   const [open, setOpen] = useState(null);
   const [picking, setPicking] = useState(null);
@@ -66,6 +66,10 @@ export default function Stages({
   const chosen = {
     2: settings.triage_model || defaults["2"],
     3: settings.scoring_model || defaults["3"],
+  };
+  const chosenEffort = {
+    2: settings.triage_effort || "",
+    3: settings.scoring_effort || "",
   };
   const labelFor = (n) =>
     (choices[n] || []).find((c) => c.id === chosen[n])?.label
@@ -233,13 +237,21 @@ export default function Stages({
         current={picking ? chosen[picking.n] : null}
         // Rough, and labelled as rough. The honest number is what the last run cost;
         // scaling it by the price ratio is the only forecast available before a run and
-        // is far more use than no number at all when Opus is five times Sonnet.
+        // is far more use than no number at all when Opus costs more than Sonnet.
         lastCost={picking ? (cost[String(picking.n)] ?? 0) : 0}
+        effortChoices={effortChoices}
+        currentEffort={picking ? chosenEffort[picking.n] : ""}
         onClose={() => setPicking(null)}
         onPick={async (id) => {
           const n = picking.n;
           setPicking(null);
           await api.settings.save(n === 2 ? { triage_model: id } : { scoring_model: id });
+          await onChange?.();
+        }}
+        onPickEffort={async (id) => {
+          const n = picking.n;
+          await api.settings.save(
+            n === 2 ? { triage_effort: id } : { scoring_effort: id });
           await onChange?.();
         }}
       />

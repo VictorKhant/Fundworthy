@@ -28,7 +28,10 @@ const BLURB = {
    + "fewest pages and it is the judgement you are paying for.",
 };
 
-export default function ModelPicker({ stage, choices, current, lastCost, onClose, onPick }) {
+export default function ModelPicker({
+  stage, choices, current, lastCost, effortChoices = [], currentEffort = "",
+  onClose, onPick, onPickEffort,
+}) {
   const panel = useRef(null);
   const returnTo = useRef(null);
 
@@ -111,6 +114,47 @@ export default function ModelPicker({ stage, choices, current, lastCost, onClose
           })}
         </ul>
 
+        {/* How hard the chosen model thinks before it answers — a separate dial from
+            *which* model runs the step. Haiku cannot take an effort level at all (a
+            live 400, not a preference), so rather than offer a control that would
+            break the very next search, the section explains why it is missing
+            instead of rendering broken radios. */}
+        {current && current.includes("haiku") ? (
+          <p className="muted small modelpicker-effort-note">
+            Haiku does not support a reasoning-depth setting — pick Sonnet or Opus
+            above to unlock it.
+          </p>
+        ) : effortChoices.length > 0 && (
+          <div className="modelpicker-effort">
+            <h3 className="modelpicker-effort-heading">How hard should it think?</h3>
+            <ul className="modellist modellist-compact" role="radiogroup"
+                aria-label="Reasoning effort">
+              {effortChoices.map((c) => {
+                const mine = c.id === (currentEffort || "");
+                return (
+                  <li key={c.id || "default"}>
+                    <button
+                      type="button"
+                      role="radio"
+                      className={`modelopt ${mine ? "on" : ""}`}
+                      onClick={() => !mine && onPickEffort?.(c.id)}
+                      aria-checked={mine}
+                    >
+                      <span className="modelopt-radio" aria-hidden="true" />
+                      <span className="modelopt-body">
+                        <span className="modelopt-head">
+                          <span className="modelopt-name">{c.label}</span>
+                        </span>
+                        <span className="modelopt-note">{c.note}</span>
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+
         {/* Where the other providers come from. It points at a panel that exists and
             currently has one live provider on it — which is the point: the line is not a
             promise, it is a route to the place the answer will be. */}
@@ -145,5 +189,7 @@ export default function ModelPicker({ stage, choices, current, lastCost, onClose
 const RATES = {
   "anthropic:claude-haiku-4-5": 2.0,
   "anthropic:claude-sonnet-4-6": 6.0,
-  "anthropic:claude-opus-4-1": 30.0,
+  // Opus 5 is $5/$25 per Mtok against Sonnet's $3/$15 — a consistent ~1.67x on both
+  // input and output, not the ~5x the old (now-retired) claude-opus-4-1 was.
+  "anthropic:claude-opus-5": 10.0,
 };

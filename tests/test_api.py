@@ -90,6 +90,25 @@ def test_out_of_range_settings_are_rejected(client):
     assert client.put("/api/settings", json={"max_opportunities": 0}).status_code == 422
 
 
+def test_effort_and_ultra_mode_settings_round_trip(client):
+    r = client.put("/api/settings", json={
+        "triage_effort": "high", "scoring_effort": "max", "ultra_mode": True,
+    })
+    assert r.status_code == 200
+    s = r.json()["settings"]
+    assert s["triage_effort"] == "high"
+    assert s["scoring_effort"] == "max"
+    assert s["ultra_mode"] is True
+
+
+def test_an_effort_level_fundworthy_does_not_offer_is_rejected(client):
+    """The same discipline as an unpriced model — caught here, not as a 400 from
+    Anthropic on the first candidate of a live run."""
+    r = client.put("/api/settings", json={"scoring_effort": "ludicrous"})
+    assert r.status_code == 400
+    assert "ludicrous" in r.json()["detail"]
+
+
 # --- the API key: the tests that matter ---------------------------------------
 
 def test_api_key_is_never_returned_by_any_endpoint(client):
