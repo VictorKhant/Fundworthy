@@ -672,19 +672,22 @@ def test_a_deploy_pauses_new_searches_rather_than_killing_them(db, monkeypatch):
     assert draining() is False
 
 
-def test_the_pipeline_salvages_what_it_scored_when_told_to_stop():
-    """SIGTERM used to kill the process where it stood: the salvage block never ran and
-    every scored result — plus the credit spent on it — was lost. It is now an ordinary
-    exception, so the existing partial-results path catches it."""
+def test_a_signal_sets_a_flag_rather_than_raising_from_the_handler():
+    """SIGTERM used to raise `RunInterrupted` directly from the signal handler. That is
+    unsafe under asyncio specifically — see `test_a_signal_during_an_async_crawl_no_longer_
+    crashes_the_process` below for the real failure this caused — so the handler now only
+    sets a flag, which is safe from any context a signal can land in."""
     import signal
 
-    from agent.run import RunInterrupted, _install_stop_handler
+    import agent.run as runmod
 
-    _install_stop_handler()
+    runmod._install_stop_handler()
+    runmod._stop_requested = False
     try:
-        with pytest.raises(RunInterrupted):
-            signal.raise_signal(signal.SIGTERM)
+        signal.raise_signal(signal.SIGTERM)
+        assert runmod.stop_requested() is True
     finally:
+        runmod._stop_requested = False
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
 
 
@@ -694,6 +697,54 @@ def test_an_interrupted_run_is_catchable_as_an_ordinary_exception():
     from agent.run import RunInterrupted
 
     assert issubclass(RunInterrupted, Exception)
+
+
+def test_a_signal_during_an_async_crawl_no_longer_crashes_the_process():
+    """The regression this whole mechanism exists to prevent, reproduced directly.
+
+    Raising `RunInterrupted` from inside a raw `signal.signal()` handler is unsafe
+    specifically when the signal arrives while the asyncio event loop's own selector is
+    blocked on I/O — which is most of a real crawl's wall-clock time. The exception then
+    unwinds the event loop's own internal frame, not any particular coroutine's, and blows
+    straight out of `asyncio.run()` past every try/except in agent/run.py. Confirmed live
+    against a real running search on 2026-08-07: SIGTERM to the subprocess produced a bare
+    traceback and `exit 1`, not the documented `PARTIAL` salvage. This test reproduces that
+    exact shape (a signal arriving mid-`await`) without needing a real subprocess, and
+    asserts the flag-based handler survives it cleanly."""
+    import asyncio
+    import signal
+    import threading
+    import time
+
+    import agent.run as runmod
+
+    async def crawl_like_thing():
+        await asyncio.sleep(0.2)
+
+    async def main_like_thing():
+        runmod._install_stop_handler()
+        try:
+            await crawl_like_thing()
+            if runmod.stop_requested():
+                raise runmod.RunInterrupted("stopped by signal")
+        except Exception as exc:  # the same clause main_async() uses
+            assert isinstance(exc, runmod.RunInterrupted)
+            return "salvaged"
+        return "completed normally"
+
+    def send_signal_from_another_thread():
+        time.sleep(0.05)
+        signal.raise_signal(signal.SIGTERM)
+
+    runmod._stop_requested = False
+    threading.Thread(target=send_signal_from_another_thread, daemon=True).start()
+    try:
+        result = asyncio.run(main_like_thing())
+    finally:
+        runmod._stop_requested = False
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+
+    assert result == "salvaged"
 
 
 def test_there_is_no_daily_run_limit_by_default(db, monkeypatch):
@@ -840,6 +891,102 @@ def test_the_federal_database_is_its_own_list(db):
     assert all(s.adapter is None for s in get("san-diego").sources)
 
 
+def test_removing_a_starter_list_takes_back_exactly_what_it_added(db):
+    """The reverse of import — a card that can add 34 funders in one click has to be
+    able to take the same 34 back, or "remove from my list" only works one funder at
+    a time for the exact rows a bulk action put there."""
+    from app.db import import_starter_list, remove_starter_list
+
+    with session(db) as conn:
+        conn.execute("DELETE FROM funders WHERE org_id=?", (B,))
+        added = import_starter_list(conn, "san-diego", B)
+        assert added > 40
+
+        removed = remove_starter_list(conn, "san-diego", B)
+        assert removed == added
+        assert len(repo.list_funders(conn, org_id=B)) == 0
+
+
+def test_removing_does_not_touch_a_funder_added_by_hand(db):
+    """"Take San Diego funders off my list" must not also take off the one the org
+    typed in themselves — they are not part of what the card added."""
+    from app.db import import_starter_list, remove_starter_list
+
+    with session(db) as conn:
+        conn.execute("DELETE FROM funders WHERE org_id=?", (B,))
+        import_starter_list(conn, "san-diego", B)
+        repo.create_funder(conn, {"name": "A Funder We Found Ourselves",
+                                  "url": "https://example.invalid"}, org_id=B)
+
+        remove_starter_list(conn, "san-diego", B)
+
+        remaining = repo.list_funders(conn, org_id=B)
+        assert len(remaining) == 1
+        assert remaining[0]["name"] == "A Funder We Found Ourselves"
+
+
+def test_removing_a_starter_list_still_removes_a_funder_the_org_edited(db):
+    """A funder's identity is its `(org_id, id)` primary key, computed once at import
+    from name+url — not a stored "which list" column that editing could drift from.
+    Editing a starter funder's notes afterwards must not make it survive "remove this
+    whole list", or the card's own count stops matching what removing it actually
+    does."""
+    from app.db import import_starter_list, remove_starter_list
+
+    with session(db) as conn:
+        conn.execute("DELETE FROM funders WHERE org_id=?", (B,))
+        import_starter_list(conn, "san-diego", B)
+        victim = repo.list_funders(conn, org_id=B)[0]
+        repo.update_funder(conn, victim["id"], {"notes": "edited by hand"}, org_id=B)
+
+        remove_starter_list(conn, "san-diego", B)
+
+        assert repo.get_funder(conn, victim["id"], org_id=B) is None
+
+
+def test_removing_is_scoped_to_your_own_org(db):
+    from app.db import import_starter_list, remove_starter_list
+
+    with session(db) as conn:
+        conn.execute("DELETE FROM funders WHERE org_id=?", (B,))
+        # A is the pre-seeded default org — it may already carry "national" from
+        # first-boot seeding, so the invariant to check is "unaffected by B", not a
+        # specific count.
+        import_starter_list(conn, "national", A)
+        before_a = len(repo.list_funders(conn, org_id=A))
+
+        import_starter_list(conn, "national", B)
+        remove_starter_list(conn, "national", B)
+
+        assert len(repo.list_funders(conn, org_id=B)) == 0
+        assert len(repo.list_funders(conn, org_id=A)) == before_a, (
+            "removing one org's copy must not touch another org's"
+        )
+
+
+def test_removing_an_unknown_list_raises_instead_of_silently_doing_nothing(db):
+    from app.db import remove_starter_list
+
+    with session(db) as conn, pytest.raises(ValueError):
+        remove_starter_list(conn, "not-a-real-list", B)
+
+
+def test_an_api_backed_list_is_marked_as_a_database_not_a_funder_count(db):
+    """Federal grants and California state grants each hold exactly one `Source` row
+    in the registry — one adapter, not one funder — so "1 funder" on that card would
+    tell a nonprofit a live nationwide search engine is a single grantmaker."""
+    from agent.directory import catalogue, get
+
+    assert get("national").is_database is True
+    assert get("california").is_database is True
+    assert get("san-diego").is_database is False
+
+    by_key = {entry["key"]: entry for entry in catalogue()}
+    assert by_key["national"]["is_database"] is True
+    assert by_key["national"]["count"] == 1
+    assert by_key["san-diego"]["is_database"] is False
+
+
 def test_importing_is_scoped_to_your_own_org(db):
     from app.db import import_starter_list
 
@@ -876,6 +1023,79 @@ def test_the_starter_lists_include_the_grant_databases(db):
         adapters = {f["adapter"] for f in repo.list_funders(conn, org_id=newcomer)}
 
     assert {"grants_gov", "ca_grants_portal"} <= adapters
+
+
+def test_the_new_ca_starter_lists_do_not_collide_with_san_diego(db):
+    """`sd_funders.py` already used `sector="community"` on six San Diego entries
+    (Imperial Valley Community Foundation, San Diego Pride, and others) before the
+    California family/community/health foundation lists existed. The new lists were
+    first written with the exact same sector string and would have both pulled those
+    six out of "San Diego funders" and into a card explicitly described as "outside San
+    Diego" — caught before it shipped by checking the lists share no funder. Each new
+    list uses its own sector tag (`family_foundation` / `community_foundation` /
+    `health_conversion`), distinct from the pre-existing `"community"` tag, specifically
+    to avoid this — Grossmont Healthcare District (San Diego, sector="government") is
+    the same check in the opposite direction: the health list's two healthcare
+    districts must not collide with it either."""
+    from agent.directory import get
+
+    keys = ("ca-family-foundations", "ca-community-foundations", "ca-health-foundations")
+    sd_funders = {s.funder for s in get("san-diego").sources}
+    lists = {key: {s.funder for s in get(key).sources} for key in keys}
+
+    for key, funders in lists.items():
+        assert not (sd_funders & funders), key
+    for a, b in [(keys[0], keys[1]), (keys[0], keys[2]), (keys[1], keys[2])]:
+        assert not (lists[a] & lists[b]), (a, b)
+
+    # The six San Diego entries that happen to carry the pre-existing "community" sector
+    # tag must still be in the San Diego list, not swallowed by the new predicate.
+    assert "San Diego Pride" in sd_funders
+    assert "Imperial Valley Community Foundation" in sd_funders
+    # Same check in the other direction for the healthcare-district pair.
+    assert "Grossmont Healthcare District" in sd_funders
+
+
+def test_the_new_ca_starter_lists_are_real_hand_researched_pages(db):
+    """The same accuracy bar as sd_funders.py, checked structurally: every entry has a
+    real fetchable URL, a confirmed confidence level (nothing guessed), and non-empty
+    notes carrying the verbatim eligibility quote — not a bare registry row with a name
+    and nothing backing it."""
+    from agent.directory import get
+    from agent.sources import Confidence
+
+    for key in ("ca-family-foundations", "ca-community-foundations",
+                "ca-health-foundations"):
+        sources = get(key).sources
+        assert sources, f"{key} has no sources"
+        for s in sources:
+            assert s.url and s.url.startswith("https://"), s.funder
+            assert s.confidence == Confidence.CONFIRMED, s.funder
+            assert s.notes, s.funder
+            assert s.adapter is None, s.funder
+
+
+def test_the_new_ca_starter_lists_can_be_imported_and_removed(db):
+    """One representative list (family foundations) exercises the same generic
+    `import_starter_list`/`remove_starter_list` path every key uses — the mechanism
+    doesn't vary by list. Org B, not a fresh `org_for_user` uid — the fixture's
+    `seed_starter_funders` already imports every `STARTER_LISTS` entry, including the
+    new ones, into the default org, and a brand-new uid's first sign-in adopts that org
+    (§ CLAUDE.md). B is the one org the fixture leaves unseeded."""
+    from agent.directory import get
+    from app.db import import_starter_list, remove_starter_list
+
+    with session(db) as conn:
+        added = import_starter_list(conn, "ca-family-foundations", org_id=B)
+        assert added == len(get("ca-family-foundations").sources)
+
+        funders = {f["name"] for f in repo.list_funders(conn, org_id=B)}
+        assert "The Ahmanson Foundation" in funders
+
+        removed = remove_starter_list(conn, "ca-family-foundations", org_id=B)
+        assert removed == added
+        funders = {f["name"] for f in repo.list_funders(conn, org_id=B)}
+        assert "The Ahmanson Foundation" not in funders
 
 
 # --- leaving an organization --------------------------------------------------

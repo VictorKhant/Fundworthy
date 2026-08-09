@@ -45,6 +45,10 @@ const STOP_REASONS = {
   stopped_by_user: { ok: true, text: "You stopped it." },
   error: { ok: false, text: "Something went wrong — the log below says what." },
   partial: { ok: false, text: "Something broke part-way through. What it had already found is above." },
+  // Either the Stop button or a server update mid-search — the pipeline itself cannot
+  // tell which, since both arrive as the same signal. Not an error: what it had already
+  // found (and paid for) is kept, not thrown away.
+  interrupted: { ok: true, text: "Stopped early — what it had already found is above." },
   // The two that used to be indistinguishable from a quiet week. Both mean the search
   // could not have worked, and both name the one thing to change.
   no_api_key: {
@@ -405,25 +409,48 @@ export default function Dashboard({ state, onChange, onGoto }) {
         </div>
       )}
 
-      {/* How the last search ended, against the list it explains.
-          "Checked every funder on your list" and "there was no API key to read with" are
-          completely different answers to *why is this list short?*, and only one of them
-          is a problem — so the marker's colour says which. */}
+      {/* How the last search ended, against the list it explains — combined with which
+          funders (if any) it could not reach, because they are both answers to the same
+          question somebody asks at this list: "why is this short?" Two separate boxes
+          used to give two separate partial answers; this is the one place that question
+          gets a complete one. The unreachable-funders half used to live inside
+          StatusStrip, rendered directly under the status bar — which put it between
+          "Adjust search settings" and the panel that button opens, so clicking it looked
+          like it had done nothing. "Checked every funder on your list" and "there was no
+          API key to read with" are completely different answers to *why is this list
+          short?*, and only one of them is a problem — so the marker's colour says
+          which, and a funder that could not be reached counts as needing attention too. */}
       {run?.stop_reason && (() => {
         const outcome = STOP_REASONS[run.stop_reason];
+        // One broken funder and a genuinely quiet week both produce a short list.
+        // Saying which is the difference between a list they can trust and one they
+        // have to re-check by hand.
+        const broken = (run.source_health || []).filter(
+          (h) => h.status === "unreachable" || h.status === "unparseable"
+        );
+        const attention = (outcome && !outcome.ok) || broken.length > 0;
         return (
-          <p className={`run-outcome ${outcome && !outcome.ok ? "attention" : ""}`}>
+          <div className={`run-outcome ${attention ? "attention" : ""}`}>
             <span className="run-outcome-dot" aria-hidden="true" />
-            <span>
-              {outcome ? outcome.text : run.stop_reason}
-              {run.duplicates_skipped > 0 && (
-                <span className="muted">
-                  {" "}Skipped {run.duplicates_skipped} you have already seen this month,
-                  for free.
-                </span>
+            <div>
+              <p className="run-outcome-line">
+                {outcome ? outcome.text : run.stop_reason}
+                {run.duplicates_skipped > 0 && (
+                  <span className="muted">
+                    {" "}Skipped {run.duplicates_skipped} you have already seen this
+                    month, for free.
+                  </span>
+                )}
+              </p>
+              {broken.length > 0 && (
+                <p className="run-outcome-broken">
+                  Some funders could not be checked this time, so this list may be short
+                  for that reason rather than because there was nothing to find:{" "}
+                  {broken.map((h) => h.funder).join(", ")}.
+                </p>
               )}
-            </span>
-          </p>
+            </div>
+          </div>
         );
       })()}
 

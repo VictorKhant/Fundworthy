@@ -48,6 +48,7 @@ function MarketCard({ icon, name, meta, body, action, extra, done }) {
 }
 
 function StarterLists({ onChange }) {
+  const [dialog, ask] = useConfirm();
   const [lists, setLists] = useState(null);
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
@@ -76,8 +77,41 @@ function StarterLists({ onChange }) {
     }
   }
 
+  // The exact reverse of `add`, and it earns a confirm dialog the way `add` never
+  // needed one: adding is undoable by removing, but removing a whole city in one
+  // click, with no "are you sure", is the kind of bulk action R10's confirm-dialog
+  // rule exists for. `SharedFunders.report` below is the same pattern.
+  async function remove(l) {
+    const answer = await ask({
+      icon: "bin",
+      tone: "clay",
+      title: `Remove ${l.count} ${l.count === 1 ? "funder" : "funders"} from "${l.name}"?`,
+      body: "Every funder this list added to yours comes off your list — including any "
+            + "you have since paused, blocked, or edited.",
+      points: [
+        "A funder you added yourself, separately, is never touched.",
+        "You can add this list again afterwards — it re-checks each funder against "
+          + "your current remove list, the same as the first time.",
+      ],
+      confirmLabel: "Remove them",
+    });
+    if (!answer) return;
+    setBusy(l.key);
+    setError(null);
+    try {
+      await api.directory.remove(l.key);
+      await load();
+      await onChange();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   return (
     <>
+      {dialog}
       {error && <div className="notice error">{error}</div>}
       {!lists && (
         <p className="loading-line">
@@ -92,13 +126,24 @@ function StarterLists({ onChange }) {
             key={l.key}
             icon="pin"
             name={l.name}
-            meta={`${l.count} ${l.count === 1 ? "funder" : "funders"}`}
+            // A funder count promises one page per row; an API adapter like Grants.gov
+            // or the CA Grants Portal collapses a live search into one registry entry
+            // the same way one funder's page does, and "1 funder" reads as though
+            // that database holds a single grant. `is_database` says what it actually
+            // is instead.
+            meta={l.is_database ? "Database" : `${l.count} ${l.count === 1 ? "funder" : "funders"}`}
             body={l.description}
             done={l.imported >= l.count}
             action={l.imported >= l.count ? (
-              <span className="marketcard-on">
-                <Icon name="check" size={12} /> On your list
-              </span>
+              <>
+                <span className="marketcard-on">
+                  <Icon name="check" size={12} /> On your list
+                </span>
+                <Busy className="text marketcard-remove" busy={busy === l.key}
+                      busyLabel="Removing" onClick={() => remove(l)}>
+                  Remove
+                </Busy>
+              </>
             ) : (
               <Busy className="pill primary" busy={busy === l.key} busyLabel="Adding"
                     onClick={() => add(l.key)}>
@@ -392,11 +437,11 @@ function Marketplace({ state, onChange, onAddFunder }) {
         <div className="segmented" role="tablist" aria-label="Where to look">
           <button role="tab" aria-selected={tab === "near"}
                   onClick={() => setTab("near")}>
-            Near you <Count n={counts.near} />
+            <Icon name="pin" size={13} /> Near you <Count n={counts.near} />
           </button>
           <button role="tab" aria-selected={tab === "shared"}
                   onClick={() => setTab("shared")}>
-            Shared <Count n={counts.shared} />
+            <Icon name="globe" size={13} /> Shared <Count n={counts.shared} />
           </button>
         </div>
       </div>

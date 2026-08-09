@@ -290,6 +290,13 @@ class StopReason(str, Enum):
     DISABLED = "disabled"          # ENABLED=FALSE, exited at step 0
     ERROR = "error"
     PARTIAL = "partial"            # something broke mid-run; we wrote what we had
+    # A signal, not a failure — either the Stop button or a deploy restart, and the
+    # subprocess genuinely cannot tell which: both arrive as the same SIGTERM. Kept
+    # distinct from ERROR/PARTIAL so the outcome line does not read "something went
+    # wrong" about a search that was interrupted on purpose. RunManager.stop() still
+    # writes its own "You stopped it." when it wins the race (see app/runner.py:
+    # RunManager.stop), so INTERRUPTED is mainly what a deploy restart leaves behind.
+    INTERRUPTED = "interrupted"
     # The two ways a run is doomed before it starts, and they are separate reasons
     # because they have separate fixes. Both used to be discovered the expensive way:
     # with no key the crawl fetched every funder for five minutes and then scored

@@ -475,7 +475,8 @@ REMOVE_LIST_SEED: dict[str, str] = {
 }
 
 SECTORS = ("warm_partner", "foundation", "government", "arts_agency",
-           "intermediary", "corporate", "other")
+           "intermediary", "corporate", "community", "family_foundation",
+           "community_foundation", "health_conversion", "other")
 
 FUNDER_TYPES = ("private_foundation", "corporate", "community", "government",
                 "public_agency", "other", "unknown")
@@ -1552,6 +1553,42 @@ def import_starter_list(conn: sqlite3.Connection, key: str, org_id: str) -> int:
         added += cur.rowcount or 0
     log.info("org %s imported %d funder(s) from the %r list", org_id, added, key)
     return added
+
+
+def remove_starter_list(conn: sqlite3.Connection, key: str, org_id: str) -> int:
+    """The exact inverse of `import_starter_list`: delete every funder this org has
+    that belongs to list `key`. Returns how many were removed.
+
+    Membership is decided the same way import decides it — `_funder_id(s.funder,
+    s.url)` for each source the list currently holds — not by a stored "which list
+    did this come from" column, because a funder's identity already IS that
+    computation (it is also the funder table's primary key) and a second copy of it
+    would drift the moment `agent/sources.py` changes. This is deliberately not
+    scoped to `added_by='starter'`: if the org edited one of these after importing
+    it, "take this whole city off my list" should still take it, not leave an
+    orphan behind that the Discover page's own count now excludes.
+
+    Blocked funders from this list are already excluded — `import_starter_list`
+    never inserts them, so they were never counted as "imported" and are not part
+    of what this deletes either.
+    """
+    from agent.directory import get as get_list
+
+    lst = get_list(key)
+    if lst is None:
+        raise ValueError(f"no starter list called {key!r}")
+
+    ids = [_funder_id(s.funder, s.url) for s in lst.sources]
+    if not ids:
+        return 0
+    placeholders = ",".join("?" * len(ids))
+    cur = conn.execute(
+        f"DELETE FROM funders WHERE org_id=? AND id IN ({placeholders})",
+        (org_id, *ids),
+    )
+    removed = cur.rowcount or 0
+    log.info("org %s removed %d funder(s) that came from the %r list", org_id, removed, key)
+    return removed
 
 
 def seed_funders(conn: sqlite3.Connection, org_id: str = DEFAULT_ORG_ID) -> None:

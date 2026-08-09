@@ -109,6 +109,28 @@ def test_an_effort_level_fundworthy_does_not_offer_is_rejected(client):
     assert "ludicrous" in r.json()["detail"]
 
 
+def test_changing_the_monthly_limit_through_the_api_actually_persists(client):
+    # Regression test: `SettingsIn` had no `monthly_budget_usd` field, so Pydantic
+    # silently dropped it from the request body before `_set()` ever saw it — the same
+    # shape of bug as `test_blocking_a_funder_through_the_api_actually_persists` above.
+    # The Organization panel's "Change the monthly limit" dialog got a 200 back and
+    # closed as if it had saved; the figure on the meter never moved. This goes through
+    # the real HTTP layer, unlike a repo-level test, which would never have caught a
+    # gap in the request model.
+    r = client.put("/api/settings", json={"monthly_budget_usd": 37})
+    assert r.status_code == 200
+    assert r.json()["settings"]["monthly_budget_usd"] == 37
+
+    after = client.get("/api/settings").json()["settings"]
+    assert after["monthly_budget_usd"] == 37
+
+
+def test_the_monthly_limit_is_bounded(client):
+    assert client.put("/api/settings", json={"monthly_budget_usd": 0}).status_code == 422
+    assert client.put("/api/settings", json={"monthly_budget_usd": -5}).status_code == 422
+    assert client.put("/api/settings", json={"monthly_budget_usd": 5000}).status_code == 422
+
+
 # --- the API key: the tests that matter ---------------------------------------
 
 def test_api_key_is_never_returned_by_any_endpoint(client):

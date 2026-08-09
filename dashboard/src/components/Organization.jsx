@@ -29,11 +29,11 @@ function CapEditor({ cap, onSaved }) {
 
   useEffect(() => { setValue(String(cap)); }, [cap]);
 
-  async function save(amount) {
+  async function save() {
     setBusy(true);
     setError(null);
     try {
-      await api.settings.save({ monthly_budget_usd: Number(amount) });
+      await api.settings.save({ monthly_budget_usd: Number(value) });
       setOpen(false);
       await onSaved();
     } catch (e) {
@@ -43,48 +43,67 @@ function CapEditor({ cap, onSaved }) {
     }
   }
 
+  function cancel() {
+    setValue(String(cap));
+    setError(null);
+    setOpen(false);
+  }
+
   if (!open) {
     return (
-      <button className="text small" onClick={() => setOpen(true)}>
-        Change the monthly limit
+      <button className="pill capedit-open" onClick={() => setOpen(true)}>
+        <Icon name="chart" size={14} /> Change the monthly limit
       </button>
     );
   }
 
   return (
-    <div className="capedit">
+    <div className="capedit-panel">
+      {/* Said up front rather than as a footnote: this limit is ours, and it is not the
+          only one. We can stop spending; we cannot stop Anthropic charging. */}
+      <p className="capedit-intro">
+        Fundworthy will not spend more than this in a month, whatever else is set. Your
+        own limit at Anthropic still applies on top.
+      </p>
+
       {/* Sized for the audience rather than for a round-numbers habit. This panel's own
           copy says a weekly search costs about a dollar, which makes $10 three months of
-          use — and $100 a number nobody reading this page should be nudged towards. */}
-      <div className="row">
+          use — and $100 a number nobody reading this page should be nudged towards.
+          Picking one only stages it — nothing saves until "Save the limit" below, so a
+          preset and a typed figure go through the exact same commit step instead of a
+          preset saving instantly while a typed number waits for a click. */}
+      <div className="capedit-presets">
         {[5, 12, 25, 50].map((amount) => (
-          <button key={amount} className={`pill ${Number(cap) === amount ? "on" : ""}`}
-                  disabled={busy} onClick={() => save(amount)}>
+          <button key={amount}
+                  className={`capedit-preset ${Number(value) === amount ? "on" : ""}`}
+                  disabled={busy} onClick={() => setValue(String(amount))}>
             ${amount}
           </button>
         ))}
       </div>
-      <div className="row">
-        <label className="field inline">
-          <span className="muted small">Or</span>
+
+      <div className="capedit-custom">
+        <span className="capedit-custom-label">Or type a limit</span>
+        <label className="capedit-amount">
+          <span className="capedit-currency" aria-hidden="true">$</span>
           <input type="number" min="1" max="500" step="1" value={value}
-                 onChange={(e) => setValue(e.target.value)} style={{ width: "6.5em" }} />
+                 disabled={busy}
+                 onChange={(e) => setValue(e.target.value)} />
+          <span className="muted small">per month</span>
         </label>
-        <Busy className="primary" busy={busy} busyLabel="Saving"
-              disabled={!value || Number(value) <= 0} onClick={() => save(value)}>
-          Save
-        </Busy>
-        <button className="text" onClick={() => setOpen(false)} disabled={busy}>
+      </div>
+
+      {error && <div className="notice error">{error}</div>}
+
+      <div className="capedit-actions">
+        <button className="text" onClick={cancel} disabled={busy}>
           Cancel
         </button>
+        <Busy className="pill primary" busy={busy} busyLabel="Saving"
+              disabled={!value || Number(value) <= 0} onClick={save}>
+          Save the limit
+        </Busy>
       </div>
-      {error && <div className="notice error">{error}</div>}
-      {/* Said plainly, because this limit is ours and it is not the only one. We can
-          stop spending; we cannot stop Anthropic charging. */}
-      <p className="muted small">
-        This is Fundworthy's own limit. Your Anthropic account has its own spending
-        limit on top of it, and that is the one that holds if anything here goes wrong.
-      </p>
     </div>
   );
 }

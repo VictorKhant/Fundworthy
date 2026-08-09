@@ -283,8 +283,30 @@ GOVERNMENT_SOURCES: list[Source] = [
 
 
 def _researched() -> list[Source]:
-    """The 44 researched funders. Imported lazily to keep this module import-light."""
+    """The 44 researched San Diego funders. Imported lazily to keep this module
+    import-light."""
     from .sd_funders import RESEARCHED_SOURCES
+
+    return RESEARCHED_SOURCES
+
+
+def _ca_family_foundations() -> list[Source]:
+    """5 researched California family foundations, outside San Diego."""
+    from .ca_family_foundations import RESEARCHED_SOURCES
+
+    return RESEARCHED_SOURCES
+
+
+def _ca_community_foundations() -> list[Source]:
+    """12 researched California community foundations, outside San Diego."""
+    from .ca_community_foundations import RESEARCHED_SOURCES
+
+    return RESEARCHED_SOURCES
+
+
+def _ca_health_foundations() -> list[Source]:
+    """6 researched California health foundations, outside San Diego."""
+    from .ca_health_foundations import RESEARCHED_SOURCES
 
     return RESEARCHED_SOURCES
 
@@ -295,7 +317,8 @@ def _researched() -> list[Source]:
 # priority — see agent/sd_funders.py for what replaced them as the actual target.
 ALL_SOURCES: list[Source] = (
     INDEXED_SOURCES + WARM_SOURCES + INTERMEDIARY_SOURCES + GOVERNMENT_SOURCES
-    + _researched()
+    + _researched() + _ca_family_foundations() + _ca_community_foundations()
+    + _ca_health_foundations()
 )
 
 

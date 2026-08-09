@@ -192,6 +192,46 @@ def test_one_bad_page_among_good_ones_does_not_stop_the_run(monkeypatch):
     assert run.rejected_by_filter.get("triage_error") == 1
 
 
+def test_a_signal_mid_scoring_keeps_what_was_already_scored(monkeypatch):
+    """`evaluate()`'s own regression test for the deploy-restart salvage path.
+
+    A stop request must not lose money already spent. It used to (see agent/run.py:
+    RunInterrupted's docstring) — a signal handler that raised directly could crash the
+    process before this loop's own results ever reached the caller. `evaluate()` now
+    checks `stop_requested()` between candidates and breaks cleanly, the same pattern as
+    the existing BudgetExceeded and target-met early exits below it, so whatever was
+    scored before the flag was set comes back from this call rather than being discarded
+    by an exception unwinding past it."""
+    run, cfg = _run(), _cfg()
+    calls = {"n": 0}
+
+    def fake_triage(candidate, budget, cfg):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            runmod._stop_requested = True
+        return True, "looks like a grant"
+
+    survivors = _survivors(10)
+    pages_by_url = {page.url: (page, source) for page, source in survivors}
+
+    def fake_score_one(candidate, source, cf, b):
+        page, src = pages_by_url[candidate.source_url]
+        return runmod._unscored(page, src, cf, "stubbed for the test")
+
+    monkeypatch.setattr(runmod, "triage", fake_triage)
+    monkeypatch.setattr(runmod, "score_one", fake_score_one)
+
+    try:
+        out = runmod.evaluate(survivors, cfg, run, Budget(ceiling_usd=1.0), use_llm=True)
+    finally:
+        runmod._stop_requested = False
+
+    assert calls["n"] == 3, "the loop kept going past the candidate that set the flag"
+    assert len(out) == 3, "the 3 already-scored opportunities must survive the stop"
+    assert run.stop_reason is StopReason.INTERRUPTED
+    assert any("Stopped early" in n and "3" in n for n in run.notes)
+
+
 def _crawl_with(monkeypatch, run, cfg, pages, adapter_rejects=()):
     """Drive the real `crawl()` over a fixed set of parsed pages from one indexed source."""
     import asyncio

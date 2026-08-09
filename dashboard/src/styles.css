@@ -482,6 +482,11 @@ button.text:hover:not(:disabled) { color: var(--accent-deep); }
 }
 .run-outcome.attention { border-left-color: var(--clay-deep); }
 .run-outcome.attention .run-outcome-dot { background: var(--clay-deep); }
+/* Two lines sharing one box and one dot — the outcome, then which funders (if any)
+   kept it from being the whole story. `.run-outcome` switched from a <p> to a <div>
+   to hold both without nesting a <p> inside a <p>. */
+.run-outcome-line { margin: 0; }
+.run-outcome-broken { margin: 6px 0 0; color: var(--muted); }
 
 /* The run's own notes. Clay-edged rather than accent-edged: what survives the filter in
    Dashboard.jsx is by definition something that wants a person, not a statistic. */
@@ -1945,6 +1950,12 @@ button.pager-arrow:disabled { opacity: .4; cursor: not-allowed; }
   display: inline-flex; align-items: center; gap: 5px;
   font-size: 12.5px; color: var(--accent-deep); font-weight: 500;
 }
+/* The reverse of "Add to my list" — sits beside "On your list" once a card is done,
+   quiet until hovered so the grid does not read as a row of delete buttons. Clay on
+   hover, same as the report control below: this is the one control on this card that
+   removes something in bulk. */
+.marketcard-remove { margin-left: 8px; font-size: 12.5px; color: var(--muted); }
+.marketcard-remove:hover:not(:disabled) { color: var(--clay-deep); }
 
 /* The §8 line, under the grid rather than above it. A reachability check is not
    research, and nothing on this page may imply that it is. */
@@ -2047,8 +2058,62 @@ button.iconbtn.danger:hover:not(:disabled) { background: var(--clay-soft); color
    glyph somebody presses again. */
 button.iconbtn.on { background: var(--accent-soft); color: var(--accent-deep); }
 
-.capedit { display: grid; gap: 8px; margin-top: 10px; }
-.capedit .field.inline { gap: 7px; margin: 0; }
+/* The button that opens the panel below — a pill with the chart glyph, not a bare text
+   link, so "change this" reads as a real control next to the meter it changes. */
+.capedit-open {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 9px 18px; font-size: 14px; margin-top: 10px;
+}
+.capedit-open svg { color: var(--fg); }
+
+/* The panel itself — sage-tinted so it reads as "the thing the meter above belongs to",
+   not a generic form dropped under it. Presets, a typed figure, Cancel/Save: one
+   pending value with one commit step, never a preset that saves on click while a typed
+   number waits for one. */
+.capedit-panel {
+  margin-top: 14px; padding: 26px 28px;
+  background: var(--accent-soft); border: 1px solid var(--accent-line);
+  border-radius: 18px;
+}
+.capedit-intro { margin: 0 0 20px; font-size: 15px; line-height: 1.5; color: var(--fg); }
+
+.capedit-presets { display: flex; gap: 12px; flex-wrap: wrap; margin: 0 0 22px; }
+.capedit-preset {
+  padding: 13px 22px; font-size: 16px; font-weight: 600;
+  border-radius: 999px; border: 1px solid var(--accent-line);
+  background: var(--card); color: var(--fg);
+}
+.capedit-preset:hover:not(:disabled) { border-color: var(--dash); }
+.capedit-preset.on {
+  background: var(--accent); border-color: var(--accent); color: var(--on-accent);
+}
+.capedit-preset.on:hover:not(:disabled) { background: var(--accent); border-color: var(--accent); }
+
+.capedit-custom { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.capedit-custom-label { font-size: 14.5px; font-weight: 600; color: var(--fg); }
+.capedit-amount {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 11px 18px; border-radius: 999px;
+  background: var(--card); border: 1px solid var(--accent-line);
+}
+.capedit-currency { color: var(--muted); font-size: 15px; }
+.capedit-amount input {
+  width: 4.5em; border: 0; padding: 0; font: inherit; font-size: 16px;
+  background: none; color: var(--fg);
+}
+.capedit-amount input:focus { outline: none; }
+/* Chrome/Safari's spinner arrows read as a stepper control, and this figure only ever
+   changes by being typed or by a preset — the arrows imply a UI this input doesn't
+   have. */
+.capedit-amount input::-webkit-outer-spin-button,
+.capedit-amount input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.capedit-amount input[type="number"] { -moz-appearance: textfield; }
+
+.capedit-actions {
+  display: flex; align-items: center; justify-content: flex-end; gap: 18px;
+  margin-top: 24px;
+}
+.capedit-actions .pill.primary { padding: 11px 22px; font-size: 14.5px; }
 
 @media (max-width: 620px) {
   /* 44px targets on touch. */
