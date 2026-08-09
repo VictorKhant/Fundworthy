@@ -122,6 +122,17 @@ const PATHS = {
   // raise, not a warning glyph. Kept apart from `sliders`, which is a control you tune,
   // not a number you read.
   chart: <path d="M3.5 12.5v-3M8 12.5V6M12.5 12.5V3.5" />,
+  // "Search automatically every week" (SearchSettings): a clock, for recurrence — not
+  // `chart`'s bars (a number you read) or `sliders` (the panel this glyph sits inside).
+  clock: (
+    <>
+      <circle cx="8" cy="8" r="5.6" />
+      <path d="M8 5v3.2l2.2 1.3" />
+    </>
+  ),
+  // "Spend the whole search budget / Ultra mode" (SearchSettings): a bolt, for the one
+  // switch that deliberately spends more than the others hold back.
+  zap: <path d="M9 2 4 9.5h3.3L6 14l6-7.5H8.7Z" />,
 };
 
 export default function Icon({ name, size = 16, width = 1.4 }) {

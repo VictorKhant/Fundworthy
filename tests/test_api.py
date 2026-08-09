@@ -23,8 +23,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tests.helpers import (seed_starter_funders,  # noqa: E402
                            seed_starter_programs)
 
-from app import secrets
-from app.db import DEFAULT_ORG_ID, init_db, session
+from app import bugreport, repo, secrets
+from app.db import DEFAULT_ORG_ID, ensure_org, init_db, session
 
 FAKE_KEY = "sk-ant-api03-THIS-IS-NOT-A-REAL-KEY-0000000000-4f2a"
 
@@ -1145,3 +1145,156 @@ def test_rejects_are_scoped_to_the_org_that_ran_the_search(client):
     run_id = _run_with_rejects(client)
     assert client.get(f"/api/runs/{run_id}/rejects").status_code == 200
     assert client.get("/api/runs/not-a-real-run/rejects").status_code == 404
+
+
+# --- bug reports ----------------------------------------------------------------
+#
+# Never a real network call. `bugreport.file_github_issue` is monkeypatched on the
+# module every test reaches through — `app.main.submit_bug_report` imports it fresh
+# (`from . import bugreport`) inside the handler on every request, the same pattern
+# `draft_program` uses for the assistant, so a patch applied before the request is
+# always the one the handler sees.
+
+def test_filing_a_bug_report_successfully(client, monkeypatch):
+    async def fake_file(title, body):
+        assert title == "The dashboard is blank"
+        assert "Nothing renders" in body
+        return {"issue_url": "https://github.com/example/fundworthy/issues/42",
+               "issue_number": 42}
+
+    monkeypatch.setattr(bugreport, "file_github_issue", fake_file)
+
+    r = client.post("/api/bug-report", json={
+        "title": "The dashboard is blank",
+        "description": "Nothing renders after signing in.",
+        "page": "/dashboard",
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["filed"] is True
+    assert body["issue_url"] == "https://github.com/example/fundworthy/issues/42"
+    assert body["issue_number"] == 42
+    assert body["report_id"]
+
+    with session() as conn:
+        row = conn.execute(
+            "SELECT * FROM bug_reports WHERE id=?", (body["report_id"],)).fetchone()
+    assert row is not None
+    assert row["github_issue_url"] == "https://github.com/example/fundworthy/issues/42"
+    assert row["github_issue_number"] == 42
+    assert row["error"] == ""
+
+
+def test_a_github_failure_still_keeps_the_report(client, monkeypatch):
+    async def fake_file(title, body):
+        raise bugreport.BugReportError("boom")
+
+    monkeypatch.setattr(bugreport, "file_github_issue", fake_file)
+
+    r = client.post("/api/bug-report", json={
+        "title": "Something broke",
+        "description": "It broke when I clicked Save.",
+    })
+    # Not a 500 — the report was saved locally even though auto-filing failed, which
+    # is the honest, non-crashing outcome the frontend renders a fallback for.
+    assert r.status_code == 200
+    body = r.json()
+    assert body["filed"] is False
+    assert body["error"] == "boom"
+    assert body["report_id"]
+
+    with session() as conn:
+        row = conn.execute(
+            "SELECT * FROM bug_reports WHERE id=?", (body["report_id"],)).fetchone()
+    assert row is not None, "the report is never lost, even when GitHub filing fails"
+    assert row["error"] == "boom"
+    assert row["github_issue_url"] is None
+
+
+def test_a_short_title_is_rejected(client):
+    r = client.post("/api/bug-report",
+                    json={"title": "ab", "description": "A real description."})
+    assert r.status_code == 422
+
+
+def test_an_empty_description_is_rejected(client):
+    r = client.post("/api/bug-report",
+                    json={"title": "A real title", "description": ""})
+    assert r.status_code == 422
+
+
+def test_reporting_is_capped_per_org_per_day(client, monkeypatch):
+    async def fake_file(title, body):
+        return {"issue_url": "https://github.com/example/fundworthy/issues/1",
+               "issue_number": 1}
+
+    monkeypatch.setattr(bugreport, "file_github_issue", fake_file)
+
+    for i in range(bugreport.MAX_REPORTS_PER_ORG_PER_DAY):
+        r = client.post("/api/bug-report", json={
+            "title": f"Bug number {i}", "description": "Same bug, another report."})
+        assert r.status_code == 200, r.json()
+
+    r = client.post("/api/bug-report", json={
+        "title": "One too many", "description": "This one should be refused."})
+    assert r.status_code == 429
+    assert "reported" in r.json()["detail"]
+
+
+def test_one_orgs_cap_does_not_block_another_orgs_reports(client, monkeypatch):
+    """Same rule as every other route in this app: one org's activity must not change
+    what another org sees or is allowed to do."""
+    other_org = "org_bugreport_isolation_test"
+    with session() as conn:
+        ensure_org(conn, other_org)
+        for i in range(bugreport.MAX_REPORTS_PER_ORG_PER_DAY):
+            repo.create_bug_report(
+                conn, org_id=other_org, title=f"Other org's bug {i}",
+                description="x", page="", reported_by="someone@other-org.example")
+
+    with session() as conn:
+        assert repo.count_recent_bug_reports(conn, org_id=other_org) == \
+            bugreport.MAX_REPORTS_PER_ORG_PER_DAY
+        # DEFAULT_ORG_ID — the org this test's client actually acts as, since sign-in
+        # is off — has not filed anything and is nowhere near its own cap.
+        assert repo.count_recent_bug_reports(conn, org_id=DEFAULT_ORG_ID) == 0
+
+    async def fake_file(title, body):
+        return {"issue_url": "https://github.com/example/fundworthy/issues/2",
+               "issue_number": 2}
+
+    monkeypatch.setattr(bugreport, "file_github_issue", fake_file)
+
+    r = client.post("/api/bug-report", json={
+        "title": "A fresh org, well under its own cap",
+        "description": "Should go through even though another org is capped.",
+    })
+    assert r.status_code == 200
+    assert r.json()["filed"] is True
+
+
+def test_a_malformed_success_response_degrades_instead_of_crashing(monkeypatch):
+    """`file_github_issue` itself, not the endpoint — every endpoint test above
+    monkeypatches this function away entirely, so none of them exercise what happens
+    when GitHub's own response can't be parsed. A 201 with a body `response.json()`
+    can't read (or one missing `html_url`/`number`) used to raise a raw exception past
+    every guard in this module, turning the one response branch nobody thought to wrap
+    into an unhandled 500 despite every other GitHub failure mode degrading to
+    BugReportError. Regression test for that gap, at the level where it actually is one."""
+    import asyncio
+
+    import httpx
+
+    from app import bugreport
+
+    monkeypatch.setenv("FUNDWORTHY_GITHUB_TOKEN", "fake-token")
+    monkeypatch.setenv("FUNDWORTHY_GITHUB_REPO", "example/fundworthy")
+
+    async def fake_post(self, *args, **kwargs):
+        return httpx.Response(201, content=b"not json", request=httpx.Request(
+            "POST", "https://api.github.com/repos/example/fundworthy/issues"))
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    with pytest.raises(bugreport.BugReportError, match="could not be read"):
+        asyncio.run(bugreport.file_github_issue("title", "body"))

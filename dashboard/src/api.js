@@ -170,6 +170,12 @@ export const api = {
     resolve: (id, uphold) => post(`/api/admin/reports/${id}`, { uphold }),
   },
 
+  // "Report a bug", from Settings. Always saved server-side; `filed` says whether it
+  // also became a GitHub issue on this install, which the caller renders accordingly.
+  bugReport: {
+    file: (data) => post("/api/bug-report", data),
+  },
+
   org: {
     read: () => get("/api/org"),
     invite: () => post("/api/org/invites"),
