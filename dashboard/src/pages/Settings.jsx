@@ -700,6 +700,126 @@ function JoinAnotherOrg({ onChange }) {
   );
 }
 
+// Report a bug, without leaving the dashboard.
+//
+// Three outcomes, not two, and they read differently on purpose:
+//
+//   filed: true   a GitHub issue exists. Show the link, clear the form — there is
+//                 nothing left to keep.
+//   filed: false  the report was saved on this install but GitHub filing itself
+//                 failed (no token configured, the repo unreachable, whatever). That
+//                 is not the user's problem to be alarmed by — it is still recorded —
+//                 so it gets the calm, plain notice, not the red one.
+//   thrown        the request never got a 200 at all: rate-limited (429), rejected
+//                 (422), or the server was unreachable. That is a real failure and
+//                 gets the same red notice every other form on this page uses for one.
+//
+// All three keep the typed text on screen except the first — a person should never
+// have to retype a bug report because filing it to GitHub happened to fail.
+// The backend's own error strings already end in a period ("...set FUNDWORTHY_GITHUB_
+// TOKEN and FUNDWORTHY_GITHUB_REPO."), and so does the sentence this joins them into —
+// stripping any trailing one first keeps that a single period, not "..REPO.. Your".
+function withoutTrailingPeriod(text) {
+  return text.replace(/\.+$/, "");
+}
+
+function BugReport() {
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null); // { ok, message?, url?, number? }
+  const [error, setError] = useState(null);
+
+  async function submit(e) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const res = await api.bugReport.file({
+        title: title.trim(),
+        description: description.trim(),
+        page: "Settings",
+      });
+      if (res.filed) {
+        setResult({ ok: true, url: res.issue_url, number: res.issue_number });
+        setTitle("");
+        setDescription("");
+      } else {
+        setResult({ ok: false, message: res.error || "the request failed" });
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="panel">
+      <h2>Report a bug</h2>
+      <p className="settings-lede">
+        Tell us what went wrong. This opens a GitHub issue automatically when that is
+        set up on this install; either way it is saved so a real person reads it.
+      </p>
+
+      <form onSubmit={submit}>
+        <label className="field">
+          <span>What happened</span>
+          <input
+            type="text"
+            value={title}
+            required
+            minLength={3}
+            maxLength={200}
+            placeholder="One line describing the problem"
+            onChange={(e) => setTitle(e.target.value)}
+          />
+        </label>
+
+        <label className="field">
+          <span>Details</span>
+          <textarea
+            value={description}
+            required
+            maxLength={5000}
+            rows={5}
+            placeholder="What happened? What did you expect instead? Steps to reproduce help a lot."
+            onChange={(e) => setDescription(e.target.value)}
+          />
+        </label>
+
+        {result && result.ok && (
+          <div className="notice">
+            Filed{result.number ? ` as issue #${result.number}` : ""} —{" "}
+            <a href={result.url} target="_blank" rel="noopener noreferrer">
+              see it on GitHub ↗
+            </a>.
+          </div>
+        )}
+        {result && !result.ok && (
+          <div className="notice plain">
+            Could not file this automatically: {withoutTrailingPeriod(result.message)}.
+            Your text is still here — copy it and open an issue by hand, or try again.
+          </div>
+        )}
+        {error && (
+          <div className="notice error">
+            Could not file this automatically: {withoutTrailingPeriod(error)}. Your text
+            is still here — copy it and open an issue by hand, or try again.
+          </div>
+        )}
+
+        <div className="row end">
+          <Busy className="dark" type="submit" busy={busy} busyLabel="Sending">
+            Report the bug
+          </Busy>
+        </div>
+      </form>
+    </section>
+  );
+}
+
 function DeleteAccount() {
   const [open, setOpen] = useState(false);
   const [typed, setTyped] = useState("");
@@ -855,6 +975,8 @@ export default function Settings({ state, onChange }) {
           and this is the reversible one. */}
       {authEnabled() && <JoinAnotherOrg onChange={onChange} />}
       <DeleteAccount />
+
+      <BugReport />
     </>
   );
 }

@@ -336,17 +336,48 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 textarea { resize: vertical; line-height: 1.5; }
 input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; }
 
-/* Four numeric fields on one row where there is room. They were a wrapping grid of
-   200px columns with a line of hint prose under each, which made the panel about three
-   times taller than the controls in it — sitting over the findings it decides the shape
-   of. The hints are `title` tooltips now (see Knob in SearchSettings.jsx). */
+/* Five numeric fields on one row where there is room — four columns left a fifth
+   ("Hours per app") stranded on a row by itself, which cost as much height as the whole
+   rest of the grid for one field. They were a wrapping grid of 200px columns with a line
+   of hint prose under each, which made the panel about three times taller than the
+   controls in it — sitting over the findings it decides the shape of. The hints are
+   `title` tooltips now, and the labels themselves are short nouns rather than full
+   sentences (see Knob in SearchSettings.jsx). */
 .knobs {
-  display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px 16px;
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px 16px;
   margin-bottom: 4px;
 }
 @media (max-width: 900px) { .knobs { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 620px) { .knobs { grid-template-columns: 1fr; } }
 .checks { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 4px 0; }
+
+/* One flex item so `.searchpanel-foot`'s space-between treats the three chips inside
+   as a single cluster on the left, not three items spread evenly across the row. */
+.togglechips { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* The schedule/discovery/ultra-mode switches (ToggleChip in SearchSettings.jsx) — an
+   icon and a word each, styled like button.pill.on below rather than three checkbox rows
+   with a sentence and a `<small>` restating it. The full sentence lives in `title`. */
+.togglechip {
+  position: relative; display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--card); color: var(--body);
+  font-size: 13px;
+}
+.togglechip:hover { border-color: var(--dash); color: var(--fg); }
+.togglechip.on {
+  background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent-deep);
+}
+/* The checkbox itself stays for native semantics (keyboard, screen readers, form
+   state) but is visually replaced by the pill's own on/off styling above — so its focus
+   ring is drawn on the pill instead of on a control nobody can see. */
+.togglechip input[type="checkbox"] {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+}
+.togglechip:has(input:focus-visible) {
+  outline: 2px solid var(--accent-line); outline-offset: 1px; border-color: var(--accent);
+}
 .check { display: flex; align-items: center; gap: 7px; font-size: 13.5px; cursor: pointer; }
 
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
@@ -1161,6 +1192,10 @@ button.text.danger { color: var(--danger); margin-left: auto; }
 
 /* --- when the weekly search runs ------------------------------------------- */
 .schedule {
+  /* flex-basis: 100% forces this onto its own row inside .searchpanel-foot.compact's
+     flex-wrap, regardless of how much space the (now much narrower) toggle chips before
+     it leave on the line — it must never end up wedged beside one. */
+  flex-basis: 100%;
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   margin: 10px 0 4px 26px; padding: 10px 12px;
   background: var(--line-soft); border-radius: 12px;

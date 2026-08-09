@@ -421,6 +421,8 @@ seat.
 | `FUNDWORTHY_MAX_CONCURRENT_RUNS` | How many orgs may crawl at once (default 3). A machine guard, not a tenancy rule |
 | `FUNDWORTHY_STRICT_CONFIG` | Scheduled-job mode: a config that can't be read is a refusal to run, never a fallback to defaults (protects the kill switch) |
 | `FUNDWORTHY_SHEET_ID` | Google Sheet id for the legacy Sheets export sink |
+| `FUNDWORTHY_GITHUB_TOKEN` | A GitHub personal access token with Issues: write permission on the target repo. Unset means the bug-report form still records reports locally but cannot file them automatically |
+| `FUNDWORTHY_GITHUB_REPO` | `owner/repo` to file bug reports against, e.g. `VictorKhant/Fundworthy`. No default — a fork must never silently file against the upstream repo |
 | `FIREBASE_PROJECT_ID` | **Turns sign-in on.** Unset = local mode, no login |
 | `FIREBASE_WEB_API_KEY` | Firebase's public web key, served to the browser. Required when sign-in is on |
 | `FIREBASE_AUTH_DOMAIN` | Defaults to `<project>.firebaseapp.com`; override only for a custom auth domain |

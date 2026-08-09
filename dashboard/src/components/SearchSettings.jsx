@@ -1,3 +1,4 @@
+import Icon from "./Icon";
 import { Busy } from "./Spinner";
 
 // The weekly knobs. Folded away behind "Adjust search settings" in the status strip,
@@ -9,12 +10,33 @@ import { Busy } from "./Spinner";
 
 // The hint moves to `title` rather than a line of prose under every field. Four hints
 // under four fields was about a third of the panel's height, restating labels that
-// already say the same thing — and this panel sits over the findings it decides.
+// already say the same thing — and this panel sits over the findings it decides. Same
+// reason the labels themselves are short nouns now rather than full sentences — "Award
+// floor", not "Smallest award worth applying for" — with the full sentence surviving in
+// the hint, not vanishing.
 function Knob({ label, hint, children }) {
   return (
     <label className="field" title={hint || undefined}>
       <span>{label}</span>
       {children}
+    </label>
+  );
+}
+
+// A compact toggle for a setting that is real but rarely touched. An icon carries the
+// idea at a glance and a short word keeps it nameable — R10 in Icon.jsx reserves
+// icon-only for repeated, familiar row actions (edit, delete, copy); a schedule switch,
+// an unbuilt discovery flag and Ultra mode are none of those, so they keep a word each
+// rather than becoming three glyphs a no-AI-experience admin has to learn by heart. The
+// full sentence that used to sit under each one as a `<small>` moves to `title`, the
+// same trade Knob already makes above — that alone is most of what made three checkbox
+// rows read as three paragraphs.
+function ToggleChip({ icon, label, hint, checked, onChange }) {
+  return (
+    <label className={`togglechip ${checked ? "on" : ""}`} title={hint}>
+      <input type="checkbox" checked={checked} onChange={onChange} />
+      <Icon name={icon} size={14} />
+      <span>{label}</span>
     </label>
   );
 }
@@ -26,8 +48,8 @@ export default function SearchSettings({
     <section className="searchpanel">
       <div className="knobs">
         <Knob
-          label="Smallest award worth applying for"
-          hint="Anything smaller is never shown to you."
+          label="Award floor ($)"
+          hint="Smallest award worth applying for. Anything smaller is never shown to you."
         >
           <input
             type="number"
@@ -37,7 +59,10 @@ export default function SearchSettings({
           />
         </Knob>
 
-        <Knob label="Skip anything due within (days)" hint="Not enough time to apply otherwise.">
+        <Knob
+          label="Runway (days)"
+          hint="Skip anything due within this many days — not enough time to apply otherwise."
+        >
           <input
             type="number"
             value={draft.min_deadline_runway_days}
@@ -45,7 +70,7 @@ export default function SearchSettings({
           />
         </Knob>
 
-        <Knob label="Most results to bring back" hint="Sized for a one-hour review.">
+        <Knob label="Result cap" hint="Most results to bring back. Sized for a one-hour review.">
           <input
             type="number"
             value={draft.max_opportunities}
@@ -53,7 +78,10 @@ export default function SearchSettings({
           />
         </Knob>
 
-        <Knob label="Most to spend on one search ($)" hint="It stops itself before going over.">
+        <Knob
+          label="Spend limit ($)"
+          hint="Most to spend on one search. It stops itself before going over."
+        >
           <input
             type="number"
             step="0.25"
@@ -66,8 +94,8 @@ export default function SearchSettings({
             (agent/score.py: WEIGHTS["timing"]), the same as the other four knobs in
             this row, not a fact about who the org is. */}
         <Knob
-          label="Hours you can spend on one application"
-          hint="Everyone's time added together. A grant that would cost more than this scores lower on timing."
+          label="Hours per app"
+          hint="Hours you can spend on one application. A grant that would cost more than this scores lower on timing."
         >
           <input
             type="number"
@@ -92,57 +120,48 @@ export default function SearchSettings({
           Which funders get searched is the funder list: pause, block, delete. */}
 
       <div className="searchpanel-foot compact">
-        {/* Two switches, and separating them was the point.
-
-            One checkbox used to be both the §8 kill switch and "does a search happen on
-            a schedule". Unticking it to stop the weekly job also greyed out "Search again
-            now" — so an org that simply wanted to run searches by hand, when they felt
-            like it, could not run one at all. Nobody would guess that from the label. */}
-        <label className="check">
-          <input
-            type="checkbox"
+        {/* Grouped in one wrapper so `.searchpanel-foot`'s space-between treats the
+            three chips as a single cluster on the left, not three items spread evenly
+            across the whole row — the same job `.row`'s own margin-left:auto does for
+            Undo/Save on the right. Three switches that used to be three paragraphs — a
+            checkbox, a full sentence, then a `<small>` restating it with the one detail
+            that mattered buried at the end. Same fix as the knobs above: the full
+            sentence survives in `title`, not on screen. See ToggleChip and R10 in
+            Icon.jsx for why these keep a word each rather than becoming bare glyphs. */}
+        <div className="togglechips">
+          <ToggleChip
+            icon="clock"
+            label="Weekly"
+            hint="Search automatically every week — off by default. You can always search by hand with the button above."
             checked={draft.schedule_enabled}
             onChange={(e) => set("schedule_enabled", e.target.checked)}
           />
-          Search automatically every week
-          <small className="muted">
-            {" "}— off by default. You can always search by hand with the button above.
-          </small>
-        </label>
 
-        {/* Beside the other switch rather than on a full-width row of its own above the
-            foot. It is off, it is unbuilt, and it was taking a whole line between the
-            knobs grid and the save row to say so. */}
-        <label className="check">
-          <input
-            type="checkbox"
+          <ToggleChip
+            icon="globe"
+            label="Beyond your list"
+            hint="Also look beyond the funders on your list — being built; for now this searches your list only."
             checked={draft.search_beyond_partners}
             onChange={(e) => set("search_beyond_partners", e.target.checked)}
           />
-          Also look beyond the funders on my list
-          <small className="muted">
-            {" "}— being built; for now this searches your list only
-          </small>
-        </label>
 
-        {/* Off by default, deliberately: CLAUDE.md's whole premise is that a short
-            list is a feature, not a shortfall, and this one switch abandons that on
-            purpose for someone who has decided they would rather spend the whole
-            budget than stop at "most results to bring back" above. It does not
-            reach further than your funder list already does — a short list still
-            tops out at what's on it, whatever this is set to. */}
-        <label className="check">
-          <input
-            type="checkbox"
+          {/* Off by default, deliberately: CLAUDE.md's whole premise is that a short
+              list is a feature, not a shortfall, and this one switch abandons that on
+              purpose for someone who has decided they would rather spend the whole
+              budget than stop at "most results to bring back" above. It does not
+              reach further than your funder list already does — a short list still
+              tops out at what's on it, whatever this is set to. */}
+          <ToggleChip
+            icon="zap"
+            label="Ultra mode"
+            hint={
+              'Spend the whole search budget — ignores "result cap" above and keeps ' +
+              "scoring until the budget or your funder list runs out."
+            }
             checked={draft.ultra_mode}
             onChange={(e) => set("ultra_mode", e.target.checked)}
           />
-          Spend the whole search budget (Ultra mode)
-          <small className="muted">
-            {" "}— ignores "most results to bring back" above and keeps scoring until
-            the budget or your funder list runs out
-          </small>
-        </label>
+        </div>
 
         {/* This used to read "it searches every Wednesday night", which was a sentence
             rather than a setting: nothing scheduled anything, and the only way a search

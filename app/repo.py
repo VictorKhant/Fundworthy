@@ -814,3 +814,43 @@ def resolve_report(conn, report_id: str, *, uphold: bool, by: str) -> bool:
         "WHERE id=? AND status='open'",
         ("upheld" if uphold else "dismissed", now_iso(), by, report_id))
     return cur.rowcount > 0
+
+
+# --- bug reports ----------------------------------------------------------------
+#
+# Recorded BEFORE the app ever tries to file them on GitHub — see app/bugreport.py —
+# so a report is never lost even when GitHub is unreachable or the install has no
+# token configured. github_issue_url/number stay NULL and error carries the reason.
+
+def create_bug_report(conn, *, org_id: str, title: str, description: str, page: str,
+                      reported_by: str) -> str:
+    stamp = now_iso()
+    report_id = hashlib.sha256(
+        f"{org_id}:{title}:{reported_by}:{stamp}".encode()).hexdigest()[:16]
+    conn.execute(
+        "INSERT INTO bug_reports(id, org_id, title, description, page, reported_by, "
+        "created_at) VALUES(?,?,?,?,?,?,?)",
+        (report_id, org_id, title, description, page, reported_by, stamp))
+    return report_id
+
+
+def record_bug_report_result(conn, report_id: str, *, issue_url: str | None = None,
+                             issue_number: int | None = None, error: str = "") -> None:
+    conn.execute(
+        "UPDATE bug_reports SET github_issue_url=?, github_issue_number=?, error=? "
+        "WHERE id=?",
+        (issue_url, issue_number, error, report_id))
+
+
+def count_recent_bug_reports(conn, *, org_id: str) -> int:
+    """How many bug reports this org has filed in the last 24 hours — a genuine
+    rolling window, not a UTC-calendar-day count. It used to be the latter
+    (`created_at >= today's date`), which let an org file a full batch just before UTC
+    midnight and a second full batch just after — up to 2x the advertised cap within
+    minutes, while the 429 message it backs has always promised "the last 24 hours."
+    `created_at` is ISO8601 (`now_iso()`), so a plain string comparison against an
+    ISO8601 cutoff is still a correct >= without parsing every row."""
+    since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    return conn.execute(
+        "SELECT COUNT(*) AS n FROM bug_reports WHERE org_id=? AND created_at >= ?",
+        (org_id, since)).fetchone()["n"]

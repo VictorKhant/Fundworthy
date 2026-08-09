@@ -43,7 +43,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -701,6 +701,77 @@ def resolve_shared_report(report_id: str, body: ResolveIn,
                                    by=user.email if user else "local"):
             raise HTTPException(404, "No such open report.")
     return {"resolved": report_id, "upheld": body.uphold}
+
+
+# --- bug reports ----------------------------------------------------------------
+
+class BugReportIn(BaseModel):
+    title: str = Field(min_length=3, max_length=200)
+    description: str = Field(min_length=1, max_length=5000)
+    page: str = Field("", max_length=100)
+
+
+@api.post("/bug-report")
+async def submit_bug_report(body: BugReportIn, request: Request,
+                            org: str = Depends(current_org),
+                            user=Depends(auth.require_user)) -> dict:
+    """Report a problem with the app itself, from the dashboard.
+
+    Recorded locally FIRST, before GitHub is ever contacted, so a report is never
+    lost even when the GitHub call fails — `bug_reports` already has the row, and
+    auto-filing is a convenience layered on top of it, not the only copy. Filed
+    against the install's own repo with an install-level token
+    (`FUNDWORTHY_GITHUB_TOKEN` / `FUNDWORTHY_GITHUB_REPO`, see app/bugreport.py) —
+    never a per-org secret, the same operational-channel pattern as
+    `FUNDWORTHY_SHEET_ID` or `FUNDWORTHY_ADMIN_EMAILS`. Capped per org per day,
+    because filing a real GitHub issue has a human cost a metered API call does not.
+    """
+    from . import bugreport
+
+    with session() as conn:
+        if (repo.count_recent_bug_reports(conn, org_id=org)
+                >= bugreport.MAX_REPORTS_PER_ORG_PER_DAY):
+            raise HTTPException(
+                429,
+                f"You've reported {bugreport.MAX_REPORTS_PER_ORG_PER_DAY} bugs in "
+                "the last 24 hours — give it a bit before reporting more.")
+
+        org_name = repo.get_settings(conn, org_id=org)["org_name"]
+        reported_by = user.email if user else "local"
+        title = body.title.strip()
+        description = body.description.strip()
+        page = body.page.strip()
+
+        report_id = repo.create_bug_report(
+            conn, org_id=org, title=title, description=description, page=page,
+            reported_by=reported_by)
+    # The session above is closed — and its insert committed — before the network
+    # call below, so a slow or hanging GitHub request never holds a write lock open
+    # on the store.
+
+    issue_body = bugreport.format_issue_body(
+        description, org_name=org_name, org_id=org, reporter=reported_by, page=page,
+        user_agent=request.headers.get("user-agent", ""))
+
+    try:
+        result = await bugreport.file_github_issue(title, issue_body)
+    except bugreport.BugReportError as exc:
+        with session() as conn:
+            repo.record_bug_report_result(conn, report_id, error=str(exc))
+        log.warning("bug report %s saved but could not be filed on GitHub: %s",
+                   report_id, exc)
+        # 200, not 500 — the report was saved even though auto-filing failed. That is
+        # the honest, non-crashing outcome; the dashboard renders a fallback for it.
+        return {"filed": False, "error": str(exc), "report_id": report_id}
+
+    with session() as conn:
+        repo.record_bug_report_result(
+            conn, report_id, issue_url=result["issue_url"],
+            issue_number=result["issue_number"])
+    log.info("bug report %s filed as GitHub issue #%s", report_id,
+             result["issue_number"])
+    return {"filed": True, "issue_url": result["issue_url"],
+           "issue_number": result["issue_number"], "report_id": report_id}
 
 
 # --- findings -----------------------------------------------------------------

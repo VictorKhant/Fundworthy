@@ -135,6 +135,27 @@ CREATE TABLE IF NOT EXISTS funder_reports (
 CREATE INDEX IF NOT EXISTS idx_reports_open
     ON funder_reports(status, funder_org, funder_id);
 
+-- Somebody reporting that the app itself is broken — not a funder, the software.
+--
+-- Recorded BEFORE any attempt to file it on GitHub, so a report is never lost even
+-- when GitHub is unreachable or the install has no token configured at all:
+-- github_issue_url/number stay NULL and error carries what went wrong, rather than
+-- the report vanishing along with the failed request.
+CREATE TABLE IF NOT EXISTS bug_reports (
+    id                   TEXT PRIMARY KEY,
+    org_id               TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    title                TEXT NOT NULL,
+    description          TEXT NOT NULL,
+    page                 TEXT NOT NULL DEFAULT '',
+    reported_by          TEXT NOT NULL DEFAULT '',
+    created_at           TEXT NOT NULL,
+    github_issue_url     TEXT,
+    github_issue_number  INTEGER,
+    error                TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_bug_reports_org_created
+    ON bug_reports(org_id, created_at);
+
 CREATE TABLE IF NOT EXISTS settings (
     org_id     TEXT NOT NULL DEFAULT 'default',
     key        TEXT NOT NULL,
