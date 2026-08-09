@@ -25,15 +25,8 @@ export default function StatusStrip({
   const spent = run?.usd_spent || 0;
   const pct = Math.min(100, (spent / (ceiling || 1)) * 100);
 
-  // One broken funder and a genuinely quiet week both produce a short list. Saying which
-  // is the difference between a list they can trust and one they have to re-check by hand.
-  const broken = (run?.source_health || []).filter(
-    (h) => h.status === "unreachable" || h.status === "unparseable"
-  );
-
   return (
-    <>
-      <section className="statusstrip">
+    <section className="statusstrip">
         {/* The automation, and nothing else.
 
             This slot used to read "Fundworthy is on", which was true of every account
@@ -97,15 +90,6 @@ export default function StatusStrip({
             {knobsOpen ? "Hide search settings" : "Adjust search settings"}
           </button>
         </span>
-      </section>
-
-      {broken.length > 0 && (
-        <div className="notice plain">
-          Some funders could not be checked this time, so this list may be short for that
-          reason rather than because there was nothing to find:{" "}
-          {broken.map((h) => h.funder).join(", ")}.
-        </div>
-      )}
-    </>
+    </section>
   );
 }

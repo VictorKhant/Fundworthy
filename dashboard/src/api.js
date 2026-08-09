@@ -159,6 +159,7 @@ export const api = {
   directory: {
     read: () => get("/api/directory"),
     import: (key) => post(`/api/directory/${key}/import`),
+    remove: (key) => del(`/api/directory/${key}/import`),
     shared: () => get("/api/directory/shared"),
     report: (from_org, funder_id, reason) =>
       post("/api/directory/shared/report", { from_org, funder_id, reason }),
@@ -241,6 +242,10 @@ export const SECTOR_LABELS = {
   arts_agency: "Arts agencies",
   intermediary: "Networks & conveners",
   corporate: "Corporate giving",
+  community: "Community funders",
+  family_foundation: "Family foundations",
+  community_foundation: "Community foundations",
+  health_conversion: "Health foundations",
   other: "Other",
 };
 

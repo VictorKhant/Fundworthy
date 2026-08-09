@@ -527,6 +527,20 @@ def evaluate(survivors: list[tuple[ParsedPage, Source]], cfg: Config, run: RunLo
         )
     _emit_funnel(run, survivors=len(ranked), kept=0)
     for page, source in ranked:
+        if stop_requested():
+            # Checked before ultra mode's own "nothing stops this but budget or
+            # exhaustion" rule, deliberately — a deploy restart is not a weaker reason
+            # to stop than the budget ceiling is. `out` is returned below exactly as
+            # BudgetExceeded already does, so whatever was scored and paid for survives;
+            # only the candidates never reached are given up.
+            run.stop_reason = StopReason.INTERRUPTED
+            run.notes.append(
+                f"Stopped early (signal received). Keeping the {len(out)} "
+                "opportunit" + ("y" if len(out) == 1 else "ies") +
+                " already scored — the money spent on them is not wasted."
+            )
+            log.warning("Run interrupted — salvaging %d scored result(s)", len(out))
+            break
         if cfg.ultra_mode:
             # The whole point of the setting: neither the plain cap below nor
             # balanced mode's per-kind cap gets to end the run early. Only BUDGET
@@ -768,20 +782,52 @@ def _report(cfg: Config, run: RunLog, opportunities: list[Opportunity]) -> None:
 class RunInterrupted(Exception):
     """SIGTERM arrived: a deploy restart, systemd, or the Stop button.
 
-    Raised from a signal handler so it lands in the ordinary `except Exception` around
-    the crawl — which already exists to salvage a partial run — rather than killing the
-    process where it stands.
+    Raised from application code — `evaluate()`'s own loop, checking `stop_requested()`
+    between candidates — so it lands in the ordinary `except Exception` around the crawl,
+    which already exists to salvage a partial run, rather than killing the process where
+    it stands.
 
     That distinction is worth real money. Without it, Python's default SIGTERM handling
     terminated the process outright: the salvage block never ran, and every opportunity
     scored so far was lost along with the API credit spent on it. A deploy at minute
     seven of a ten-minute run cost the org the whole run for nothing.
+
+    It used to be raised directly from the signal handler itself — which is unsafe under
+    asyncio specifically, and the bug was invisible until something actually sent SIGTERM
+    to a real running crawl rather than to a synchronous test. A signal can arrive while
+    the event loop's own selector is blocked waiting on network I/O, which is most of a
+    crawl's wall-clock time; an exception raised from the handler at that instant unwinds
+    whatever C/Python frame the interpreter happens to be in when the signal is noticed —
+    the event loop's own internal poll, not any particular coroutine — so it blew straight
+    out of `asyncio.run()`, past every try/except in this file, and the process exited 1
+    with a bare traceback instead of the graceful `PARTIAL` salvage path. The existing unit
+    test only raised the signal synchronously, outside any running loop, so it never
+    exercised the path where this actually broke.
     """
 
 
+_stop_requested = False
+
+
+def stop_requested() -> bool:
+    return _stop_requested
+
+
 def _install_stop_handler() -> None:
+    """Set a flag on SIGTERM/SIGINT — never raise from the handler itself.
+
+    Setting a flag is safe from any context a signal can land in, synchronous or async;
+    raising is not (see `RunInterrupted`). `evaluate()`'s per-candidate loop checks the
+    flag and stops cleanly, keeping whatever it already scored — the same pattern as the
+    existing `BudgetExceeded`/target-met early exits. `main_async()` checks it again right
+    after `crawl()` returns, before the expensive tier starts, so a stop requested during
+    the free crawl never lets a single dollar be spent afterwards.
+    """
+
     def handle(signum, _frame):
-        raise RunInterrupted(f"stopped by signal {signum}")
+        global _stop_requested
+        _stop_requested = True
+        log.warning("received signal %s — stopping at the next safe point", signum)
 
     for sig in (signal.SIGTERM, signal.SIGINT):
         try:
@@ -905,6 +951,11 @@ async def main_async(args: argparse.Namespace) -> int:
         survivors = await crawl(cfg, run, follow_links=not args.no_follow,
                                 already_seen=already_seen)
         log.info("%d candidates survived the free filters.", len(survivors))
+        if stop_requested():
+            # Checked here, and not only inside evaluate()'s own loop, so a stop
+            # requested during the free crawl skips straight past the expensive tier —
+            # not one dollar is spent scoring something nobody will get to read.
+            raise RunInterrupted("stopped by signal before scoring began")
         opportunities = evaluate(survivors, cfg, run, budget, use_llm=use_llm)
 
         # "Nothing was found" and "nothing was looked at" produce the same empty list
@@ -923,11 +974,14 @@ async def main_async(args: argparse.Namespace) -> int:
         # saying it was incomplete. A silent empty Sheet on Thursday morning is
         # worse than a short one with an explanation on it.
         failed = True
-        run.stop_reason = StopReason.PARTIAL if opportunities else StopReason.ERROR
         if isinstance(exc, RunInterrupted):
             # Not a failure of ours, and the distinction matters to whoever reads the
             # run log: the search was cut short from outside, and what it had already
-            # paid for is written out below rather than thrown away.
+            # paid for is written out below rather than thrown away. A dedicated
+            # StopReason rather than PARTIAL/ERROR, so the outcome line reads "stopped
+            # early" instead of "something went wrong" about a deploy restart —
+            # sinks/sqlite.py also maps this to status="done", not "failed".
+            run.stop_reason = StopReason.INTERRUPTED
             run.notes.append(
                 f"Stopped early ({exc}). Keeping the {len(opportunities)} "
                 "opportunit" + ("y" if len(opportunities) == 1 else "ies") +
@@ -935,6 +989,7 @@ async def main_async(args: argparse.Namespace) -> int:
             log.warning("Run interrupted — salvaging %d scored result(s)",
                         len(opportunities))
         else:
+            run.stop_reason = StopReason.PARTIAL if opportunities else StopReason.ERROR
             run.notes.append(f"ERROR: {exc!r}")
             log.exception("Run failed — writing whatever was collected before the failure")
 

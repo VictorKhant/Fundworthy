@@ -849,32 +849,12 @@ export default function Settings({ state, onChange }) {
       <OrgPanel settings={state.settings} onChange={onChange} />
       <Organization spend={state.spend} onChange={onChange} />
 
-      <section className="panel">
-        <h2>Turning it off</h2>
-        <p className="settings-lede">
-          The switch lives on <strong>This week</strong>, under "Adjust search settings".
-          Turn it off and nothing runs and nothing is spent until you turn it back on. You
-          don't need to ask anyone.
-        </p>
-      </section>
-
       <ShareFunders settings={state.settings} onChange={onChange} />
       <ReportQueue />
       {/* Below Organization, and above closing the account: both are ways of leaving,
           and this is the reversible one. */}
       {authEnabled() && <JoinAnotherOrg onChange={onChange} />}
       <DeleteAccount />
-
-      <section className="panel">
-        <h2>Where your data lives</h2>
-        <p className="settings-lede">
-          Everything — your programs, your funder list, this month's findings, and the key
-          — is in a single database on the server this app runs on. Nothing is sent
-          anywhere except the funder pages the researcher reads and the Claude API that
-          scores them, and your searches run on your own key so they are billed to you and
-          visible to nobody else.
-        </p>
-      </section>
     </>
   );
 }

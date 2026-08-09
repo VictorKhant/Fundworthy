@@ -101,6 +101,15 @@ const PATHS = {
       <path d="M5.6 6.2 8 2.6l2.4 3.6" />
     </>
   ),
+  // "Shared" (Discover funders): a globe, next to `pin`'s "Near you" — near/far,
+  // yours/theirs, told the same way a map would tell it.
+  globe: (
+    <>
+      <circle cx="8" cy="8" r="5.6" />
+      <path d="M2.4 8h11.2" />
+      <ellipse cx="8" cy="8" rx="2.6" ry="5.6" />
+    </>
+  ),
   upload: (
     <>
       <path d="M8 12.4V3.6" />
@@ -109,6 +118,10 @@ const PATHS = {
     </>
   ),
   flag: <path d="M4 13.4V2.9m0 .6h7.6l-1.6 2.7 1.6 2.7H4" />,
+  // "Change the monthly limit" (Organization): three ascending bars — a budget you can
+  // raise, not a warning glyph. Kept apart from `sliders`, which is a control you tune,
+  // not a number you read.
+  chart: <path d="M3.5 12.5v-3M8 12.5V6M12.5 12.5V3.5" />,
 };
 
 export default function Icon({ name, size = 16, width = 1.4 }) {

@@ -55,7 +55,8 @@ from agent.score import (EFFORT_CHOICES, EFFORT_IDS, MODEL_CHOICES, PRICING,
 from . import archive, auth, export, repo, scheduler, secrets
 from .db import (DEFAULT_ORG_ID, SECTORS, InviteError, create_invite, import_starter_list,
                  init_db, list_invites, month_key, org_for_user, org_members, org_owner,
-                 redeem_invite, remove_member, revoke_invite, session, set_org_owner)
+                 redeem_invite, remove_member, remove_starter_list, revoke_invite,
+                 session, set_org_owner)
 from .runner import MANAGER, preflight
 
 log = logging.getLogger(__name__)
@@ -98,6 +99,14 @@ class SettingsIn(BaseModel):
     min_deadline_runway_days: int | None = Field(None, ge=0, le=365)
     max_opportunities: int | None = Field(None, ge=1, le=100)
     run_budget_usd: float | None = Field(None, gt=0, le=20)
+    # The org's own ceiling on what Fundworthy may spend in a calendar month, across
+    # every run — `run_budget_usd` bounds one run, this bounds the bill (app/db.py:
+    # DEFAULT_SETTINGS). Without a declared field here, Pydantic silently dropped it
+    # from every request before `_set()` ever saw it — the same shape of bug CLAUDE.md
+    # documents for `blocked` on a funder: the Organization panel's "Change the monthly
+    # limit" dialog showed a 200 back and closed as if it had saved, having changed
+    # nothing. `le=500` matches the input's own long-standing `max`.
+    monthly_budget_usd: float | None = Field(None, gt=0, le=500)
     enabled: bool | None = None
     # Set once, when somebody finishes the first-run walkthrough. Writable like any other
     # setting rather than through its own endpoint — it is a fact about the account, and
@@ -614,6 +623,19 @@ def import_directory_list(key: str, org: str = Depends(current_org)) -> dict:
         except ValueError as exc:
             raise HTTPException(404, str(exc)) from exc
         return {"added": added, "funders": repo.list_funders(conn, org_id=org)}
+
+
+@api.delete("/directory/{key}/import")
+def remove_directory_list(key: str, org: str = Depends(current_org)) -> dict:
+    """The exact reverse of the POST above — every funder this org has from list
+    `key` comes off the list in one call, so the "34 funders" a card promised to
+    add is also what it promises to take back."""
+    with session() as conn:
+        try:
+            removed = remove_starter_list(conn, key, org)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        return {"removed": removed, "funders": repo.list_funders(conn, org_id=org)}
 
 
 # --- funders other nonprofits have shared -------------------------------------

@@ -44,6 +44,23 @@ class StarterList:
     def sources(self) -> list[Source]:
         return [s for s in ALL_SOURCES if self.matches(s)]
 
+    @property
+    def is_database(self) -> bool:
+        """True when every source in this list is an API adapter (`agent/apis.py`)
+        rather than a funder's own page.
+
+        "Federal grants" and "California state grants" each hold exactly one `Source`
+        row — not because there is only one funder, but because a live search API
+        collapses to one entry in the registry the same way one funder's page does.
+        `catalogue()` used to report that as `"count": 1`, so the card read "1 funder"
+        for something that returns dozens of results per run — the one thing this
+        product is careful never to be, which is misleading about how much money is
+        actually behind a number. A mixed list (none exist today) would report False
+        here, on the reasoning that "N funders" is still the more honest word for a
+        list that is mostly researched pages with an adapter or two mixed in.
+        """
+        return bool(self.sources) and all(s.is_api for s in self.sources)
+
 
 STARTER_LISTS: tuple[StarterList, ...] = (
     StarterList(
@@ -71,7 +88,41 @@ STARTER_LISTS: tuple[StarterList, ...] = (
             "Foundations, arts agencies and community funders in San Diego and Imperial "
             "Counties, researched by hand."
         ),
-        matches=lambda s: s.adapter is None,
+        matches=lambda s: s.adapter is None and s.sector not in (
+            "family_foundation", "community_foundation", "health_conversion"),
+    ),
+    StarterList(
+        key="ca-family-foundations",
+        name="California family foundations",
+        description=(
+            "Private family foundations with open, non-invitation application "
+            "processes — mostly Los Angeles County, plus the Bay Area. Researched by "
+            "hand; every family foundation found without a public application "
+            "pathway was left out."
+        ),
+        matches=lambda s: s.sector == "family_foundation",
+    ),
+    StarterList(
+        key="ca-community-foundations",
+        name="California community foundations",
+        description=(
+            "Regional community foundations across California, outside San Diego — "
+            "Bay Area, Central Coast, Inland Empire, Orange County and more. "
+            "Researched by hand; each serves its own county or counties."
+        ),
+        matches=lambda s: s.sector == "community_foundation",
+    ),
+    StarterList(
+        key="ca-health-foundations",
+        name="California health foundations",
+        description=(
+            "Health conversion foundations — created when a nonprofit hospital or "
+            "health plan converted to for-profit status — plus two healthcare "
+            "districts with the same community-grant function. Researched by hand; "
+            "the best-known names (The California Endowment, Cal Wellness, Blue "
+            "Shield of CA Foundation) are invitation-only and not included."
+        ),
+        matches=lambda s: s.sector == "health_conversion",
     ),
 )
 
@@ -96,6 +147,6 @@ def catalogue() -> list[dict]:
     page needs to know a list is worth importing, not to render it twice."""
     return [
         {"key": lst.key, "name": lst.name, "description": lst.description,
-         "count": len(lst.sources)}
+         "count": len(lst.sources), "is_database": lst.is_database}
         for lst in STARTER_LISTS
     ]
