@@ -2129,6 +2129,42 @@ button.download-csv {
    it rather than the row itself — `display: block` opts it out of that entirely. */
 button.download-csv svg { display: block; flex-shrink: 0; }
 
+/* The spreadsheet run picker (DownloadCsv.jsx) — offered only when Past findings has
+   more than one search worth exporting this month. Same panel treatment as
+   `.capedit-panel` below, so "choose which searches" reads as belonging to the download
+   button the way the spend-cap editor reads as belonging to its own meter. */
+.download-csv-wrap { position: relative; display: inline-block; }
+.download-picker {
+  position: absolute; z-index: 20; top: calc(100% + 8px); right: 0;
+  width: min(360px, 80vw);
+  margin-top: 0; padding: 18px 20px;
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: 14px; box-shadow: 0 8px 28px var(--scrim);
+  text-align: left;
+}
+.download-picker-list { max-height: 260px; overflow-y: auto; margin: 12px 0 16px; }
+.download-picker-list li + li { margin-top: 6px; }
+/* Deliberately not `.togglechip` — that component hides its checkbox and shows state
+   as pill tinting, which suits a grid of independent switches but leaves a checklist
+   with no visible way to tell checked rows from unchecked ones. This keeps the native
+   checkbox visible (the global `input[type="checkbox"]` styling already applies) and
+   only adds the row chrome around it. */
+.download-picker-row {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  border-radius: 10px; padding: 8px 10px; font-size: 13.5px;
+  border: 1px solid transparent; cursor: pointer;
+}
+.download-picker-row:hover { background: var(--line-soft); }
+.download-picker-row:has(input:checked) {
+  background: var(--accent-soft); border-color: var(--accent-line);
+}
+.download-picker-row:has(input:focus-visible) {
+  outline: 2px solid var(--accent-line); outline-offset: 1px;
+}
+@media (max-width: 620px) {
+  .download-picker { position: static; width: auto; margin-top: 10px; box-shadow: none; }
+}
+
 /* The panel itself — sage-tinted so it reads as "the thing the meter above belongs to",
    not a generic form dropped under it. Presets, a typed figure, Cancel/Save: one
    pending value with one commit step, never a preset that saves on click while a typed
@@ -2408,6 +2444,21 @@ button.download-csv svg { display: block; flex-shrink: 0; }
   border: 1px dashed var(--line); border-radius: 12px; padding: 10px 14px;
   margin: 16px 0;
 }
+
+/* The delete control on a search card — the same iconbtn.danger the member-remove row
+   on Settings already uses, just sitting at the far end of a three-item flex header
+   instead of a two-item one. */
+.search-card-delete { flex-shrink: 0; }
+
+/* "Show the N searches that cost nothing and kept nothing" — the collapsed-by-default
+   bucket a search with no spend and no findings falls into (Archive.jsx), styled like
+   `.search-toggle` above it but standing on its own rather than living inside a card. */
+.search-cards-empty { margin-top: 16px; }
+.search-cards-empty > .search-toggle {
+  border: 1px dashed var(--line); border-radius: 12px; padding: 10px 14px;
+  color: var(--muted);
+}
+.search-cards-empty .search-cards { margin-top: 12px; }
 
 /* --- sidebar: report a bug next to sign out ----------------------------------- */
 

@@ -210,3 +210,61 @@ def test_export_never_leaks_the_api_key(client):
     client.post("/api/settings/api-key", json={"api_key": key})
 
     assert key not in client.get("/api/opportunities/export.csv").text
+
+
+# --- picking which searches to print, from Past findings -----------------------
+
+def _seeded_run(client, run_id, title, source_url):
+    """One search, one finding, wired the way the pipeline actually writes them —
+    not a bare INSERT, so this exercises the same upsert `save_opportunity` uses in
+    production."""
+    from datetime import date, datetime, timedelta, timezone
+
+    from agent.models import Opportunity, stable_id
+    from app import repo
+    from app.db import DEFAULT_ORG_ID, session
+
+    with session() as conn:
+        repo.create_run(conn, run_id, org_id=DEFAULT_ORG_ID)
+        repo.save_opportunity(
+            conn,
+            Opportunity(
+                id=stable_id(source_url, title),
+                title=title, funder="Example Foundation", source_url=source_url,
+                award_min=10_000, award_max=50_000,
+                deadline=date.today() + timedelta(days=60),
+                estimated_effort_hours=8, program_match=[], score=72,
+                score_rationale="fits", verified=True, needs_human_check=False,
+                fetched_at=datetime.now(timezone.utc),
+            ),
+            run_id=run_id, org_id=DEFAULT_ORG_ID,
+        )
+
+
+def test_run_ids_narrows_the_export_to_the_selected_searches(client):
+    """The Past findings picker: 'Aug 7 10am' and 'Aug 6 1pm' together, everything
+    else from the month left out."""
+    _seeded_run(client, "r-1", "Morning grant", "https://example.invalid/morning")
+    _seeded_run(client, "r-2", "Afternoon grant", "https://example.invalid/afternoon")
+    _seeded_run(client, "r-3", "Evening grant", "https://example.invalid/evening")
+
+    res = client.get("/api/opportunities/export.csv?run_ids=r-1,r-2")
+    rows = rows_of(res.text)
+    titles = {r[rows[0].index("Opportunity")] for r in rows[1:]}
+
+    assert titles == {"Morning grant", "Afternoon grant"}
+    assert "Evening grant" not in titles
+
+
+def test_a_single_run_id_still_works_alongside_run_ids(client):
+    """Backward compatibility: the singular `run_id` param (used elsewhere, e.g. a
+    search card's own "show these findings" link) still narrows to one search when
+    `run_ids` is not given at all."""
+    _seeded_run(client, "r-solo", "Solo grant", "https://example.invalid/solo")
+    _seeded_run(client, "r-other", "Other grant", "https://example.invalid/other")
+
+    res = client.get("/api/opportunities/export.csv?run_id=r-solo")
+    rows = rows_of(res.text)
+    titles = {r[rows[0].index("Opportunity")] for r in rows[1:]}
+
+    assert titles == {"Solo grant"}

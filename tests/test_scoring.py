@@ -32,8 +32,58 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # noqa: E402
 from agent.config import Config, ProgramCard  # noqa: E402
 from agent.evalmetrics import (pair_accuracy, report, spearman,  # noqa: E402
                                spread)
-from agent.score import (WEIGHTS, ScoreParts, _preamble, basis_note,  # noqa: E402
+from agent.score import (CACHE_READ_MULTIPLIER, CACHE_WRITE_MULTIPLIER,  # noqa: E402
+                         WEIGHTS, Budget, ScoreParts, _preamble, basis_note,
                          compose_score, org_context, scoring_schema)
+
+
+# --- the budget must count what it was actually charged (FUTURE.md P1) --------
+
+def test_a_cache_write_costs_more_than_a_plain_input_token_not_less():
+    """The bug, directly: `Budget.record()` used to price every token — cache write,
+    cache read, or neither — at the base input rate. A write bills ABOVE that rate, so
+    the old code undercounted real spend in exactly the direction that matters for a
+    ceiling meant to stop a run before it overspends."""
+    budget = Budget(ceiling_usd=10.0)
+    plain = budget._cost("anthropic:claude-sonnet-4-6", 1000, 0)
+    with_write = budget._cost("anthropic:claude-sonnet-4-6", 1000, 0, cache_write_tok=1000)
+    assert with_write > plain + (1000 * 3.00 / 1_000_000), (
+        "a cache-write token must cost more than an ordinary input token, "
+        "not the same amount twice"
+    )
+
+
+def test_cache_write_and_read_are_priced_at_their_documented_multiples():
+    budget = Budget(ceiling_usd=10.0)
+    p = 3.00  # anthropic:claude-sonnet-4-6 input rate, $/MTok
+    write_cost = budget._cost("anthropic:claude-sonnet-4-6", 0, 0, cache_write_tok=2048)
+    read_cost = budget._cost("anthropic:claude-sonnet-4-6", 0, 0, cache_read_tok=2048)
+    assert write_cost == pytest.approx(2048 * p * CACHE_WRITE_MULTIPLIER / 1_000_000)
+    assert read_cost == pytest.approx(2048 * p * CACHE_READ_MULTIPLIER / 1_000_000)
+    assert CACHE_WRITE_MULTIPLIER > 1.0, "a write is a premium over the base rate"
+    assert CACHE_READ_MULTIPLIER < 1.0, "a read is the whole point of caching — cheaper"
+
+
+def test_record_with_no_cache_tokens_matches_the_old_uncached_math():
+    """Every existing caller that never passes cache tokens (triage, mostly) must see
+    identical cost to before this fix — this is additive, not a repricing of the
+    common case."""
+    budget = Budget(ceiling_usd=10.0)
+    cost = budget.record("anthropic:claude-haiku-4-5", 500, 100)
+    assert cost == pytest.approx((500 * 1.00 + 100 * 5.00) / 1_000_000)
+    assert budget.spent_usd == pytest.approx(cost)
+
+
+def test_record_adds_cache_write_and_read_into_spent_usd():
+    budget = Budget(ceiling_usd=10.0)
+    cost = budget.record("anthropic:claude-sonnet-4-6", 200, 50,
+                         cache_write_tok=3000, cache_read_tok=9000)
+    p = 3.00
+    expected = (200 * 3.00 + 50 * 15.00
+               + 3000 * p * CACHE_WRITE_MULTIPLIER
+               + 9000 * p * CACHE_READ_MULTIPLIER) / 1_000_000
+    assert cost == pytest.approx(expected)
+    assert budget.spent_usd == pytest.approx(expected)
 
 
 # --- composition: the fix for the 42-point ceiling ----------------------------

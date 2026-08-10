@@ -470,7 +470,8 @@ def save_opportunity(conn, opp, run_id: str | None = None, *, org_id: str) -> No
 
 
 def list_opportunities(conn, *, org_id: str, month: str | None = None,
-                       run_id: str | None = None) -> list[dict]:
+                       run_id: str | None = None,
+                       run_ids: list[str] | None = None) -> list[dict]:
     """the user's reading order, enforced in SQL so every surface agrees.
 
     Two rules now, and the second one used to be three:
@@ -491,7 +492,12 @@ def list_opportunities(conn, *, org_id: str, month: str | None = None,
     if month:
         where.append("month_key=?")
         params.append(month)
-    if run_id:
+    if run_ids:
+        # The multi-search spreadsheet picker: several run ids at once, not one.
+        # `run_id` below is redundant once this is given, so this branch wins.
+        where.append(f"run_id IN ({','.join('?' for _ in run_ids)})")
+        params.extend(run_ids)
+    elif run_id:
         where.append("run_id=?")
         params.append(run_id)
     sql = "SELECT * FROM opportunities WHERE " + " AND ".join(where)
@@ -528,6 +534,28 @@ def update_run(conn, run_id: str, **fields) -> None:
             fields[json_field] = dumps(fields[json_field])
     sets = ", ".join(f"{k}=?" for k in fields)
     conn.execute(f"UPDATE runs SET {sets} WHERE id=?", [*fields.values(), run_id])
+
+
+def delete_run(conn, run_id: str, *, org_id: str) -> dict | None:
+    """Permanently remove one search and the findings currently credited to it.
+
+    Real deletion, not an `active` flag — Past findings is the one place in the product
+    where "gone" has to mean gone: a person clearing out test runs expects the row out
+    of the database, not merely hidden from the page. Only opportunities *currently*
+    pointing at this run go with it. An opportunity a later search re-confirmed already
+    had its `run_id` reassigned to that later run (`list_runs_for_month`'s own dedup
+    note), so it survives deleting an earlier run untouched.
+
+    Returns None if there is no such run for this org, so the caller can 404 rather than
+    silently reporting success for a run that was never theirs to delete.
+    """
+    if get_run(conn, run_id, org_id=org_id) is None:
+        return None
+    findings_removed = conn.execute(
+        "DELETE FROM opportunities WHERE org_id=? AND run_id=?",
+        (org_id, run_id)).rowcount
+    conn.execute("DELETE FROM runs WHERE org_id=? AND id=?", (org_id, run_id))
+    return {"run_id": run_id, "findings_removed": findings_removed}
 
 
 def _run_out(row) -> dict:
@@ -814,6 +842,14 @@ def report_shared_funder(conn, *, funder_org: str, funder_id: str,
 
     Idempotent per reporting org, so a double-click does not stack two reports against
     the same entry and make one objection look like a pattern.
+
+    `(funder_org, funder_id)` has to name something `shared_funders()` would actually
+    offer right now — added by hand, checked OK, and its own org still opted in. Nothing
+    enforced that before: any pair a caller sent went straight into the moderation
+    queue, real funder or not. `GET /api/directory/shared` only ever returns rows that
+    already pass this exact test, so requiring it here costs a legitimate report
+    nothing — it only refuses the pairs nobody could have gotten from that endpoint in
+    the first place.
     """
     import hashlib
 
@@ -826,6 +862,17 @@ def report_shared_funder(conn, *, funder_org: str, funder_id: str,
     if existing:
         return {"report_id": existing["id"], "already": True}
 
+    real = conn.execute(
+        """SELECT 1 FROM funders f
+             JOIN settings s ON s.org_id = f.org_id AND s.key = 'share_funders'
+                             AND s.value = '1'
+            WHERE f.org_id = ? AND f.id = ? AND f.added_by = 'user' AND f.check_ok = 1
+            LIMIT 1""",
+        (funder_org, funder_id)).fetchone()
+    if not real:
+        raise ValueError("That funder is not currently being shared, so there is "
+                         "nothing to report.")
+
     rid = hashlib.sha256(
         f"{funder_org}:{funder_id}:{reported_by}:{now_iso()}".encode()).hexdigest()[:16]
     conn.execute(
@@ -833,6 +880,27 @@ def report_shared_funder(conn, *, funder_org: str, funder_id: str,
         "created_at, status) VALUES(?,?,?,?,?,?,'open')",
         (rid, funder_org, funder_id, reported_by, reason.strip()[:500], now_iso()))
     return {"report_id": rid, "already": False}
+
+
+MAX_FUNDER_REPORTS_PER_ORG_PER_DAY = 20
+
+
+def count_recent_funder_reports(conn, *, org_id: str) -> int:
+    """How many DISTINCT shared funders this org has reported in the last 24 hours — a
+    genuine rolling window, the same shape as `count_recent_bug_reports`.
+
+    Distinct, not total: the idempotency check above already stops a double-click from
+    stacking two rows against the same funder, so counting rows would double-charge
+    nothing and undercount the real risk. What this bounds is the one thing the
+    plausibility check above does not — one org scripting `GET /api/directory/shared`
+    and reporting every real row it returns, one call each, is exactly the "loop and
+    empty the pool in seconds" scenario a per-pair check cannot catch on its own.
+    """
+    since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    return conn.execute(
+        "SELECT COUNT(DISTINCT funder_org || ':' || funder_id) AS n "
+        "FROM funder_reports WHERE reported_by=? AND created_at >= ?",
+        (org_id, since)).fetchone()["n"]
 
 
 def all_reports(conn) -> list[dict]:

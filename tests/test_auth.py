@@ -928,12 +928,26 @@ def test_a_report_names_the_funder_it_is_given_not_the_org_asking(signed_in, tok
     """The reporting org is recorded server-side from the session and never accepted from
     the body — the same rule as `current_org`. Who objected to whom is exactly the kind of
     thing a small nonprofit sector would gossip about."""
+    from app import repo
+    from app.db import ensure_org, session
+
     monkeypatch.setenv("FUNDWORTHY_ADMIN_EMAILS", ALLOWED)
     _sign_in(signed_in, token_for)
     me = auth_header(token_for())
 
+    # A real, currently-shared funder — `report_shared_funder`'s own plausibility check
+    # (FUTURE.md P1) refuses a pair naming nothing real, so the funder under test has to
+    # be one GET /api/directory/shared could actually have returned.
+    with session() as conn:
+        ensure_org(conn, "org_somebody", "Somebody Else's Org")
+        f = repo.create_funder(conn, {"name": "Real Fund", "url": "https://real.invalid"},
+                               org_id="org_somebody")
+        conn.execute("UPDATE funders SET check_ok=1 WHERE org_id=? AND id=?",
+                     ("org_somebody", f["id"]))
+        repo.update_settings(conn, {"share_funders": True}, org_id="org_somebody")
+
     r = signed_in.post("/api/directory/shared/report",
-                       json={"from_org": "org_somebody", "funder_id": "f1",
+                       json={"from_org": "org_somebody", "funder_id": f["id"],
                              "reason": "not real"}, headers=me)
     assert r.status_code == 201
 
@@ -941,6 +955,60 @@ def test_a_report_names_the_funder_it_is_given_not_the_org_asking(signed_in, tok
     assert len(queued) == 1
     assert queued[0]["reason"] == "not real"
     assert "reported_by" not in queued[0], "the objector is not part of the queue view"
+
+
+def test_reporting_an_implausible_pair_is_refused(signed_in, token_for):
+    """`from_org`/`funder_id` naming nothing real (guessed, stale, or never shared) is
+    refused before it ever reaches the moderation queue — FUTURE.md P1."""
+    _sign_in(signed_in, token_for)
+    me = auth_header(token_for())
+
+    r = signed_in.post("/api/directory/shared/report",
+                       json={"from_org": "org_nobody", "funder_id": "not-a-real-id",
+                             "reason": "guessing"}, headers=me)
+    assert r.status_code == 404
+
+
+def test_reporting_is_capped_so_one_account_cannot_empty_the_whole_pool(
+        signed_in, token_for):
+    """The scenario FUTURE.md P1 names directly: `GET /api/directory/shared` hands back
+    exactly the pairs needed to script a report against every real row from one
+    account. The plausibility check alone cannot refuse those — they are real — so this
+    is the other half of the fix."""
+    from app import repo
+    from app.db import ensure_org, session
+
+    _sign_in(signed_in, token_for)
+    me = auth_header(token_for())
+
+    with session() as conn:
+        ensure_org(conn, "org_somebody", "Somebody Else's Org")
+        ids = []
+        for i in range(repo.MAX_FUNDER_REPORTS_PER_ORG_PER_DAY):
+            f = repo.create_funder(
+                conn, {"name": f"Fund {i}", "url": f"https://real{i}.invalid"},
+                org_id="org_somebody")
+            conn.execute("UPDATE funders SET check_ok=1 WHERE org_id=? AND id=?",
+                         ("org_somebody", f["id"]))
+            ids.append(f["id"])
+        repo.update_settings(conn, {"share_funders": True}, org_id="org_somebody")
+        extra = repo.create_funder(
+            conn, {"name": "One too many", "url": "https://real-extra.invalid"},
+            org_id="org_somebody")
+        conn.execute("UPDATE funders SET check_ok=1 WHERE org_id=? AND id=?",
+                     ("org_somebody", extra["id"]))
+
+    for funder_id in ids:
+        r = signed_in.post("/api/directory/shared/report",
+                           json={"from_org": "org_somebody", "funder_id": funder_id},
+                           headers=me)
+        assert r.status_code == 201, r.json()
+
+    r = signed_in.post("/api/directory/shared/report",
+                       json={"from_org": "org_somebody", "funder_id": extra["id"]},
+                       headers=me)
+    assert r.status_code == 429
+    assert "reported" in r.json()["detail"]
 
 
 # --- deleting the sign-in, not just the data ----------------------------------

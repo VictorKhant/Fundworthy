@@ -891,6 +891,44 @@ def _install_stop_handler() -> None:
             log.debug("could not install a handler for %s", sig)
 
 
+def _write_to_sinks(sinks: list, opportunities: list[Opportunity],
+                    run: RunLog) -> tuple[int, bool]:
+    """Write results and the run log to every configured sink, per sink rather than per
+    run — with two sinks, a failure writing `run.json` must not cost the SQLite write
+    next week's dedup depends on. Whatever happens, we still try to write a run log — a
+    row saying the write failed is how the user finds out, without having to call anyone.
+
+    Returns `(written, failed)`. `failed` covers both loops, and the second one is the
+    one that used to go unreported: `sinks/sqlite.py: write_run_log` is what actually
+    lands `status`, `finished_at` and `stop_reason` onto the `runs` row, so a failure
+    there — not the opportunities write, which already had this — left the row stuck at
+    `status='running'` while `main()` still returned exit code 0. That code is what
+    `RunManager._finalize` (app/runner.py) reads to decide whether a run it did not see
+    finish cleanly should be marked failed; a 0 told it nothing was wrong.
+    """
+    written = 0
+    failed = False
+    for sink in sinks:
+        try:
+            written = max(written, sink.write_opportunities(opportunities, run))
+        except Exception as exc:  # noqa: BLE001
+            failed = True
+            run.stop_reason = StopReason.PARTIAL
+            run.notes.append(f"WRITE FAILED ({sink.name}): {exc!r}")
+            log.exception("Writing opportunities to the %s sink failed", sink.name)
+
+    for sink in sinks:
+        try:
+            sink.write_run_log(run)
+        except Exception as exc:  # noqa: BLE001
+            failed = True
+            run.stop_reason = StopReason.PARTIAL
+            run.notes.append(f"WRITE FAILED ({sink.name}): {exc!r}")
+            log.error("Could not write the run log to %s: %r", sink.name, exc)
+
+    return written, failed
+
+
 async def main_async(args: argparse.Namespace) -> int:
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -1098,25 +1136,8 @@ async def main_async(args: argparse.Namespace) -> int:
         log.error("Could not open the %s sink: %r", args.sink, exc)
         return 1
 
-    # Per sink, not per run: with two sinks a failure writing run.json must not cost
-    # us the SQLite write that next week's dedup depends on. Whatever happens, we
-    # still try to write a run log — a row saying the write failed is how the user finds
-    # out, without having to call anyone (§13).
-    written = 0
-    for sink in sinks:
-        try:
-            written = max(written, sink.write_opportunities(opportunities, run))
-        except Exception as exc:  # noqa: BLE001
-            failed = True
-            run.stop_reason = StopReason.PARTIAL
-            run.notes.append(f"WRITE FAILED ({sink.name}): {exc!r}")
-            log.exception("Writing opportunities to the %s sink failed", sink.name)
-
-    for sink in sinks:
-        try:
-            sink.write_run_log(run)
-        except Exception as exc:  # noqa: BLE001
-            log.error("Could not write the run log to %s: %r", sink.name, exc)
+    written, write_failed = _write_to_sinks(sinks, opportunities, run)
+    failed = failed or write_failed
 
     print(f"Wrote {written} records via: {', '.join(s.name for s in sinks)}.\n")
     return 1 if failed else 0

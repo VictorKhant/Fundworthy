@@ -40,9 +40,25 @@ PAGE_TEXT_CAP = 14_000
 # One page read plus one Sonnet call. Bounded so a stuck loop cannot become a bill.
 ASSISTANT_COST_CEILING_USD = 0.10
 
-SYSTEM = """\
-You are helping the COO of the organization, a nonprofit in San Diego and Imperial \
-Counties, set up a search for grant funding for one of the org's own programs.
+def _system(org_name: str = "", org_location: str = "") -> str:
+    """Who the COO works for, in the org's own words — or in none, if they have not
+    said.
+
+    This was a literal string: "a nonprofit in San Diego and Imperial Counties," sent to
+    every tenant regardless of who actually pasted the link. Exactly the bug class
+    `agent/score.py: _preamble` was fixed for — that fix never reached here, so the
+    "answer to the user never writes a prompt" (CLAUDE.md) was itself leaking the pilot
+    org's own region into every other nonprofit's program card. An empty field is passed
+    through as an empty field, the same rule `_preamble` follows: a guessed region is the
+    thing that broke this, not a missing one.
+    """
+    who = f"{org_name.strip()}, a nonprofit" if org_name.strip() else "a nonprofit"
+    if org_location.strip():
+        who += f" working in {org_location.strip()}"
+
+    return f"""\
+You are helping the COO of {who}, set up a search for grant funding for one of the \
+org's own programs.
 
 You will be given the text of a page from the org's own website describing one program.
 Turn it into a card that a grant-search agent can use.
@@ -152,7 +168,8 @@ async def fetch_page_text(url: str) -> tuple[str, str]:
     return page.title, page.text
 
 
-async def draft_program_card(url: str, api_key: str | None = None) -> dict:
+async def draft_program_card(url: str, api_key: str | None = None, *,
+                             org_name: str = "", org_location: str = "") -> dict:
     """Read `url` and return a DRAFT card. Never saves anything."""
     if not url.startswith(("http://", "https://")):
         raise AssistantError("That does not look like a web address.")
@@ -173,7 +190,7 @@ async def draft_program_card(url: str, api_key: str | None = None) -> dict:
         resp = client.messages.create(
             model=ASSISTANT_MODEL,
             max_tokens=ASSISTANT_MAX_TOKENS,
-            system=SYSTEM,
+            system=_system(org_name, org_location),
             messages=[{"role": "user", "content": body}],
             output_config={"format": {"type": "json_schema", "schema": SCHEMA}},
         )

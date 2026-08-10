@@ -48,6 +48,16 @@ SCORING_MODEL = "anthropic:claude-sonnet-4-6"
 # so adding a second provider later is a new entry here rather than a migration over
 # everybody's saved settings. There is one provider today and the UI never shows the
 # prefix.
+# Prompt-caching rates, relative to a model's own base input price — the same
+# multiplier for every model, per Anthropic's published pricing (5-minute ephemeral
+# TTL, which is the only kind this file ever requests: SONNET_CACHE_MIN_TOKENS below
+# sets `cache_control` with no `ttl`, which defaults to 5m). A cache WRITE costs MORE
+# than an ordinary input token, not less — `Budget.record` priced it at the base input
+# rate for both, undercounting real spend on every scoring call once the system prompt
+# clears the caching threshold (see the note there).
+CACHE_WRITE_MULTIPLIER = 1.25
+CACHE_READ_MULTIPLIER = 0.1
+
 PRICING = {
     "anthropic:claude-haiku-4-5":   {"input": 1.00, "output": 5.00},
     "anthropic:claude-sonnet-4-6":  {"input": 3.00, "output": 15.00},
@@ -227,9 +237,13 @@ class Budget:
     calls: int = 0
     by_model: dict[str, float] = field(default_factory=dict)
 
-    def _cost(self, model: str, in_tok: int, out_tok: int) -> float:
+    def _cost(self, model: str, in_tok: int, out_tok: int, *,
+             cache_write_tok: int = 0, cache_read_tok: int = 0) -> float:
         p = price_for(model)
-        return (in_tok * p["input"] + out_tok * p["output"]) / 1_000_000
+        base = in_tok * p["input"] + out_tok * p["output"]
+        cache = (cache_write_tok * p["input"] * CACHE_WRITE_MULTIPLIER
+                + cache_read_tok * p["input"] * CACHE_READ_MULTIPLIER)
+        return (base + cache) / 1_000_000
 
     def check(self, model: str, est_in: int, est_out: int) -> None:
         """Refuse a call whose worst case would breach the ceiling."""
@@ -240,8 +254,20 @@ class Budget:
                 f"(spent ${self.spent_usd:.4f} over {self.calls} calls)"
             )
 
-    def record(self, model: str, in_tok: int, out_tok: int) -> float:
-        cost = self._cost(model, in_tok, out_tok)
+    def record(self, model: str, in_tok: int, out_tok: int, *,
+              cache_write_tok: int = 0, cache_read_tok: int = 0) -> float:
+        """Log one call's real cost.
+
+        `cache_write_tok`/`cache_read_tok` are `usage.cache_creation_input_tokens` /
+        `usage.cache_read_input_tokens` off the response — not the same as `in_tok`
+        (`usage.input_tokens`, the uncached remainder only). Missing them wasn't a
+        rounding error: a cache write bills ABOVE the base input rate, not below it, so
+        every scored candidate after the first — once `score_one`'s system prompt clears
+        `SONNET_CACHE_MIN_TOKENS` and caching genuinely kicks in — was undercounted
+        against the ceiling this method exists to enforce. See `CACHE_WRITE_MULTIPLIER`.
+        """
+        cost = self._cost(model, in_tok, out_tok,
+                          cache_write_tok=cache_write_tok, cache_read_tok=cache_read_tok)
         self.spent_usd += cost
         self.calls += 1
         self.by_model[model] = self.by_model.get(model, 0.0) + cost
@@ -1029,7 +1055,9 @@ def triage(candidate: RawCandidate, budget: Budget,
         messages=[{"role": "user", "content": body}],
         **kwargs,
     )
-    cost = budget.record(model, resp.usage.input_tokens, resp.usage.output_tokens)
+    cost = budget.record(model, resp.usage.input_tokens, resp.usage.output_tokens,
+                         cache_write_tok=resp.usage.cache_creation_input_tokens,
+                         cache_read_tok=resp.usage.cache_read_input_tokens)
     data = _first_json(resp)
     log.debug("  triage %-40s -> %s [%s] (%s) $%.5f — %s",
               candidate.title[:40], data["is_opportunity"], data["mismatch_reason"],
@@ -1101,7 +1129,9 @@ def score_one(candidate: RawCandidate, source: Source, cfg: Config,
         messages=[{"role": "user", "content": body}],
         **kwargs,
     )
-    cost = budget.record(model, resp.usage.input_tokens, resp.usage.output_tokens)
+    cost = budget.record(model, resp.usage.input_tokens, resp.usage.output_tokens,
+                         cache_write_tok=resp.usage.cache_creation_input_tokens,
+                         cache_read_tok=resp.usage.cache_read_input_tokens)
     data = _first_json(resp)
 
     page_text = candidate.text

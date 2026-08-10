@@ -12,6 +12,7 @@ import asyncio
 import re
 import logging
 import urllib.robotparser
+from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
 
@@ -81,16 +82,30 @@ class Fetcher:
             self._host_locks[host] = asyncio.Lock()
         return self._host_locks[host]
 
-    async def _send(self, method: str, url: str, **kwargs) -> httpx.Response:
+    async def _send(self, method: str, url: str, *,
+                    on_hop: Callable[[str, str], None] | None = None,
+                    **kwargs) -> httpx.Response:
         """One request, following redirects ourselves so every hop is checked.
 
         Raises `BlockedURL` if the starting URL — or anywhere a redirect points — is not
         a public address. Everything else propagates unchanged, so the retry and
         error-handling in the callers keeps working exactly as before.
+
+        `on_hop`, if given, is called with `(url, method)` right before each hop is
+        requested — including the first hop. This is what lets a caller's retry loop
+        resume from the last hop actually reached instead of re-walking the whole chain;
+        see `get()`. Called whether that hop succeeds, redirects, or the request itself
+        raises, since a retry after a timeout should resume at the hop that timed out,
+        not the one before it. The method matters as well as the URL: a 303 (or a
+        301/302 on a POST) downgrades to GET partway through a chain, and a retry that
+        resumes at that hop has to resume with the downgraded method too, not the
+        original POST.
         """
         assert self._client is not None
         current = url
         for _hop in range(MAX_REDIRECTS + 1):
+            if on_hop:
+                on_hop(current, method)
             await ensure_public_url(current)
             resp = await self._client.request(method, current, **kwargs)
             if resp.status_code not in _REDIRECT_CODES:
@@ -162,9 +177,23 @@ class Fetcher:
 
         async with self._lock_for(host):
             last_error: str | None = None
+            # Where the NEXT attempt should start — the original URL on the first try,
+            # then whichever hop the previous attempt actually reached. Before this,
+            # every retry called `_send("GET", url)` again, so `_send`'s own redirect
+            # walk restarted from hop zero every time: a 429/503 on the final hop of a
+            # two-redirect page turned "two retries" into up to nine real requests —
+            # worst exactly when the host has just said it's overloaded. `on_hop` below
+            # updates this to the last URL `_send` actually requested, whether that hop
+            # succeeded, redirected, or raised, so a retry resumes there instead.
+            resume_from = url
+
+            def _track(hop_url: str, _method: str) -> None:
+                nonlocal resume_from
+                resume_from = hop_url
+
             for attempt in range(MAX_RETRIES + 1):
                 try:
-                    resp = await self._send("GET", url)
+                    resp = await self._send("GET", resume_from, on_hop=_track)
 
                     # Back off on rate limits and server errors; give up on 4xx.
                     if resp.status_code in (429, 503) and attempt < MAX_RETRIES:
@@ -248,14 +277,28 @@ class Fetcher:
 
         async with self._lock_for(host):
             last_error: str | None = None
+            resume_from = url        # see the matching comment in get()
+            resume_method = method
+
+            def _track(hop_url: str, hop_method: str) -> None:
+                nonlocal resume_from, resume_method
+                resume_from = hop_url
+                resume_method = hop_method
+
             for attempt in range(MAX_RETRIES + 1):
                 try:
                     resp = await self._send(
-                        method,
-                        url,
+                        resume_method,
+                        resume_from,
                         params=params,
-                        json=json_body,
+                        # `resume_method` can differ from the caller's own `method` on a
+                        # retry — a 303 (or a 301/302 on a POST) downgrades to GET
+                        # partway through a chain, and a GET carries no body. Resending
+                        # `json_body` against a now-GET hop would attach a write payload
+                        # to a request the origin already told us has none.
+                        json=json_body if resume_method != "GET" else None,
                         headers={"Accept": "application/json"},
+                        on_hop=_track,
                     )
                     if resp.status_code in (429, 503) and attempt < MAX_RETRIES:
                         await asyncio.sleep(PER_HOST_DELAY_SECONDS * (2 ** attempt))
