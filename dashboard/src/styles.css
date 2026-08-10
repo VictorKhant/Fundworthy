@@ -388,6 +388,19 @@ input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px;
 .togglechip:has(input:focus-visible) {
   outline: 2px solid var(--accent-line); outline-offset: 1px; border-color: var(--accent);
 }
+/* "Beyond your list" — a real setting with nothing behind it yet. Dashed border and
+   muted text is the same "not built yet" treatment as `.provider.soon` on Settings and
+   the disabled "Find funders near you" card on Discover funders — a signpost, not a
+   hidden control. */
+.togglechip.soon {
+  cursor: not-allowed; border-style: dashed; color: var(--muted); opacity: .75;
+}
+.togglechip.soon:hover { border-color: var(--line); color: var(--muted); }
+.togglechip-soon {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--muted); border: 1px solid var(--line); border-radius: 999px;
+  padding: 1px 6px; margin-left: 2px;
+}
 .check { display: flex; align-items: center; gap: 7px; font-size: 13.5px; cursor: pointer; }
 
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
