@@ -181,8 +181,9 @@ export const api = {
            { funder_org: funderOrg, funder_id: funderId, uphold }),
   },
 
-  // "Report a bug", from Settings. Always saved server-side; `filed` says whether it
-  // also became a GitHub issue on this install, which the caller renders accordingly.
+  // "Report a bug", reachable from every page via the sidebar. Always saved
+  // server-side; `filed` says whether it also became a GitHub issue on this install,
+  // which the caller renders accordingly.
   bugReport: {
     file: (data) => post("/api/bug-report", data),
   },
