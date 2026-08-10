@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { initials } from "../auth";
+import BugReportModal from "./BugReportModal";
 import Icon from "./Icon";
 import OrgSwitcher from "./OrgSwitcher";
 import ThemeToggle from "./ThemeToggle";
@@ -25,9 +27,21 @@ const PAGES = [
   { id: "settings", label: "Settings", icon: "cog" },
 ];
 
-export default function Sidebar({ page, setPage, open, setOpen, orgName, user, onBrand, onSignOut }) {
+export default function Sidebar({
+  page, setPage, open, setOpen, orgName, user, onBrand, onSignOut,
+  onOrgChange, onJoinAnother, lastSearchAt,
+}) {
+  const [reportOpen, setReportOpen] = useState(false);
+  const currentLabel = PAGES.find((p) => p.id === page)?.label || "the app";
+
   return (
     <>
+      <BugReportModal
+        open={reportOpen}
+        page={currentLabel}
+        lastSearchAt={lastSearchAt}
+        onClose={() => setReportOpen(false)}
+      />
       <button
         className="sidebar-toggle"
         onClick={() => setOpen(!open)}
@@ -47,10 +61,17 @@ export default function Sidebar({ page, setPage, open, setOpen, orgName, user, o
         </button>
 
         {/* Always visible, unlike the rest of the account chrome. Naming who this
-            install belongs to is true right now — it comes from the org_name setting —
-            and it is the one piece that is not waiting on accounts to mean something.
-            What it cannot yet do (switch, add) says so in a tooltip. */}
-        <OrgSwitcher orgName={orgName} />
+            install belongs to is true right now — it comes from the org_name setting.
+            On a deployed install with more than one organization to see, it is also
+            where you switch between them — see OrgSwitcher.jsx. */}
+        <OrgSwitcher
+          orgName={orgName}
+          onSwitched={onOrgChange}
+          onJoinAnother={() => {
+            onJoinAnother?.();
+            if (window.innerWidth < 900) setOpen(false);
+          }}
+        />
 
         {PAGES.map((p) => (
           <button
@@ -82,9 +103,15 @@ export default function Sidebar({ page, setPage, open, setOpen, orgName, user, o
                     account am I in?" is the question this chip has to answer, and two
                     people called Maria have one display name and two addresses. */}
                 <span className="userchip-name" title={user.name}>{user.email}</span>
-                <button className="text userchip-out" onClick={onSignOut}>
-                  Sign out
-                </button>
+                <span className="userchip-links">
+                  <button className="text userchip-out" onClick={onSignOut}>
+                    Sign out
+                  </button>
+                  <span className="userchip-sep" aria-hidden="true">·</span>
+                  <button className="text userchip-out" onClick={() => setReportOpen(true)}>
+                    Report a bug
+                  </button>
+                </span>
               </span>
             </div>
           ) : (
@@ -92,6 +119,10 @@ export default function Sidebar({ page, setPage, open, setOpen, orgName, user, o
               Runs on this computer.
               <br />
               Nothing is public.
+              <br />
+              <button className="text userchip-out" onClick={() => setReportOpen(true)}>
+                Report a bug
+              </button>
             </div>
           )}
         </div>

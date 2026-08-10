@@ -231,7 +231,7 @@ def delete_program(conn, program_id: str, *, org_id: str) -> bool:
 # --- funders ------------------------------------------------------------------
 
 _FUNDER_FIELDS = ("name", "url", "sector", "funder_type", "warm", "active",
-                  "blocked", "tier", "confidence", "programs", "notes",
+                  "blocked", "tier", "confidence", "region", "programs", "notes",
                   "exclude_reason")
 
 
@@ -320,12 +320,13 @@ def create_funder(conn, data: dict, *, org_id: str) -> dict:
     conn.execute(
         """INSERT INTO funders(
                org_id, id, name, url, sector, funder_type, warm, active, tier,
-               confidence, programs, notes, added_by, created_at, updated_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'user',?,?)
+               confidence, region, programs, notes, added_by, created_at, updated_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'user',?,?)
            ON CONFLICT(org_id, id) DO UPDATE SET
                url=excluded.url, sector=excluded.sector,
                funder_type=excluded.funder_type, warm=excluded.warm,
-               active=excluded.active, programs=excluded.programs,
+               active=excluded.active, region=excluded.region,
+               programs=excluded.programs,
                notes=excluded.notes, updated_at=excluded.updated_at""",
         (
             org_id, funder_id, name, data.get("url"),
@@ -333,6 +334,7 @@ def create_funder(conn, data: dict, *, org_id: str) -> dict:
             1 if data.get("warm") else 0,
             0 if data.get("active") is False else 1,
             int(data.get("tier", 1) or 1), int(data.get("confidence", 1) or 1),
+            str(data.get("region", "")),
             dumps(data.get("programs") or []), str(data.get("notes", "")),
             stamp, stamp,
         ),
@@ -506,12 +508,12 @@ def available_months(conn, *, org_id: str) -> list[str]:
 # --- runs ---------------------------------------------------------------------
 
 def create_run(conn, run_id: str | None = None, *, org_id: str,
-               started_by: str | None = None) -> str:
+               started_by: str | None = None, trigger: str = "manual") -> str:
     run_id = run_id or uuid.uuid4().hex[:16]
     conn.execute(
-        "INSERT INTO runs(org_id, id, started_by, started_at, status) "
-        "VALUES(?,?,?,?, 'running')",
-        (org_id, run_id, started_by, now_iso()),
+        "INSERT INTO runs(org_id, id, started_by, trigger, started_at, status) "
+        "VALUES(?,?,?,?,?, 'running')",
+        (org_id, run_id, started_by, trigger, now_iso()),
     )
     return run_id
 
@@ -520,7 +522,8 @@ def update_run(conn, run_id: str, **fields) -> None:
     if not fields:
         return
     for json_field in ("rejected_by_filter", "notes", "progress", "source_health",
-                       "rejects", "usd_by_stage", "log_tail"):
+                       "rejects", "usd_by_stage", "log_tail",
+                       "programs_snapshot", "funder_groups"):
         if json_field in fields and not isinstance(fields[json_field], str):
             fields[json_field] = dumps(fields[json_field])
     sets = ", ".join(f"{k}=?" for k in fields)
@@ -536,6 +539,8 @@ def _run_out(row) -> dict:
     d["rejects"] = loads(d.get("rejects"), [])
     d["usd_by_stage"] = loads(d.get("usd_by_stage"), {})
     d["log_tail"] = loads(d.get("log_tail"), [])
+    d["programs_snapshot"] = loads(d.get("programs_snapshot"), [])
+    d["funder_groups"] = loads(d.get("funder_groups"), [])
     return d
 
 
@@ -563,6 +568,35 @@ def list_runs(conn, limit: int = 20, *, org_id: str) -> list[dict]:
     return [_run_out(r) for r in conn.execute(
         "SELECT * FROM runs WHERE org_id=? ORDER BY started_at DESC LIMIT ?",
         (org_id, limit))]
+
+
+def list_runs_for_month(conn, *, org_id: str, month: str) -> list[dict]:
+    """One card per search that ran in this month, newest first — what Past findings
+    shows instead of one pooled list. Excludes the reject rows and the technical log
+    (hundreds of rows nobody reads from this view; `GET /api/runs/{id}/rejects` and the
+    stage boxes already own that) and excludes runs still in progress — a run belongs
+    here once it has something to report.
+
+    `kept_count` is **not** `opportunities_scored` off the run row — that is how many
+    this run scored the day it ran, and does not shrink when a later search re-confirms
+    the same finding and takes over its `run_id` (the same dedup rule every other
+    findings view already follows). It is a live count against `opportunities` so an
+    old search's card always says how many of its findings are still being shown, not
+    how many it originally produced.
+    """
+    rows = conn.execute(
+        "SELECT * FROM runs WHERE org_id=? AND status<>'running' "
+        "AND substr(started_at, 1, 7)=? ORDER BY started_at DESC",
+        (org_id, month),
+    ).fetchall()
+    out = []
+    for r in rows:
+        d = {k: v for k, v in _run_out(r).items() if k not in ("rejects", "log_tail")}
+        d["kept_count"] = conn.execute(
+            "SELECT COUNT(*) AS n FROM opportunities WHERE org_id=? AND run_id=?",
+            (org_id, d["id"])).fetchone()["n"]
+        out.append(d)
+    return out
 
 
 def spend_summary(conn, *, org_id: str, month: str | None = None) -> dict:
@@ -793,27 +827,67 @@ def report_shared_funder(conn, *, funder_org: str, funder_id: str,
     return {"report_id": rid, "already": False}
 
 
-def open_reports(conn) -> list[dict]:
-    """The moderation queue, for an install admin. Crosses every tenant boundary, so the
-    route that calls this is gated by `FUNDWORTHY_ADMIN_EMAILS` and nothing else."""
-    return [dict(r) for r in conn.execute(
-        """SELECT r.id, r.funder_org, r.funder_id, r.reason, r.created_at,
-                  f.name, f.url, f.notes
+def all_reports(conn) -> list[dict]:
+    """The moderation queue, for an install admin — one card per FUNDER, not one per
+    report. Crosses every tenant boundary, so the route that calls this is gated by
+    `FUNDWORTHY_ADMIN_EMAILS` and nothing else.
+
+    Two or more nonprofits can independently report the same shared funder, which used
+    to surface as separate rows — "reported by 3 organizations" read as three unrelated
+    entries, and resolving one of them left the funder hidden-but-unresolved against the
+    other two (see `resolve_report_group`, which this grouping makes correct). Includes
+    every status, not only 'open': the queue also has to show what was already decided,
+    for "taken down" / "left up" counts on the tab.
+    """
+    rows = conn.execute(
+        """SELECT r.funder_org, r.funder_id, r.reason, r.created_at, r.status,
+                  r.reported_by, f.name, f.url, f.sector
            FROM funder_reports r
            LEFT JOIN funders f ON f.org_id = r.funder_org AND f.id = r.funder_id
-           WHERE r.status = 'open'
-           ORDER BY r.created_at""")]
+           ORDER BY r.created_at""")
+    groups: dict[tuple[str, str], dict] = {}
+    for r in rows:
+        key = (r["funder_org"], r["funder_id"])
+        g = groups.get(key)
+        if g is None:
+            g = groups[key] = {
+                "funder_org": r["funder_org"], "funder_id": r["funder_id"],
+                "name": r["name"], "url": r["url"], "sector": r["sector"],
+                "reason": r["reason"], "created_at": r["created_at"],
+                "reported_by": set(), "status": r["status"],
+            }
+        g["reported_by"].add(r["reported_by"])
+        # The most recent reason and date win — that is the one a reviewer should read.
+        if r["created_at"] >= g["created_at"]:
+            g["reason"], g["created_at"] = r["reason"], r["created_at"]
+        # 'open' if anything about this funder still needs a decision; otherwise
+        # whatever the (normally unanimous) resolved rows agree on.
+        if g["status"] != "open" and r["status"] == "open":
+            g["status"] = "open"
+    out = []
+    for g in groups.values():
+        count = len(g.pop("reported_by"))
+        out.append({**g, "reported_by_count": count})
+    out.sort(key=lambda g: g["created_at"], reverse=True)
+    return out
 
 
-def resolve_report(conn, report_id: str, *, uphold: bool, by: str) -> bool:
-    """Take it down for good, or dismiss the report and put it back in the pool."""
+def resolve_report_group(conn, funder_org: str, funder_id: str, *,
+                         uphold: bool, by: str) -> int:
+    """Take a funder down for good, or dismiss every OPEN report against it and put it
+    back in the pool. Resolves every open row for this funder at once, not just one —
+    a funder several nonprofits independently objected to is one decision, and
+    dismissing only one of several open rows used to leave the others still hiding it
+    (the shared-funders query excludes on ANY row with status in open/upheld). Returns
+    how many rows were actually resolved, so the caller can tell "nothing to do" from
+    "done"."""
     from .db import now_iso
 
     cur = conn.execute(
         "UPDATE funder_reports SET status=?, resolved_at=?, resolved_by=? "
-        "WHERE id=? AND status='open'",
-        ("upheld" if uphold else "dismissed", now_iso(), by, report_id))
-    return cur.rowcount > 0
+        "WHERE funder_org=? AND funder_id=? AND status='open'",
+        ("upheld" if uphold else "dismissed", now_iso(), by, funder_org, funder_id))
+    return cur.rowcount
 
 
 # --- bug reports ----------------------------------------------------------------

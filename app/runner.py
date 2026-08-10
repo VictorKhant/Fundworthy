@@ -293,7 +293,7 @@ class RunManager:
 
     def start(self, *, no_llm: bool = False, budget: float | None = None,
               max_opportunities: int | None = None, org_id: str,
-              started_by: str | None = None) -> str:
+              started_by: str | None = None, trigger: str = "manual") -> str:
         if draining():
             raise RuntimeError(
                 "Fundworthy is being updated right now, so new searches are paused for "
@@ -339,7 +339,8 @@ class RunManager:
                 if stoppers:
                     raise RuntimeError(stoppers[0]["message"])
 
-                run_id = repo.create_run(conn, org_id=org_id, started_by=started_by)
+                run_id = repo.create_run(conn, org_id=org_id, started_by=started_by,
+                                         trigger=trigger)
                 repo.update_run(conn, run_id, progress=dumps(
                     {"phase": "starting", "message": "Starting the search…"}))
                 key, key_source = resolve_api_key(conn, org_id=org_id)

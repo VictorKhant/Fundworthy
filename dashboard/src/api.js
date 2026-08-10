@@ -102,7 +102,13 @@ export const api = {
     remove: (id) => del(`/api/funders/${id}`),
   },
 
-  opportunities: (month) => get(`/api/opportunities${month ? `?month=${month}` : ""}`),
+  opportunities: (month, runId) => {
+    const q = new URLSearchParams();
+    if (month) q.set("month", month);
+    if (runId) q.set("run_id", runId);
+    const qs = q.toString();
+    return get(`/api/opportunities${qs ? `?${qs}` : ""}`);
+  },
   archive: (month) => get(`/api/archive${month ? `?month=${month}` : ""}`),
 
   // This used to be a plain URL on an <a download>, which was the better shape: the
@@ -167,7 +173,12 @@ export const api = {
 
   admin: {
     reports: () => get("/api/admin/reports"),
-    resolve: (id, uphold) => post(`/api/admin/reports/${id}`, { uphold }),
+    // One card per reported FUNDER now, not per report row — see app/repo.py:
+    // all_reports / resolve_report_group. Resolves every open report against that
+    // funder at once.
+    resolve: (funderOrg, funderId, uphold) =>
+      post("/api/admin/reports/resolve",
+           { funder_org: funderOrg, funder_id: funderId, uphold }),
   },
 
   // "Report a bug", from Settings. Always saved server-side; `filed` says whether it
@@ -183,6 +194,13 @@ export const api = {
     join: (code) => post("/api/org/join", { code }),
     removeMember: (uid) => del(`/api/org/members/${encodeURIComponent(uid)}`),
     transfer: (uid) => post("/api/org/transfer", { uid }),
+    switch: (orgId) => post("/api/org/switch", { org_id: orgId }),
+  },
+
+  // Every organization the signed-in person can switch into — their home org plus
+  // whichever they have joined by invitation code. For the sidebar switcher.
+  orgs: {
+    mine: () => get("/api/orgs/mine"),
   },
 
   // Deleting your own account. Not under `org` — it is the one action that is about the

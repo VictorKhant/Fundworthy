@@ -115,6 +115,10 @@ export default function App() {
   // Whether the walkthrough is on screen, kept separately from whether it is *needed* —
   // see the note by `setupIncomplete` below.
   const [tutorialOpen, setTutorialOpen] = useState(false);
+  // Which Settings tab to open on. Only OrgSwitcher's "Join another organization…"
+  // sets this to something other than the default — everyone else lands on the first
+  // tab, the same as always.
+  const [settingsTab, setSettingsTab] = useState(null);
 
   // Returns the state it fetched as well as storing it. Callers that need to *decide*
   // something from the result — the walkthrough, after joining an org, has to know
@@ -224,9 +228,7 @@ export default function App() {
   const orgName = state?.settings?.org_name;
 
   // A brand-new org: signed in, nothing added, nothing chosen. Only then is "are you
-  // joining a colleague?" a real question — redeeming a code MOVES you into their org,
-  // so offering it to someone who has already entered their programs would be offering
-  // to throw that work away.
+  // joining a colleague?" asked as the walkthrough's first step — see Tutorial.jsx.
   // Read from the account, not from a flag we store: whether you still need setting up
   // *is* whether you have a key and a ticked program. Nothing to drift out of sync, and
   // doing a step elsewhere in the app counts.
@@ -251,6 +253,15 @@ export default function App() {
           setState(null);
           go("landing");
         }}
+        // Switching organizations changes everything on screen — funders, programs,
+        // findings, spend — so this is a full refetch, the same as any other action
+        // that changes what /api/state describes.
+        onOrgChange={refresh}
+        onJoinAnother={() => {
+          setSettingsTab("organization");
+          setPage("settings");
+        }}
+        lastSearchAt={state?.latest_run?.started_at}
       />
 
       <main className="page">
@@ -295,8 +306,11 @@ export default function App() {
           // them to find it is the step people abandon.
           <Dashboard state={state} onChange={refresh} onGoto={setPage} />
         )}
-        {state && page === "settings" && <Settings state={state} onChange={refresh} />}
-        {page === "archive" && <Archive />}
+        {state && page === "settings" && (
+          <Settings state={state} onChange={refresh}
+                    initialTab={settingsTab} onTabOpened={() => setSettingsTab(null)} />
+        )}
+        {state && page === "archive" && <Archive />}
         {state && page === "discover" && <Discover state={state} onChange={refresh} />}
 
         <footer>

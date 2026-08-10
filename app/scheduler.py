@@ -140,7 +140,7 @@ def tick() -> int:
 
     for org_id in candidates:
         try:
-            run_id = MANAGER.start(org_id=org_id)
+            run_id = MANAGER.start(org_id=org_id, trigger="scheduled")
             log.info("scheduler: started %s for org %s", run_id, org_id)
             started += 1
         except RuntimeError as exc:

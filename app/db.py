@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path("data/rise.db")
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 19
 
 # The org that owns everything written before tenancy existed. A single-tenant install
 # (and every row in the pilot's live database) belongs to it, so adding org scoping is a
@@ -79,17 +79,44 @@ CREATE TABLE IF NOT EXISTS orgs (
 
 -- One row per person who has ever signed in. `uid` is Firebase's `sub` claim, which is
 -- stable for the life of the account; `email` is what the allow-list matches on and what
--- a human recognises, so both are kept. A user belongs to exactly one org. Many users
--- may share an org — that is how two staff at the same nonprofit see the same funders —
--- but there is no UI to arrange it yet, so today every new signer-in gets their own.
+-- a human recognises, so both are kept. `org_id` is their HOME org — where their admin
+-- rights live, where "Close your account" leaves from, unchanged since single-tenancy.
+-- Many users may share a home org — that is how two staff at the same nonprofit see the
+-- same funders — but there is no UI to arrange it, so today every new signer-in gets
+-- their own.
+--
+-- `active_org_id` is a second, later addition: which org's data this browser session is
+-- currently looking at. NULL means "the home org" — the common case, and the reason it
+-- is nullable rather than always populated with a copy of `org_id`. It only ever holds
+-- something else once a person has joined a second org (see `memberships` below) and
+-- switched into it.
 CREATE TABLE IF NOT EXISTS users (
     uid        TEXT PRIMARY KEY,
     email      TEXT NOT NULL UNIQUE COLLATE NOCASE,
     org_id     TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    active_org_id TEXT,
     created_at TEXT NOT NULL,
     last_seen_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_users_org ON users(org_id);
+
+-- A SECOND organization a person can see and switch into, beyond their home org above.
+-- Deliberately not "replace `users.org_id` with a many-to-many table": that column is
+-- also where admin authority, ownership transfer and account-closure all already live,
+-- and rebuilding every one of those around a join table the night this shipped was the
+-- riskier change for no benefit today. Redeeming a colleague's invitation code inserts a
+-- row here — see `redeem_invite` — and never touches the home org at all: joining a
+-- second organization does not move you out of your first one.
+--
+-- Nobody is ever an admin of an org they only hold through this table — `orgs.owner_uid`
+-- is the sole source of admin authority (§ users above), and nothing here can set it.
+CREATE TABLE IF NOT EXISTS memberships (
+    uid        TEXT NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+    org_id     TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    joined_at  TEXT NOT NULL,
+    PRIMARY KEY (uid, org_id)
+);
+CREATE INDEX IF NOT EXISTS idx_memberships_uid ON memberships(uid);
 
 -- An invitation to join an existing org. The admin generates one and shares the code
 -- however they like (email, Slack, out loud); the joiner pastes it during sign-up.
@@ -226,6 +253,13 @@ CREATE TABLE IF NOT EXISTS funders (
     blocked     INTEGER NOT NULL DEFAULT 0,
     tier        INTEGER NOT NULL DEFAULT 1,
     confidence  INTEGER NOT NULL DEFAULT 1,   -- agent.sources.Confidence
+    -- Which county/counties or region a funder actually gives to, stated on its own
+    -- page — not a filter, a label. A "California family foundations" list is real,
+    -- verified funders, but nearly every one of them only funds ONE county, and that
+    -- restriction used to live buried in a paragraph of notes nobody reads before
+    -- clicking Add. This surfaces it as its own visible fact instead of removing the
+    -- funder from a list a DIFFERENT org — one actually in that county — needs intact.
+    region      TEXT NOT NULL DEFAULT '',
     programs    TEXT NOT NULL DEFAULT '[]',   -- json array of program slugs
     -- Key into agent/apis.py ADAPTERS. NULL means "crawl the HTML". Stored rather
     -- than re-derived, because a source that loses its adapter silently becomes an
@@ -302,8 +336,16 @@ CREATE TABLE IF NOT EXISTS runs (
     -- Run ids are uuids, so they do not collide across orgs the way the derived ids
     -- above do; org_id here is for scoping reads, not for identity.
     id                 TEXT PRIMARY KEY,
-    -- Who pressed the button. Null for a scheduled run, which nobody pressed.
+    -- Who pressed the button. Null for a scheduled run, which nobody pressed — and
+    -- also null for a manual run on a local install, which has nobody signed in to
+    -- name. That second case is why `trigger` below exists as its own column: this one
+    -- alone cannot tell "you pressed Search again now" apart from "it ran on its own"
+    -- once sign-in is off, which is the common case (CLAUDE.md's local install).
     started_by         TEXT,
+    -- 'manual' (the Re-run button, or the CLI) or 'scheduled' (the weekly job nobody
+    -- touched) — Past findings' "You pressed 'Search again now'" vs "Ran on its own,
+    -- weekly" reads this, not `started_by`, for the reason above.
+    trigger            TEXT NOT NULL DEFAULT 'manual',
     started_at         TEXT NOT NULL,
     finished_at        TEXT,
     status             TEXT NOT NULL DEFAULT 'running',  -- running | done | failed | stopped
@@ -348,7 +390,16 @@ CREATE TABLE IF NOT EXISTS runs (
     -- deleted the instant the subprocess exits — so the one thing CLAUDE.md calls "the
     -- only thing that explains a run that died halfway" was unavailable for exactly the
     -- run somebody needed it for. Capped when written, not here.
-    log_tail           TEXT NOT NULL DEFAULT '[]'
+    log_tail           TEXT NOT NULL DEFAULT '[]',
+    -- The program cards ticked when this run started, and a coarse grouping of the
+    -- funder sources it actually read — both for Past findings, which shows one card
+    -- per search rather than one pooled list per month. Neither is derivable after the
+    -- fact: programs get edited and funders get added or removed, so reading them off
+    -- today's settings would silently rewrite what an old search says it searched for.
+    -- `[{"name": "...", "slug": "..."}]` and `[{"label": "...", "count": N}]`
+    -- respectively — see `agent/run.py: crawl()`.
+    programs_snapshot  TEXT NOT NULL DEFAULT '[]',
+    funder_groups      TEXT NOT NULL DEFAULT '[]'
 );
 """
 
@@ -936,6 +987,49 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE opportunities ADD COLUMN apply_url TEXT")
         current = 17
 
+    if current < 18:
+        # v18: funders.region — see the note on the column above. Nothing is
+        # backfilled for existing rows; an empty string reads the same as "not stated
+        # on the page we researched it from" everywhere this is displayed, which is
+        # correct for the 44 San Diego funders (never researched with a region field
+        # in mind) and only wrong-in-a-harmless-direction for anything else.
+        funder_cols = {r["name"] for r in conn.execute("PRAGMA table_info(funders)")}
+        if "region" not in funder_cols:
+            conn.execute("ALTER TABLE funders ADD COLUMN region TEXT NOT NULL DEFAULT ''")
+        current = 18
+
+    if current < 19:
+        # v19: real multi-org membership — the `memberships` table and `users.active_
+        # org_id` (see the notes on both above), and `runs.programs_snapshot` /
+        # `funder_groups` for Past findings' per-search breakdown. `CREATE TABLE IF NOT
+        # EXISTS` above already created `memberships` on a fresh install; on an existing
+        # one it has to be created here too, the same two-step every table in this file
+        # goes through. Nothing is backfilled into it — an existing user's only
+        # organization is already `users.org_id`, which needs no second row to say so.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS memberships (
+                uid        TEXT NOT NULL REFERENCES users(uid) ON DELETE CASCADE,
+                org_id     TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+                joined_at  TEXT NOT NULL,
+                PRIMARY KEY (uid, org_id)
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_memberships_uid ON memberships(uid)")
+        user_cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)")}
+        if "active_org_id" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN active_org_id TEXT")
+        run_cols = {r["name"] for r in conn.execute("PRAGMA table_info(runs)")}
+        if "programs_snapshot" not in run_cols:
+            conn.execute(
+                "ALTER TABLE runs ADD COLUMN programs_snapshot TEXT NOT NULL DEFAULT '[]'")
+        if "funder_groups" not in run_cols:
+            conn.execute(
+                "ALTER TABLE runs ADD COLUMN funder_groups TEXT NOT NULL DEFAULT '[]'")
+        if "trigger" not in run_cols:
+            conn.execute(
+                "ALTER TABLE runs ADD COLUMN trigger TEXT NOT NULL DEFAULT 'manual'")
+        current = 19
+
     conn.execute(
         "INSERT INTO meta(key, value) VALUES('schema_version', ?) "
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -1182,33 +1276,27 @@ class InviteError(ValueError):
 
 
 def redeem_invite(conn: sqlite3.Connection, code: str, uid: str, email: str) -> dict:
-    """Move (or place) this person into the org the code belongs to.
+    """Add this person to the org the code belongs to, and switch them into it.
 
     Redeeming is idempotent per person but single-use per code: the second person to try
     the same code is told to ask for their own. The error messages deliberately do not
     distinguish "no such code" from "already used" beyond what the holder needs to act —
     there is nothing to enumerate here, but there is also no reason to be chatty.
 
-    **Joining MOVES you, so leaving is governed by the same rules as closing an account**
-    (`main.delete_own_account`), and for the same reasons. This used to be a bare
-    `UPDATE users SET org_id`, which walked straight past both of them:
-
-      - An admin with colleagues could leave, and the last person who could invite or
-        remove anybody was gone. The org was frozen with no way to unfreeze it.
-      - Somebody leaving an org they were alone in left it with no members and everything
-        still in it — findings, and an encrypted API key that is a live credential
-        attached to an account nobody can sign into.
-
-    So the caller goes out through `remove_member`, which strands a now-empty org (see
-    `strand_org`: findings, run log and key deleted; hand-added funders kept) and re-seats
-    the owner if it was them. The refusal is the only case where nothing happens at all.
+    **Joining ADDS a second organization; it does not move anybody out of their first
+    one.** This used to be a move — the caller went out through `remove_member` exactly
+    the way closing an account does, and an org left with nobody in it was stranded (see
+    `strand_org`). That was right for a version of this product with one org per person
+    and wrong the moment a real switcher existed to hold more than one: a colleague
+    redeeming an invite to see a partner nonprofit's shared findings should not have to
+    give up their own organization to do it. Their home org (`users.org_id`) — where
+    their admin rights live, if any — is untouched by this function; only `memberships`
+    (a second organization they can now also switch into) and `active_org_id` (which one
+    they are looking at right now) change.
 
     Ordering matters: everything that can refuse is checked BEFORE the code is marked
     redeemed. Marking first and raising after would burn a single-use invitation on an
     attempt that did nothing, and the holder would have to ask for another one.
-
-    Returns what happened, because the caller has to be told: {org_id, left_org,
-    stranded}. `stranded` true means their previous org's findings and key are gone.
     """
     code = code.strip().upper()
     row = conn.execute("SELECT * FROM invites WHERE code=?", (code,)).fetchone()
@@ -1221,41 +1309,119 @@ def redeem_invite(conn: sqlite3.Connection, code: str, uid: str, email: str) -> 
         raise InviteError("That invitation has expired. Ask for a new one.")
 
     org_id = row["org_id"]
-    existing = conn.execute("SELECT uid, org_id FROM users WHERE uid=? OR email=?",
-                            (uid, email)).fetchone()
-    old_org = existing["org_id"] if existing else None
+    home = conn.execute("SELECT org_id FROM users WHERE uid=?", (uid,)).fetchone()
 
-    # Already there. Not an error — somebody re-pasting a code they have used should be
-    # told they are in, not told off — but the invitation is not spent on it either.
-    if old_org == org_id:
-        return {"org_id": org_id, "left_org": None, "stranded": False}
+    # Nobody's first sign-in — no `users` row yet, and therefore no home org. This code
+    # becomes it, the same as a fresh sign-in with no invite would have provisioned one;
+    # `memberships` is only ever for a SECOND organization, on top of a home that already
+    # exists.
+    if home is None:
+        now = now_iso()
+        conn.execute("UPDATE invites SET redeemed_at=?, redeemed_by=? WHERE code=?",
+                     (now, email, code))
+        conn.execute(
+            "INSERT INTO users(uid, email, org_id, created_at, last_seen_at) "
+            "VALUES(?,?,?,?,?)", (uid, email, org_id, now, now))
+        log.info("%s joined org %s by invitation, as their first organization",
+                 email, org_id)
+        return {"org_id": org_id, "already_member": False}
 
-    stranded = False
-    if old_org:
-        others = conn.execute(
-            "SELECT COUNT(*) AS n FROM users WHERE org_id=? AND uid<>?",
-            (old_org, existing["uid"])).fetchone()["n"]
-        if others and org_owner(conn, old_org) == existing["uid"]:
-            raise InviteError(
-                "You are the admin of the organization you are in now, and other people "
-                "are still in it. Hand it over to one of them from Settings first — "
-                "otherwise nobody left could invite or remove anyone.")
-        stranded = not others
+    already_member = home["org_id"] == org_id or bool(conn.execute(
+        "SELECT 1 FROM memberships WHERE uid=? AND org_id=?", (uid, org_id)).fetchone())
+
+    # Already there. Not an error — somebody re-pasting a code they hold should be
+    # switched to it and told they are in, not told off — but an unredeemed invitation is
+    # not spent switching someone who did not need it.
+    if already_member:
+        conn.execute(
+            "UPDATE users SET active_org_id=? WHERE uid=?",
+            (None if home and home["org_id"] == org_id else org_id, uid))
+        return {"org_id": org_id, "already_member": True}
 
     now = now_iso()
     conn.execute("UPDATE invites SET redeemed_at=?, redeemed_by=? WHERE code=?",
                  (now, email, code))
-
-    if existing:
-        # Out through the same door as closing an account, rather than a bare reassign.
-        remove_member(conn, existing["uid"], old_org)
     conn.execute(
-        "INSERT INTO users(uid, email, org_id, created_at, last_seen_at) "
-        "VALUES(?,?,?,?,?)", (uid, email, org_id, now, now))
+        "INSERT INTO memberships(uid, org_id, joined_at) VALUES(?,?,?)",
+        (uid, org_id, now))
+    conn.execute("UPDATE users SET active_org_id=? WHERE uid=?", (org_id, uid))
 
-    log.info("%s joined org %s by invitation (left %s, stranded=%s)",
-             email, org_id, old_org or "no org", stranded)
-    return {"org_id": org_id, "left_org": old_org, "stranded": stranded}
+    log.info("%s joined org %s by invitation, in addition to their home org", email, org_id)
+    return {"org_id": org_id, "already_member": False}
+
+
+def current_active_org(conn: sqlite3.Connection, uid: str, email: str) -> str:
+    """Which org's data this person is looking at right now — their home org, unless
+    they have switched into a second one they also belong to.
+
+    Calls `org_for_user` first, which is what actually provisions the `users` row on a
+    first sign-in; this only ever reads `active_org_id` off a row that already exists.
+    Falls back to the home org — rather than trusting a stale value outright — if the
+    org they last switched to no longer exists or they are no longer a member of it, so
+    a membership removed elsewhere cannot leave someone resolving into data they can no
+    longer see.
+    """
+    home = org_for_user(conn, uid, email)
+    row = conn.execute("SELECT active_org_id FROM users WHERE uid=?", (uid,)).fetchone()
+    active = row["active_org_id"] if row else None
+    if not active or active == home:
+        return home
+    if conn.execute("SELECT 1 FROM memberships WHERE uid=? AND org_id=?",
+                    (uid, active)).fetchone():
+        return active
+    conn.execute("UPDATE users SET active_org_id=NULL WHERE uid=?", (uid,))
+    return home
+
+
+def my_orgs(conn: sqlite3.Connection, uid: str) -> list[dict]:
+    """Every organization this person can switch into: their home org first, then
+    whichever they have joined by invitation code, in the order they joined."""
+    home = conn.execute("SELECT org_id, active_org_id FROM users WHERE uid=?",
+                        (uid,)).fetchone()
+    if not home:
+        return []
+    active = home["active_org_id"] or home["org_id"]
+    org_ids = [home["org_id"]] + [r["org_id"] for r in conn.execute(
+        "SELECT org_id FROM memberships WHERE uid=? ORDER BY joined_at", (uid,))]
+
+    out = []
+    for org_id in org_ids:
+        org = conn.execute("SELECT name, owner_uid FROM orgs WHERE id=?",
+                           (org_id,)).fetchone()
+        if org is None:
+            continue
+        loc = conn.execute(
+            "SELECT value FROM settings WHERE org_id=? AND key='org_location'",
+            (org_id,)).fetchone()
+        funders = conn.execute(
+            "SELECT COUNT(*) AS n FROM funders WHERE org_id=?", (org_id,)).fetchone()["n"]
+        out.append({
+            "id": org_id,
+            "name": org["name"] or "Your organization",
+            "org_location": (loc["value"] or "") if loc else "",
+            "is_admin": org["owner_uid"] == uid,
+            "is_current": org_id == active,
+            "funder_count": funders,
+        })
+    return out
+
+
+def switch_active_org(conn: sqlite3.Connection, uid: str, org_id: str) -> None:
+    """Change which org's data this person sees. Refuses anywhere they do not actually
+    belong — their home org, or one they hold through `memberships` — because this is the
+    one place a client gets to name an org id at all, and trusting it without a
+    membership check would be exactly the tenant-crossing hole `current_org` exists to
+    close everywhere else.
+    """
+    home = conn.execute("SELECT org_id FROM users WHERE uid=?", (uid,)).fetchone()
+    if home and home["org_id"] == org_id:
+        conn.execute("UPDATE users SET active_org_id=NULL WHERE uid=?", (uid,))
+        return
+    member = conn.execute("SELECT 1 FROM memberships WHERE uid=? AND org_id=?",
+                          (uid, org_id)).fetchone()
+    if not member:
+        raise ValueError("not a member of that organization")
+    conn.execute("UPDATE users SET active_org_id=? WHERE uid=?", (org_id, uid))
 
 
 def org_members(conn: sqlite3.Connection, org_id: str) -> list[dict]:
@@ -1563,12 +1729,12 @@ def import_starter_list(conn: sqlite3.Connection, key: str, org_id: str) -> int:
         cur = conn.execute(
             """INSERT INTO funders(
                    org_id, id, name, url, sector, funder_type, warm, active,
-                   exclude_reason, tier, confidence, programs, adapter, notes,
+                   exclude_reason, tier, confidence, region, programs, adapter, notes,
                    added_by, created_at, updated_at)
-               VALUES(?,?,?,?,?,?,0,1,'',?,?,?,?,?,'starter',?,?)
+               VALUES(?,?,?,?,?,?,0,1,'',?,?,?,?,?,?,'starter',?,?)
                ON CONFLICT(org_id, id) DO NOTHING""",
             (org_id, _funder_id(s.funder, s.url), s.funder, s.url, sector_for(cold),
-             _funder_type_for(s), int(s.tier), int(s.confidence),
+             _funder_type_for(s), int(s.tier), int(s.confidence), s.region,
              dumps([p.value for p in s.programs]), s.adapter, s.notes, stamp, stamp),
         )
         added += cur.rowcount or 0

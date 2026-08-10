@@ -100,13 +100,18 @@ async def file_github_issue(title: str, body: str) -> dict:
 
 
 def format_issue_body(description: str, *, org_name: str, org_id: str, reporter: str,
-                      page: str, user_agent: str) -> str:
+                      page: str, user_agent: str, last_search: str | None = None) -> str:
     """The markdown body filed alongside the title.
 
     The user's own words come first, verbatim — a maintainer reading the issue reads
     their report before anything else. Everything after the rule is plain identifying
     context for follow-up: never anything from Settings or an API key, which have no
     business leaving the org's own database.
+
+    `last_search` is the org's most recent run's `started_at`, not anything the browser
+    sent — the dashboard tells the person filing the report that this is what goes with
+    it (`components/BugReportModal.jsx`), so it has to actually be here rather than only
+    on screen.
     """
     reporter_label = reporter if reporter and reporter != "local" \
         else "local install, no sign-in"
@@ -117,6 +122,7 @@ def format_issue_body(description: str, *, org_name: str, org_id: str, reporter:
         f"- Org: {org_name.strip() or '(unnamed)'} (`{org_id}`)\n"
         f"- Reported by: {reporter_label}\n"
         f"- Page: {page or '(not given)'}\n"
+        f"- Last search: {last_search or '(none yet)'}\n"
         f"- User agent: {user_agent or '(not given)'}\n"
         f"- Time (UTC): {datetime.now(timezone.utc).isoformat()}\n"
     )
