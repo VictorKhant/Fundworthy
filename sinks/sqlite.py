@@ -88,4 +88,6 @@ class SqliteSink:
                 duplicates_skipped=getattr(run, "duplicates_skipped", 0),
                 notes=dumps(d["notes"]),
                 source_health=dumps(d.get("source_health") or []),
+                programs_snapshot=dumps(d.get("programs_snapshot") or []),
+                funder_groups=dumps(d.get("funder_groups") or []),
             )

@@ -277,6 +277,48 @@ def test_runs_are_listed_per_org(db):
         assert repo.get_run(conn, "run_a", org_id=B) is None
 
 
+def test_list_runs_for_month_scopes_by_month_and_excludes_running(db):
+    """Past findings' one-card-per-search view: this month, finished, no reject rows or
+    log tail (those are fetched on demand elsewhere, same as everywhere in this app)."""
+    from app.db import month_key
+
+    with session(db) as conn:
+        repo.create_run(conn, "run_this_month", org_id=A, trigger="scheduled")
+        repo.update_run(conn, "run_this_month", status="done")
+        repo.create_run(conn, "run_still_running", org_id=A, trigger="manual")
+        repo.create_run(conn, "run_last_month", org_id=A, trigger="manual")
+        repo.update_run(conn, "run_last_month", status="done")
+        conn.execute("UPDATE runs SET started_at=? WHERE id=?",
+                    ("2020-01-15T10:00:00+00:00", "run_last_month"))
+
+        this_month = repo.list_runs_for_month(conn, org_id=A, month=month_key())
+
+    ids = [r["id"] for r in this_month]
+    assert "run_this_month" in ids
+    assert "run_still_running" not in ids, "a run in progress has nothing to report yet"
+    assert "run_last_month" not in ids
+
+    row = next(r for r in this_month if r["id"] == "run_this_month")
+    assert row["trigger"] == "scheduled"
+    assert "rejects" not in row and "log_tail" not in row
+
+
+def test_list_runs_for_month_reports_findings_currently_credited_to_it(db):
+    """`kept_count` is live, not the run's own historical `opportunities_scored` — a
+    later search that re-confirms the same finding takes over its `run_id`, and an old
+    search's card has to reflect that rather than over-claiming."""
+    from app.db import month_key
+
+    with session(db) as conn:
+        repo.create_run(conn, "run_x", org_id=A)
+        repo.update_run(conn, "run_x", status="done")
+        repo.save_opportunity(conn, _opp(), run_id="run_x", org_id=A)
+
+        rows = repo.list_runs_for_month(conn, org_id=A, month=month_key())
+
+    assert next(r for r in rows if r["id"] == "run_x")["kept_count"] == 1
+
+
 # --- users and org assignment -------------------------------------------------
 
 def test_the_pre_tenancy_org_is_claimed_by_name_not_by_arriving_first(db, monkeypatch):
@@ -438,7 +480,9 @@ def test_a_run_is_refused_once_the_month_is_spent(db, monkeypatch):
 
 # --- invitations --------------------------------------------------------------
 
-def test_an_invite_moves_the_joiner_into_the_inviters_org(db):
+def test_an_invite_gives_a_brand_new_person_that_org_as_their_home(db):
+    """Nobody signed in before redeeming — no `users` row, so no home org yet. The
+    invite's org becomes it, the same as an ordinary first sign-in would have."""
     from app.db import create_invite, redeem_invite
 
     with session(db) as conn:
@@ -447,9 +491,27 @@ def test_an_invite_moves_the_joiner_into_the_inviters_org(db):
 
         joined = redeem_invite(conn, invite["code"], "uid-new", "colleague@example.org")
 
-    assert joined["org_id"] == owner
-    assert joined["left_org"] is None, "a brand-new person left nothing behind"
-    assert joined["stranded"] is False
+        assert joined == {"org_id": owner, "already_member": False}
+        assert org_for_user(conn, "uid-new", "colleague@example.org") == owner
+
+
+def test_an_invite_gives_an_existing_person_a_second_org_without_moving_them(db):
+    """The real point of the feature: joining ADDS an organization to see and switch
+    into. It does not touch the one you already have."""
+    from app.db import create_invite, current_active_org, redeem_invite
+
+    with session(db) as conn:
+        home = org_for_user(conn, "uid-staff", "staff@example.org")
+        other = org_for_user(conn, "uid-owner", "owner@example.org")
+        code = create_invite(conn, other, created_by="owner@example.org")["code"]
+
+        joined = redeem_invite(conn, code, "uid-staff", "staff@example.org")
+
+        assert joined == {"org_id": other, "already_member": False}
+        # Home org is exactly where it was.
+        assert org_for_user(conn, "uid-staff", "staff@example.org") == home
+        # But they are now looking at the one they just joined.
+        assert current_active_org(conn, "uid-staff", "staff@example.org") == other
 
 
 def test_an_invite_is_single_use(db):
@@ -506,54 +568,49 @@ def test_a_revoked_invite_cannot_be_used(db):
             redeem_invite(conn, code, "uid-2", "two@example.org")
 
 
-# --- joining is also leaving ---------------------------------------------------
+# --- joining is not leaving -----------------------------------------------------
 #
-# `redeem_invite` MOVES somebody, so it has to answer the same two questions closing an
-# account does. It used to be a bare `UPDATE users SET org_id`, which answered neither:
-# an admin could walk out of an org with colleagues still in it and freeze it, and a
-# sole member could leave their org behind with a live encrypted API key in it.
+# `redeem_invite` ADDS a second organization; it never moves anybody out of their home
+# one. It used to move — the joiner went out through `remove_member` exactly the way
+# closing an account does, and a sole member leaving behind a live API key had their old
+# org stranded (findings and key deleted, hand-added funders kept). None of that applies
+# to joining any more: nobody is leaving, so nothing to strand and nobody to trap.
 
-def test_the_last_person_out_strands_the_org_they_left(db):
-    """Same rule as closing an account: findings and the key go, hand-added funders stay.
-
-    A key left behind is the part that actually matters — it is a live credential in an
-    org that now has nobody who can sign in to remove it.
-    """
+def test_joining_a_second_org_leaves_the_first_untouched(db):
+    """The old worry — a live credential stranded in an org nobody can sign into any
+    more — cannot happen via joining any more, because the home org is never left."""
     from app import secrets
     from app.db import create_invite, redeem_invite
 
     with session(db) as conn:
         # The first signer-in adopts the pre-tenancy org and its 60-odd seeded funders,
-        # so the person under test has to be the second. Otherwise "the funders they
-        # added by hand" is the whole starter list and the test passes for the wrong
-        # reason — or fails for one.
+        # so the person under test has to be the second — otherwise "the funders they
+        # added by hand" is the whole starter list.
         org_for_user(conn, "uid-pilot", "pilot@example.org")
-        old = org_for_user(conn, "uid-mover", "mover@example.org")
-        secrets.store_api_key(conn, "sk-ant-leftbehind", org_id=old)
+        home = org_for_user(conn, "uid-mover", "mover@example.org")
+        secrets.store_api_key(conn, "sk-ant-stillhere", org_id=home)
         repo.create_funder(conn, {"name": "Their Own Find",
-                                  "url": "https://own.example/grants"}, org_id=old)
-        repo.create_run(conn, "r-old", org_id=old)
+                                  "url": "https://own.example/grants"}, org_id=home)
+        repo.create_run(conn, "r-old", org_id=home)
 
         other = org_for_user(conn, "uid-host", "host@example.org")
         code = create_invite(conn, other)["code"]
 
         result = redeem_invite(conn, code, "uid-mover", "mover@example.org")
 
-        assert result["org_id"] == other
-        assert result["left_org"] == old
-        assert result["stranded"] is True
-
-        key, _source = secrets.resolve_api_key(conn, org_id=old)
-        assert not key, "a live credential outlived the account it belonged to"
-        assert repo.list_runs(conn, org_id=old) == []
-        kept = [f["name"] for f in repo.list_funders(conn, org_id=old)]
-        assert kept == ["Their Own Find"], "hand-added funders are the part worth keeping"
+        assert result == {"org_id": other, "already_member": False}
+        key, _source = secrets.resolve_api_key(conn, org_id=home)
+        assert key == "sk-ant-stillhere", "the home org's key is still there"
+        assert len(repo.list_runs(conn, org_id=home)) == 1
+        kept = [f["name"] for f in repo.list_funders(conn, org_id=home)]
+        assert kept == ["Their Own Find"]
 
 
-def test_an_admin_with_colleagues_cannot_join_their_way_out(db):
-    """Otherwise the only person who can invite or remove anybody leaves, and the org is
-    frozen with no way to unfreeze it. Closing an account already refuses this."""
-    from app.db import InviteError, create_invite, redeem_invite
+def test_an_admin_with_colleagues_can_still_join_a_second_org(db):
+    """The old refusal — an admin cannot join elsewhere while colleagues are still in
+    their org — was about not stranding a colleague when the admin LEFT. Joining does
+    not leave any more, so there is nothing left to refuse."""
+    from app.db import create_invite, org_owner, redeem_invite
 
     with session(db) as conn:
         home = org_for_user(conn, "uid-boss", "boss@example.org")
@@ -563,20 +620,17 @@ def test_an_admin_with_colleagues_cannot_join_their_way_out(db):
         elsewhere = org_for_user(conn, "uid-other", "other@example.org")
         code = create_invite(conn, elsewhere)["code"]
 
-        with pytest.raises(InviteError, match="[Hh]and it over"):
-            redeem_invite(conn, code, "uid-boss", "boss@example.org")
+        result = redeem_invite(conn, code, "uid-boss", "boss@example.org")
 
-        # And nothing happened: not the move, and not the invitation either.
+        assert result == {"org_id": elsewhere, "already_member": False}
+        # Still the admin at home — nothing about their first org changed.
+        assert org_owner(conn, home) == "uid-boss"
         assert org_for_user(conn, "uid-boss", "boss@example.org") == home
-        row = conn.execute("SELECT redeemed_at FROM invites WHERE code=?",
-                           (code,)).fetchone()
-        assert row["redeemed_at"] is None, \
-            "a refused attempt burned a single-use code"
 
 
-def test_a_colleague_who_is_not_the_admin_may_leave_freely(db):
-    """The other side of the rule. Somebody who is not holding the keys is not trapped,
-    and the org they leave keeps everything because it still has members."""
+def test_a_colleague_joining_a_second_org_does_not_disturb_the_first(db):
+    """Somebody who is not the admin gains a second org exactly the same way the admin
+    does — the first org keeps everything, because nobody left it."""
     from app.db import create_invite, redeem_invite
 
     with session(db) as conn:
@@ -591,14 +645,13 @@ def test_a_colleague_who_is_not_the_admin_may_leave_freely(db):
         result = redeem_invite(conn, create_invite(conn, elsewhere)["code"],
                                "uid-staff", "staff@example.org")
 
-        assert result["stranded"] is False
+        assert result == {"org_id": elsewhere, "already_member": False}
         assert [f["name"] for f in repo.list_funders(conn, org_id=home)] == ["Stays Put"]
 
 
 def test_redeeming_a_code_for_the_org_you_are_already_in_is_a_no_op(db):
     """Re-pasting a code you have used should say "you are in", not throw — and must not
-    take you out through `remove_member` and straight back in, which on a one-person org
-    would strand it and delete the findings you are looking at."""
+    burn the invitation or touch the org's data."""
     from app.db import create_invite, redeem_invite
 
     with session(db) as conn:
@@ -608,8 +661,72 @@ def test_redeeming_a_code_for_the_org_you_are_already_in_is_a_no_op(db):
 
         result = redeem_invite(conn, code, "uid-boss", "boss@example.org")
 
-        assert result == {"org_id": home, "left_org": None, "stranded": False}
+        assert result == {"org_id": home, "already_member": True}
         assert len(repo.list_runs(conn, org_id=home)) == 1, "it deleted its own org"
+
+
+# --- the switcher: which of your orgs are you looking at ------------------------
+
+def test_my_orgs_lists_home_first_then_joined_orgs_in_order(db):
+    from app.db import create_invite, my_orgs, redeem_invite
+
+    with session(db) as conn:
+        home = org_for_user(conn, "uid-staff", "staff@example.org")
+        second = org_for_user(conn, "uid-second-owner", "second@example.org")
+        third = org_for_user(conn, "uid-third-owner", "third@example.org")
+        redeem_invite(conn, create_invite(conn, second)["code"],
+                      "uid-staff", "staff@example.org")
+        redeem_invite(conn, create_invite(conn, third)["code"],
+                      "uid-staff", "staff@example.org")
+
+        orgs = my_orgs(conn, "uid-staff")
+
+    assert [o["id"] for o in orgs] == [home, second, third]
+    # Switched into `third` most recently, by joining it last — so it, not `home`,
+    # reads current.
+    assert [o["is_current"] for o in orgs] == [False, False, True]
+    assert orgs[0]["is_admin"] is True     # they administer their own home org...
+    assert orgs[1]["is_admin"] is False    # ...but not the ones they only joined
+    assert orgs[2]["is_admin"] is False
+
+
+def test_switching_to_an_org_you_do_not_belong_to_is_refused(db):
+    from app.db import switch_active_org
+
+    with session(db) as conn:
+        org_for_user(conn, "uid-staff", "staff@example.org")
+        elsewhere = org_for_user(conn, "uid-stranger", "stranger@example.org")
+
+        with pytest.raises(ValueError):
+            switch_active_org(conn, "uid-staff", elsewhere)
+
+
+def test_switching_changes_which_org_requests_resolve_to(db):
+    from app.db import create_invite, current_active_org, redeem_invite, switch_active_org
+
+    with session(db) as conn:
+        home = org_for_user(conn, "uid-staff", "staff@example.org")
+        other = org_for_user(conn, "uid-owner", "owner@example.org")
+        redeem_invite(conn, create_invite(conn, other)["code"],
+                      "uid-staff", "staff@example.org")
+
+        assert current_active_org(conn, "uid-staff", "staff@example.org") == other
+
+        switch_active_org(conn, "uid-staff", home)
+        assert current_active_org(conn, "uid-staff", "staff@example.org") == home
+
+
+def test_a_membership_removed_elsewhere_cannot_be_resolved_into(db):
+    """Defensive: if `active_org_id` ever points somewhere the person is no longer a
+    member of, resolution falls back to home rather than trusting the stale pointer."""
+    from app.db import current_active_org
+
+    with session(db) as conn:
+        home = org_for_user(conn, "uid-staff", "staff@example.org")
+        conn.execute("UPDATE users SET active_org_id='org_nonexistent' WHERE uid=?",
+                     ("uid-staff",))
+
+        assert current_active_org(conn, "uid-staff", "staff@example.org") == home
 
 
 # --- a new org starts clean ---------------------------------------------------
@@ -1075,6 +1192,26 @@ def test_the_new_ca_starter_lists_are_real_hand_researched_pages(db):
             assert s.adapter is None, s.funder
 
 
+def test_the_new_ca_starter_lists_carry_a_structured_region_not_just_prose(db):
+    """A "California family foundations" card is real, verified funders — but nearly
+    every one of them only funds ONE county, and that restriction used to live buried
+    in a paragraph of `notes` nobody reads before clicking Add. `region` is the same
+    fact, structured and shown on the funder row instead of hidden in prose — the fix
+    chosen over removing the funders outright, since the same funder is exactly right
+    for a DIFFERENT org actually in that county."""
+    from agent.directory import get
+
+    for key in ("ca-family-foundations", "ca-community-foundations",
+                "ca-health-foundations"):
+        for s in get(key).sources:
+            if s.funder == "Sidney Stern Memorial Trust":
+                continue  # the one real case of "no county restriction stated"
+            assert s.region, f"{s.funder} has no region set"
+            assert s.region in s.notes, \
+                f"{s.funder}'s region {s.region!r} does not match what its own " \
+                "notes say — the two must describe the same restriction"
+
+
 def test_the_new_ca_starter_lists_can_be_imported_and_removed(db):
     """One representative list (family foundations) exercises the same generic
     `import_starter_list`/`remove_starter_list` path every key uses — the mechanism
@@ -1348,7 +1485,8 @@ def test_one_report_hides_it_from_everybody_at_once(db):
         repo.report_shared_funder(conn, funder_org=B, funder_id=f["id"],
                                   reported_by=A, reason="not a real funder")
         assert repo.shared_funders(conn, org_id=A) == []
-        assert len(repo.open_reports(conn)) == 1
+        open_groups = [g for g in repo.all_reports(conn) if g["status"] == "open"]
+        assert len(open_groups) == 1
 
 
 def test_reporting_twice_is_one_report_not_a_pattern(db):
@@ -1359,7 +1497,25 @@ def test_reporting_twice_is_one_report_not_a_pattern(db):
         again = repo.report_shared_funder(conn, funder_org=B, funder_id=f["id"],
                                           reported_by=A, reason="x")
         assert again["already"] is True and again["report_id"] == first["report_id"]
-        assert len(repo.open_reports(conn)) == 1
+        open_groups = [g for g in repo.all_reports(conn) if g["status"] == "open"]
+        assert len(open_groups) == 1
+
+
+def test_reports_from_different_orgs_group_into_one_card(db):
+    """Two nonprofits independently objecting to the same funder is one decision to
+    make, not two unrelated queue entries."""
+    with session(db) as conn:
+        ensure_org(conn, "org_third", "Third")
+        f = _shared_funder(conn, B, "Widely Disliked Fund", "https://example.invalid/w")
+        repo.report_shared_funder(conn, funder_org=B, funder_id=f["id"],
+                                  reported_by=A, reason="first objection")
+        repo.report_shared_funder(conn, funder_org=B, funder_id=f["id"],
+                                  reported_by="org_third", reason="second objection")
+
+        groups = repo.all_reports(conn)
+
+    assert len(groups) == 1
+    assert groups[0]["reported_by_count"] == 2
 
 
 def test_an_admin_can_take_it_down_for_good_or_put_it_back(db):
@@ -1367,17 +1523,38 @@ def test_an_admin_can_take_it_down_for_good_or_put_it_back(db):
     good funder and a mistake is indistinguishable from moderation."""
     with session(db) as conn:
         f = _shared_funder(conn, B, "Contested Fund", "https://example.invalid/c")
-        rid = repo.report_shared_funder(conn, funder_org=B, funder_id=f["id"],
-                                        reported_by=A, reason="looks wrong")["report_id"]
+        repo.report_shared_funder(conn, funder_org=B, funder_id=f["id"],
+                                  reported_by=A, reason="looks wrong")
 
-        assert repo.resolve_report(conn, rid, uphold=False, by="admin@x") is True
+        assert repo.resolve_report_group(conn, B, f["id"], uphold=False,
+                                         by="admin@x") == 1
         assert [x["name"] for x in repo.shared_funders(conn, org_id=A)] == ["Contested Fund"]
 
-        rid2 = repo.report_shared_funder(conn, funder_org=B, funder_id=f["id"],
-                                         reported_by=A, reason="really")["report_id"]
-        assert repo.resolve_report(conn, rid2, uphold=True, by="admin@x") is True
+        repo.report_shared_funder(conn, funder_org=B, funder_id=f["id"],
+                                  reported_by=A, reason="really")
+        assert repo.resolve_report_group(conn, B, f["id"], uphold=True,
+                                         by="admin@x") == 1
         assert repo.shared_funders(conn, org_id=A) == [], "upheld means gone for good"
-        assert repo.open_reports(conn) == []
+        assert [g for g in repo.all_reports(conn) if g["status"] == "open"] == []
+
+
+def test_resolving_takes_down_every_open_report_for_that_funder_at_once(db):
+    """The bug the grouping fixes: dismissing only one of several open reports used to
+    leave the funder hidden anyway, because the shared-funders query excludes on ANY
+    row still open. Resolving now clears every open row for the funder together."""
+    with session(db) as conn:
+        ensure_org(conn, "org_third", "Third")
+        f = _shared_funder(conn, B, "Doubly Reported Fund", "https://example.invalid/z")
+        repo.report_shared_funder(conn, funder_org=B, funder_id=f["id"],
+                                  reported_by=A, reason="one org's objection")
+        repo.report_shared_funder(conn, funder_org=B, funder_id=f["id"],
+                                  reported_by="org_third", reason="another org's")
+
+        resolved = repo.resolve_report_group(conn, B, f["id"], uphold=False, by="admin@x")
+
+        assert resolved == 2
+        assert [x["name"] for x in repo.shared_funders(conn, org_id=A)] \
+            == ["Doubly Reported Fund"], "restored, not still hidden by the other row"
 
 
 def test_closing_an_org_keeps_what_it_contributed_and_drops_the_copies(db):

@@ -164,14 +164,27 @@ def price_for(model_id: str) -> dict[str, float]:
 
 TRIAGE_TEXT_CAP = 8_000     # chars ≈ 2k tokens (§8: "cap at ~2k tokens per candidate")
 SCORING_TEXT_CAP = 12_000
-TRIAGE_MAX_TOKENS = 512
+# Was 512 — plenty for a bare "true/false + 15 words" reply, which is all this used to
+# be. `TRIAGE_SCHEMA` now asks for a `reasoning` field ahead of the decision on every
+# call, not just when `triage_effort` opts into native thinking (which Haiku, the
+# default and recommended triage model, cannot use at all — see
+# `_model_supports_effort`). That reasoning is real output now, every time, so the
+# cap that used to only matter for the opt-in thinking path matters for the default
+# path too. Same order-of-magnitude margin `SCORING_MAX_TOKENS_HIGH_EFFORT` was given
+# for the same reason: thinking/reasoning text sharing one budget with the answer, not
+# a budget of its own.
+TRIAGE_MAX_TOKENS = 1_024
 # `max_tokens` caps thinking + response together on every model this pipeline can
-# select. 512 is plenty for a bare "true/false + 15 words" reply, but leaves no room
-# to think — fine for the no-effort default (still "no thinking" exactly as before),
-# wrong the moment a user asks triage to reason first. Used only when `triage_effort`
-# is actually set and the chosen model supports it.
-TRIAGE_MAX_TOKENS_WITH_THINKING = 2_000
+# select. Kept as the larger cap for when `triage_effort` turns on native adaptive
+# thinking too — that is genuine model-side thinking, on top of the `reasoning` field
+# above, and needs its own headroom.
+TRIAGE_MAX_TOKENS_WITH_THINKING = 2_500
 SCORING_MAX_TOKENS = 8_000  # headroom: max_tokens caps thinking + response on Sonnet 4.6
+# effort=high/max only. Adaptive thinking at higher effort can consume most or all of
+# the 8,000-token cap above before it ever writes the answer — see the note where this
+# is chosen in score_one(). Doubled, not padded by a few hundred tokens, because the
+# failure mode observed live was thinking eating the WHOLE budget, not most of it.
+SCORING_MAX_TOKENS_HIGH_EFFORT = 16_000
 
 # Sonnet 4.6 will not cache a prefix shorter than 2048 tokens — a cache_control marker
 # on a shorter prompt is silently ignored, no error and no saving. `score_one` therefore
@@ -331,17 +344,34 @@ def org_context(cfg: Config) -> str:
     return "\n".join(lines) + "\n"
 
 _TRIAGE_RULES = """
-Your job is one binary decision: is this page an open funding opportunity that this
-organization could actually apply for?
+Decide two separate things, and both have to be true: is this page a real, open funding
+call the organization could actually apply to, and does what it actually funds align
+with at least one of the organization's own programs described above? Think it through
+in `reasoning` first — the fields after it report what you decided there, they do not
+decide it.
 
-Answer false for: past grantee lists, panelist calls, annual reports, staff pages,
-programs open only to individuals rather than organizations, programs restricted to a
-kind of applicant this organization is not, and anything already closed.
+NOT OPEN — answer false for: past grantee lists, panelist calls, annual reports, staff
+pages, programs open only to individuals rather than organizations, programs restricted
+to a kind of applicant this organization is not, and anything already closed.
 
-Answer TRUE when it is a real, open call, even if the page is thin. A page that names no
-amount and no deadline is the ordinary case, not a disqualification — this is a yes/no
-about whether an application is possible, not about whether it is a good idea. The next
-step decides that, and it can only decide it about pages you let through.
+A page that names no amount and no deadline is the ordinary case, not a disqualification
+— that half of the question is only about whether an application is possible, not about
+whether it is a good idea. The next step decides that, and it can only decide it about
+pages you let through.
+
+WRONG TOPIC — answer false for a real, open call that has nothing to do with any of the
+organization's programs above. Compare what the page actually funds against what the
+programs actually describe — not against the organization's name, its general mission, or
+its reputation. A government grants database in particular returns something for every
+purpose that government funds, most of which no single organization does: a real, open,
+well-funded call for road repair, watershed restoration, senior transportation, or similar
+is still false here if none of the organization's own programs do that work, however large
+the award.
+
+When it is a genuinely close call — a program's card is thin or unfilled, or the page
+only loosely gestures at the work without spelling it out — lean TRUE. This step exists
+to keep out pages nobody would call a match even loosely; the close calls are what the
+next, more careful step is for, and it can only decide about a page you let through.
 """
 
 _SCORING_RULES = """
@@ -520,13 +550,59 @@ Also:
 TRIAGE_SCHEMA = {
     "type": "object",
     "properties": {
+        # Declared FIRST, and that ordering is load-bearing, not stylistic. Structured
+        # output is generated field by field in schema order, so a model that has just
+        # written out its own reasoning has that reasoning in front of it — as real
+        # context, not decoration — when it fills in `is_opportunity` next. Asking for
+        # the same reasoning in a field placed AFTER the decision would only be
+        # rationalising an answer already committed to, which is a different and much
+        # weaker thing. Haiku has no native "thinking" mode to reach for here (it 400s
+        # on the `thinking` parameter — `_model_supports_effort`), so this is how tier 2
+        # gets a chain of thought at all: an ordinary field, not the API's own feature.
+        "reasoning": {
+            "type": "string",
+            "description": (
+                "1-3 short sentences, thought through BEFORE you decide: what does "
+                "this page actually describe, is it structurally a real open call "
+                "(not a past-grantee list, a closed program, or restricted to a kind "
+                "of applicant this organization is not), and does what it funds "
+                "align with at least one of the organization's own programs listed "
+                "above? Decide this here — the fields below report the decision, "
+                "they do not make it."
+            ),
+        },
         "is_opportunity": {
             "type": "boolean",
-            "description": "True only if the organization could submit an application to this.",
+            "description": (
+                "True only if this is a real open call the organization could apply "
+                "to AND it aligns with at least one of the organization's own "
+                "programs above. A structurally open call for work none of those "
+                "programs do is still false."
+            ),
         },
-        "reason": {"type": "string", "description": "At most 15 words."},
+        # A category the code can act on, separate from the free-text `reason` below.
+        # Two very different failures used to share one reject bucket
+        # ("triage_not_an_opportunity") — a closed program and a $750K grant for
+        # something the organization has never done read identically in the run's own
+        # breakdown, which is exactly the kind of thing this whole product exists to
+        # stop happening to the funder side of the equation.
+        "mismatch_reason": {
+            "type": "string",
+            "enum": ["passed", "not_open", "wrong_topic"],
+            "description": (
+                "'passed' whenever is_opportunity is true. Otherwise: 'not_open' for "
+                "anything closed, a past-grantee list, individual-only, or "
+                "restricted to an applicant type this organization is not; "
+                "'wrong_topic' for a real, currently open call that has nothing to "
+                "do with what any of the organization's programs actually fund."
+            ),
+        },
+        "reason": {
+            "type": "string",
+            "description": "At most 15 words — the short, human-readable version.",
+        },
     },
-    "required": ["is_opportunity", "reason"],
+    "required": ["reasoning", "is_opportunity", "mismatch_reason", "reason"],
     "additionalProperties": False,
 }
 
@@ -899,20 +975,32 @@ def _first_json(response) -> dict:
 # --- tier 2: Haiku triage -----------------------------------------------------
 
 def triage(candidate: RawCandidate, budget: Budget,
-           cfg: Config) -> tuple[bool, str]:
-    """Binary relevant/not. Cheap model, capped text, no thinking by default.
+           cfg: Config) -> tuple[bool, str, str]:
+    """Open-and-on-topic, or not. Cheap model, capped text, no native thinking by
+    default — but a real chain of thought regardless, via `reasoning` in
+    TRIAGE_SCHEMA, which this tier can use on Haiku precisely because it is an
+    ordinary field and not the API's `thinking` parameter.
+
+    Returns (is_opportunity, reason, mismatch_reason) — the third is new: `reason` is
+    still the free-text detail a person reads, `mismatch_reason` is the small,
+    code-actionable category (`agent/run.py` uses it to record `triage_wrong_topic`
+    as its own reject reason, distinct from `triage_not_an_opportunity` — a closed
+    program and a real, open, well-funded grant for something this organization does
+    not do used to land in the same bucket, which is exactly the kind of thing this
+    product exists to stop happening on the funder side).
 
     `cfg` is required, and used to be `Config | None = None` falling back to a module
     constant that this change deleted — so the documented call shape was a `NameError`
     waiting for its first caller. The line below already dereferenced `cfg.triage_model`
     unconditionally, so the optional branch could never have worked anyway.
 
-    `cfg.triage_effort` is opt-in reasoning depth for this tier, and it stays opt-in
-    on purpose: the whole point of triage is a cheap, fast yes/no, and turning on
-    thinking by default would undo that for everyone to serve the minority who
-    deliberately pick a stronger triage model. Silently a no-op — not an error — on
-    Haiku, the recommended and default choice here, which cannot take an effort level
-    at all (`_model_supports_effort`); the picker in Settings says so.
+    `cfg.triage_effort` is opt-in NATIVE reasoning depth for this tier, separate from
+    the `reasoning` field above and stacked on top of it when set — it stays opt-in on
+    purpose, since the whole point of triage is a cheap, fast check, and turning on
+    real extended thinking by default would undo that for everyone to serve the
+    minority who deliberately pick a stronger triage model. Silently a no-op — not an
+    error — on Haiku, the recommended and default choice here, which cannot take an
+    effort level at all (`_model_supports_effort`); the picker in Settings says so.
     """
     system = org_context(cfg) + _TRIAGE_RULES
     body = _text_block(
@@ -943,9 +1031,11 @@ def triage(candidate: RawCandidate, budget: Budget,
     )
     cost = budget.record(model, resp.usage.input_tokens, resp.usage.output_tokens)
     data = _first_json(resp)
-    log.debug("  triage %-40s -> %s (%s) $%.5f",
-              candidate.title[:40], data["is_opportunity"], data["reason"], cost)
-    return bool(data["is_opportunity"]), str(data["reason"])
+    log.debug("  triage %-40s -> %s [%s] (%s) $%.5f — %s",
+              candidate.title[:40], data["is_opportunity"], data["mismatch_reason"],
+              data["reason"], cost, data["reasoning"])
+    return (bool(data["is_opportunity"]), str(data["reason"]),
+           str(data["mismatch_reason"]))
 
 
 # --- tier 3: Sonnet scoring ---------------------------------------------------
@@ -976,7 +1066,20 @@ def score_one(candidate: RawCandidate, source: Source, cfg: Config,
         f"{candidate.text[:SCORING_TEXT_CAP]}"
     )
     model = cfg.scoring_model or SCORING_MODEL
-    budget.check(model, _estimate_tokens(system + body), SCORING_MAX_TOKENS)
+    effort = cfg.scoring_effort if cfg.scoring_effort in EFFORT_IDS else ""
+    # `max_tokens` caps thinking + response TOGETHER (line 168), and it does not scale
+    # with `effort` on its own — a model told to think harder does not get more room to
+    # do it in, it just spends more of the same fixed budget on thinking, leaving less
+    # for the answer. Confirmed live on a real $2 run at effort=max: 4 of 21 scoring
+    # calls came back with no text block at all (thinking used the entire 8,000-token
+    # ceiling) and one with a JSON string truncated mid-token — five calls paid for
+    # and none usable, at the tier that is supposed to be the trustworthy one. High and
+    # max get real headroom instead of hoping 8,000 is enough for both jobs at once.
+    max_tokens = (
+        SCORING_MAX_TOKENS_HIGH_EFFORT if effort in ("high", "max") and
+        _model_supports_effort(model) else SCORING_MAX_TOKENS
+    )
+    budget.check(model, _estimate_tokens(system + body), max_tokens)
 
     system_block: dict = {"type": "text", "text": system}
     if _estimate_tokens(system) >= SONNET_CACHE_MIN_TOKENS:
@@ -989,12 +1092,11 @@ def score_one(candidate: RawCandidate, source: Source, cfg: Config,
     kwargs: dict = {"output_config": output_config}
     if _model_supports_effort(model):
         kwargs["thinking"] = {"type": "adaptive"}
-        effort = cfg.scoring_effort if cfg.scoring_effort in EFFORT_IDS else ""
         output_config["effort"] = effort or "medium"
 
     resp = _client().messages.create(
         model=api_model(model),
-        max_tokens=SCORING_MAX_TOKENS,
+        max_tokens=max_tokens,
         system=[system_block],
         messages=[{"role": "user", "content": body}],
         **kwargs,
@@ -1140,8 +1242,19 @@ def score_one(candidate: RawCandidate, source: Source, cfg: Config,
         application_lead_time_days=_bounded(data.get("application_lead_time_days"), 400),
         time_to_funds_days=_bounded(data.get("time_to_funds_days"), 800),
     )
-    log.info("  scored %3d  %-30s  %s  ($%.5f)",
-             opp.score, opp.funder[:30], opp.title[:40], cost)
+    # `program_match` on this line is the one addition that would have made a real
+    # debugging session faster: a candidate scoring against a program the reader does
+    # not expect — a leftover test card still ticked, a program matched that should not
+    # have been — is invisible in the score alone and only shows up by opening the
+    # dashboard and reading "For: …" on the card. It belongs in the log that already
+    # explains everything else about why a candidate ended up where it did.
+    log.info("  scored %3d  %-30s  %s  for:%s  fit=%s award=%s timing=%s  ($%.5f)",
+             opp.score, opp.funder[:30], opp.title[:40],
+             ",".join(opp.program_match)[:40] or "none",
+             opp.fit_score if opp.fit_score is not None else "-",
+             opp.award_score if opp.award_score is not None else "-",
+             opp.timing_score if opp.timing_score is not None else "-",
+             cost)
     return opp
 
 

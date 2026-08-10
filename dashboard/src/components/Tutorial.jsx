@@ -196,7 +196,8 @@ function ProgramStep({ state, onChange, ...rest }) {
       <p>
         Fundworthy needs to know what you do, so it can tell which grants are worth your
         time. You do not have to write anything: paste a link to a page on your own
-        website and it will draft the card for you to correct.
+        website and it will draft the card for you to correct. Costs a few cents on your
+        Anthropic key, capped at $0.10.
       </p>
 
       {active.length > 0 && (

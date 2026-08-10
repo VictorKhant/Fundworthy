@@ -7,9 +7,11 @@ import { initials } from "../auth";
 
 // Who else is in this organization, and what it has spent this month.
 //
-// Two things live together here because they answer the same question — "who can spend
-// our money, and how much have they" — and a nonprofit administrator should not have to
-// hold that in two places.
+// Both used to render together in one component, on the reasoning that "who can spend
+// our money, and how much have they" is one question. It reads better as two: `Meter`
+// belongs on the "AI and spending" tab next to the key it is spending, and everything
+// below it — the member list and invites — belongs on "Organization". Both still live
+// in this file; only where they are rendered from changed.
 //
 // On the money: this reports what **Fundworthy** spent, not what is left in the org's
 // Anthropic account. That is not a shortcut. Anthropic publishes no credit-balance
@@ -108,7 +110,9 @@ function CapEditor({ cap, onSaved }) {
   );
 }
 
-function Meter({ spend, onChange }) {
+// Exported for the "AI and spending" tab on Settings, which wants this on its own —
+// spend belongs next to the key that pays for it, not buried under the member list.
+export function Meter({ spend, onChange }) {
   const pct = spend.cap_usd > 0
     ? Math.min(100, Math.round((spend.spent_usd / spend.cap_usd) * 100))
     : 0;
@@ -143,7 +147,11 @@ function Meter({ spend, onChange }) {
   );
 }
 
-export default function Organization({ spend, onChange }) {
+// Who is in your organization, and inviting a colleague. Spend used to live in this
+// same component (see `Meter` above, now used separately) — the two only shared a file
+// because both were "things about your organization", which is true and was still the
+// wrong reason to put a budget meter under a member list nobody was looking for it in.
+export default function Organization({ onChange }) {
   const [dialog, ask] = useConfirm();
   const [org, setOrg] = useState(null);
   const [error, setError] = useState(null);
@@ -256,11 +264,9 @@ export default function Organization({ spend, onChange }) {
   }
 
   return (
-    <section className="card">
+    <section className="panel raised">
       {dialog}
-      <h2>Your organization</h2>
-
-      {spend && <Meter spend={spend} onChange={onChange} />}
+      <h2>People in your organization</h2>
 
       {error && <div className="notice error">{error}</div>}
 

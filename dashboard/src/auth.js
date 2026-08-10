@@ -343,8 +343,9 @@ export function initials(name) {
     .toUpperCase() || "?";
 }
 
-// The organization you are signed in to, from the org_name setting. One person belongs
-// to exactly one org; colleagues join yours by invitation code rather than by switching
-// between several, so this returns a name to display and nothing to choose from.
+// The organization currently active, from the org_name setting. A person's home
+// organization is still exactly one — that is where their admin rights live — but they
+// can also join a colleague's by invitation code and switch into it without leaving
+// their own; see components/OrgSwitcher.jsx.
 export { orgLabel };
 export const orgDisplayName = (activeName) => titleCase(orgLabel(activeName));

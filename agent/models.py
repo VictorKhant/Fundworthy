@@ -409,6 +409,13 @@ class RunLog:
     purged_rows: int = 0          # archive rows deleted at run start
     duplicates_skipped: int = 0   # already shown this month, killed for free
     source_health: list[SourceHealth] = field(default_factory=list)
+    # The program cards ticked when this run started, and a coarse grouping of the
+    # funder sources it actually read — both for Past findings, which shows one card per
+    # search rather than pooling a month's worth into one list. Set once in
+    # `agent.run.crawl()`, right after the funder list resolves; see there for why
+    # neither can be reconstructed after the fact from today's settings.
+    programs_snapshot: list[dict] = field(default_factory=list)
+    funder_groups: list[dict] = field(default_factory=list)
 
     def reject(self, stage: int, reason: str, *, funder: str = "", title: str = "",
                url: str = "", detail: str = "") -> None:
@@ -501,4 +508,6 @@ class RunLog:
             "notes": list(self.notes),
             "source_health": [h.to_dict() for h in self.source_health],
             "coverage_complete": self.coverage_complete,
+            "programs_snapshot": list(self.programs_snapshot),
+            "funder_groups": list(self.funder_groups),
         }

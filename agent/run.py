@@ -41,6 +41,7 @@ from .models import (
     StopReason,
     stable_id,
 )
+from .directory import STARTER_LISTS
 from .parse import ParsedPage, parse_page, to_candidate
 from .score import STAGE_MARKER, Budget, BudgetExceeded, score_one, triage
 from .sources import Source, Tier, active_sources, unconfirmed_sources
@@ -83,6 +84,19 @@ def _emit_funnel(run: RunLog, *, survivors: int | None = None,
     if kept is not None:
         funnel["kept"] = kept
     log.info("%s%s", STAGE_MARKER, json.dumps(funnel, separators=(",", ":")))
+
+
+def _starter_list_label(source: Source) -> str:
+    """Which named funder list this source belongs to, for Past findings' "funder lists
+    read" breakdown. Reuses `directory.STARTER_LISTS`'s own predicates rather than a
+    second, parallel taxonomy — those already group every real source by the fact that
+    actually distinguishes it (an API adapter, or a sector) with no hardcoded region
+    name, so the label is honest for any org's funder list, not only the pilot's.
+    """
+    for lst in STARTER_LISTS:
+        if lst.matches(source):
+            return lst.name
+    return "Other funders"
 
 
 def _is_thin_landing_page(page: ParsedPage) -> bool:
@@ -210,6 +224,24 @@ async def crawl(cfg: Config, run: RunLog,
     sources = sources + _discover_extra(cfg, run)
     already_seen = already_seen or set()
     excluded = excluded_funders(cfg.org_id)
+
+    # Past findings' "program cards searched for" and "funder lists read" — set once,
+    # here, because both drift after the fact: a program gets renamed or unticked and a
+    # funder gets added or removed, so reading them off today's settings later would
+    # silently rewrite what an old search actually searched for.
+    run.programs_snapshot = [
+        {"name": p.name, "slug": p.slug}
+        for p in cfg.programs if p.slug in cfg.programs_active
+    ]
+    # Registry/HTML sources are counted as funders (what the list actually is); the two
+    # indexed databases collapse to one Source object each, so they are counted below,
+    # where the candidates they actually returned this run are known — a count of "1"
+    # would be honestly meaningless for a database that can return dozens of results.
+    group_counts: dict[str, int] = {}
+    for s in sources:
+        if not s.is_api:
+            label = _starter_list_label(s)
+            group_counts[label] = group_counts.get(label, 0) + 1
     if excluded:
         run.notes.append(
             f"Remove list: {len(excluded)} funder(s) excluded from this search — "
@@ -342,6 +374,8 @@ async def crawl(cfg: Config, run: RunLog,
                 for key, count in result.rejected.items():
                     run.rejected_by_filter[key] = run.rejected_by_filter.get(key, 0) + count
                     run.candidates_parsed += count
+                label = _starter_list_label(source)
+                group_counts[label] = group_counts.get(label, 0) + len(result.pages)
                 for page in result.pages:
                     consider(page, source)
 
@@ -349,6 +383,10 @@ async def crawl(cfg: Config, run: RunLog,
         if not html_sources:
             run.survivors = len(survivors)
             run.finalize_health()
+            run.funder_groups = [
+                {"label": k, "count": v} for k, v in
+                sorted(group_counts.items(), key=lambda kv: -kv[1]) if v
+            ]
             return list(survivors.values())
 
         results = await fetcher.get_many([s.url for s in html_sources])  # type: ignore[misc]
@@ -407,6 +445,10 @@ async def crawl(cfg: Config, run: RunLog,
     # and its box has to be right too.
     run.survivors = len(survivors)
     run.finalize_health()
+    run.funder_groups = [
+        {"label": k, "count": v} for k, v in
+        sorted(group_counts.items(), key=lambda kv: -kv[1]) if v
+    ]
     return list(survivors.values())
 
 
@@ -572,12 +614,25 @@ def evaluate(survivors: list[tuple[ParsedPage, Source]], cfg: Config, run: RunLo
         try:
             run.triaged += 1
             _emit_funnel(run, survivors=len(ranked), kept=len(out))
-            relevant, reason = triage(candidate, budget, cfg)     # tier 2 — Haiku
+            # tier 2 — Haiku, now checking topic fit as well as "is this open" (§8:
+            # a real, well-funded, structurally open grant for something none of the
+            # organization's programs do used to sail through this step for free and
+            # get set aside by Sonnet instead — real money on a candidate triage had
+            # everything it needed to reject already).
+            relevant, reason, mismatch = triage(candidate, budget, cfg)
             if not relevant:
                 # `reason` is the model's own ≤15-word answer. It used to be formatted
                 # into a log line and dropped, which meant the one tier that can explain
                 # itself in English was the one tier that explained nothing.
-                run.reject(2, "triage_not_an_opportunity", funder=source.funder,
+                #
+                # `mismatch` picks which reject reason this is. Two different failures
+                # used to share one bucket ("triage_not_an_opportunity") — a closed
+                # program and a real open call for the wrong kind of work read
+                # identically in the run's own breakdown, which is exactly the
+                # confusion this panel exists to prevent for the funder side.
+                stage2_reason = ("triage_wrong_topic" if mismatch == "wrong_topic"
+                                 else "triage_not_an_opportunity")
+                run.reject(2, stage2_reason, funder=source.funder,
                            title=candidate.title, url=candidate.source_url,
                            detail=reason)
                 consecutive_errors = 0

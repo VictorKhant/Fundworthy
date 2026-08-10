@@ -127,6 +127,98 @@ def test_unticking_arts_removes_the_arts_category():
     assert "Health & Human Services" in mapped
 
 
+def test_a_recreated_card_still_derives_a_category_from_its_own_keywords():
+    """The exact regression this file's own docstring describes, for the half of it
+    that was never actually fixed. Confirmed live on 2026-08-09: recreating RISE's own
+    three programs through "Build it from a link" — the intended way to make one —
+    minted new slugs (`RISE_ARTS`, not `ARTS`) that CA_CATEGORIES has never heard of,
+    so the run fell through to "search every category", and a $750K-4.5M
+    heat-infrastructure grant that matches none of the org's programs survived free
+    filtering into a paid Sonnet call because of it. `_derived_categories` is the
+    fallback: the real keywords the assistant generated for that exact run, checked
+    against the real category set they should recover."""
+    from agent.apis import _derived_categories
+
+    rise_arts = ProgramCard(
+        slug="RISE_ARTS", name="RISE Arts",
+        summary="Supports San Diego and Imperial County artists and arts-and-culture "
+                "nonprofits through cohort-based business development training.",
+        what_it_funds="Cohort-based technical assistance and coaching for "
+                      "arts-and-culture nonprofits.",
+        keywords=["arts and culture nonprofit capacity building", "creative "
+                  "placemaking", "artist professional development",
+                  "BIPOC arts organization support"],
+    )
+    rise_resilience = ProgramCard(
+        slug="RISE_RESILIENCE_RENEWAL", name="RISE Resilience & Renewal",
+        summary="An eight-session cohort leadership program for nonprofit leaders "
+                "integrating trauma-informed practices and adaptive leadership.",
+        what_it_funds="Facilitation and coaching for a cohort leadership program.",
+        keywords=["BIPOC leadership development", "nonprofit leader burnout "
+                  "prevention", "trauma-informed leadership", "nonprofit workforce "
+                  "wellness"],
+    )
+    rise_rulfp = ProgramCard(
+        slug="RISE_URBAN_LEADERSHIP_FELLOWS_PROGRAM",
+        name="RISE Urban Leadership Fellows Program",
+        summary="A year-long cohort leadership fellowship for emerging community "
+                "leaders in San Diego County.",
+        what_it_funds="Program delivery for a year-long cohort fellowship.",
+        keywords=["BIPOC leadership development", "adaptive leadership", "emerging "
+                  "leaders fellowship", "community leadership cohort", "civic "
+                  "engagement training", "urban leadership pipeline"],
+    )
+
+    assert _derived_categories(rise_arts) == {"Libraries and Arts"}
+    assert _derived_categories(rise_resilience) == {
+        "Health & Human Services", "Employment, Labor & Training"}
+    assert _derived_categories(rise_rulfp) == {
+        "Employment, Labor & Training", "Housing, Community and Economic Development"}
+
+    # A program with no recognisable keywords at all must still derive nothing — the
+    # fallback only ever narrows using words the card actually carries. Inventing a
+    # category for it would be exactly the guess §6 refuses to make for an award figure.
+    blank = ProgramCard(slug="X", name="X")
+    assert _derived_categories(blank) == set()
+
+
+def test_the_ca_portal_narrows_by_derived_category_not_only_the_tuned_three(monkeypatch):
+    """End-to-end through `fetch_ca_grants_portal`: a program whose slug is not in
+    CA_CATEGORIES must still narrow the search via its own keywords, not silently
+    widen to every category the way it did before this existed."""
+    import asyncio
+
+    from agent import apis as apis_module
+
+    class _FakeFetcher:
+        async def fetch_json(self, url, *, method="GET", params=None, json_body=None):
+            if "package_show" in url:
+                return ({"result": {"resources": [
+                    {"id": "r1", "datastore_active": True, "format": "CSV"}]}}, None)
+            return ({"result": {"records": [
+                {"Title": "Heat Infrastructure Grant", "GrantURL": "https://ca.invalid/1",
+                 "Categories": "Environment & Water", "Type": "Grant",
+                 "ApplicantType": "Nonprofit"},
+                {"Title": "Arts Access Grant", "GrantURL": "https://ca.invalid/2",
+                 "Categories": "Libraries and Arts", "Type": "Grant",
+                 "ApplicantType": "Nonprofit"},
+            ]}}, None)
+
+    cfg = cfg_with(ProgramCard(
+        slug="RISE_ARTS", name="RISE Arts",
+        keywords=["arts and culture nonprofit capacity building",
+                  "creative placemaking"],
+    ))
+
+    result = asyncio.run(apis_module.fetch_ca_grants_portal(_FakeFetcher(), cfg))
+
+    titles = {p.title for p in result.pages}
+    assert "Arts Access Grant" in titles, \
+        "derived from RISE_ARTS's own keywords — must be kept, not searched-away"
+    assert "Heat Infrastructure Grant" not in titles, \
+        "off-category once a real category was derived — must not survive as noise"
+
+
 # --- the spend ceiling is theirs ----------------------------------------------
 
 def test_the_run_budget_is_customizable_end_to_end(tmp_path, monkeypatch):
@@ -444,6 +536,113 @@ def test_scoring_never_sends_thinking_or_effort_to_haiku(monkeypatch):
     assert "effort" not in sent["output_config"], "Haiku 400s on effort — must never be sent"
 
 
+def test_high_effort_scoring_gets_more_token_headroom(monkeypatch):
+    """Confirmed live on a real $2 run: at effort=max, `max_tokens` (which caps
+    thinking + response TOGETHER, not separately) stayed at the same 8,000 used for
+    every other effort level, and thinking consumed the whole thing on 4 of 21 calls —
+    "no text block in response" — plus one truncated-JSON failure on a fifth. Effort
+    changes how hard the model thinks; it must also change how much room it has to."""
+    import agent.score as score_module
+    from agent.models import RawCandidate
+    from agent.sources import Confidence, Source, Tier
+
+    payload = ('{"fit_score": 10, "award_score": null, "timing_score": null, '
+              '"score_rationale": "x", "program_match": [], '
+              '"estimated_effort_hours": 5, "application_lead_time_days": null, '
+              '"time_to_funds_days": null, "award_min_stated": null, '
+              '"award_max_stated": null, "award_quote": null, '
+              '"award_typical_stated": null, "award_typical_quote": null, '
+              '"deadline_stated": null, "deadline_quote": null, '
+              '"deadline_type": "unknown", "deadline_type_quote": null, '
+              '"geography_stated": null, "geography_quote": null, '
+              '"contact_note": "", "contact_quote": "", '
+              '"funder_type": "unknown", "service_areas": [], '
+              '"confidence_pct": 50, "needs_human_check": false}')
+
+    def new_candidate():
+        return RawCandidate(
+            source_url="https://x.invalid", title="A grant", funder="X",
+            text="x" * 100, tier=int(Tier.WARM), programs_hint=[], apply_url=None,
+        )
+
+    source = Source(name="X", funder="X", url="https://x.invalid",
+                    tier=Tier.WARM, confidence=Confidence.CONFIRMED)
+
+    for effort, expected in (
+        ("", score_module.SCORING_MAX_TOKENS),
+        ("medium", score_module.SCORING_MAX_TOKENS),
+        ("high", score_module.SCORING_MAX_TOKENS_HIGH_EFFORT),
+        ("max", score_module.SCORING_MAX_TOKENS_HIGH_EFFORT),
+    ):
+        fake = _FakeClient(payload)
+        monkeypatch.setattr(score_module, "_client", lambda f=fake: f)
+        cfg = Config(programs=[ProgramCard(slug="p", name="P")],
+                    scoring_model="anthropic:claude-sonnet-4-6", scoring_effort=effort)
+        budget = score_module.Budget(ceiling_usd=10.0)
+
+        score_module.score_one(new_candidate(), source, cfg, budget)
+
+        sent = fake.messages.calls[0]
+        assert sent["max_tokens"] == expected, effort
+    assert score_module.SCORING_MAX_TOKENS_HIGH_EFFORT > score_module.SCORING_MAX_TOKENS
+
+
+def test_the_scored_log_line_names_which_program_matched(monkeypatch, caplog):
+    """A real debugging session on 2026-08-09 took several minutes of reading the
+    dashboard's own results to notice that some candidates had matched a program the
+    user did not recognise — a leftover test card, still ticked, silently pulling in
+    unrelated results and burning budget. The score itself never said which program a
+    candidate matched; only the dashboard card did. `program_match` (and the fit/
+    award/timing breakdown) now lands in the log line that already reports the score,
+    so the same mismatch is visible from the log alone, without opening the UI."""
+    import agent.score as score_module
+    from agent.models import RawCandidate
+    from agent.sources import Confidence, Source, Tier
+
+    payload = ('{"fit_score": 42, "award_score": null, "timing_score": 7, '
+              '"score_rationale": "x", '
+              '"program_match": ["HOUSING_ACCESS_AND_STABILITY_SERVICES"], '
+              '"estimated_effort_hours": 5, "application_lead_time_days": null, '
+              '"time_to_funds_days": null, "award_min_stated": null, '
+              '"award_max_stated": null, "award_quote": null, '
+              '"award_typical_stated": null, "award_typical_quote": null, '
+              '"deadline_stated": null, "deadline_quote": null, '
+              '"deadline_type": "unknown", "deadline_type_quote": null, '
+              '"geography_stated": null, "geography_quote": null, '
+              '"contact_note": "", "contact_quote": "", '
+              '"funder_type": "unknown", "service_areas": [], '
+              '"confidence_pct": 50, "needs_human_check": false}')
+    fake = _FakeClient(payload)
+    monkeypatch.setattr(score_module, "_client", lambda: fake)
+
+    # `program_match` is filtered against `cfg.programs_active` (line 1088) — a model
+    # cannot invent a match to a program the org never configured — so the test has to
+    # actually declare this program active, the same as a real account that had it
+    # ticked, for the filter to let it through rather than silently dropping it to
+    # "none" the way an unrecognised slug correctly should.
+    cfg = Config(programs=[
+        ProgramCard(slug="HOUSING_ACCESS_AND_STABILITY_SERVICES", name="HASS"),
+    ], scoring_model="anthropic:claude-sonnet-4-6")
+    candidate = RawCandidate(
+        source_url="https://x.invalid", title="A grant", funder="X", text="x" * 100,
+        tier=int(Tier.WARM), programs_hint=[], apply_url=None,
+    )
+    source = Source(name="X", funder="X", url="https://x.invalid",
+                    tier=Tier.WARM, confidence=Confidence.CONFIRMED)
+    budget = score_module.Budget(ceiling_usd=10.0)
+
+    with caplog.at_level("INFO", logger="agent.score"):
+        score_module.score_one(candidate, source, cfg, budget)
+
+    scored_lines = [r.getMessage() for r in caplog.records if "scored" in r.getMessage()]
+    assert scored_lines, "no 'scored' line was logged at all"
+    line = scored_lines[0]
+    assert "HOUSING_ACCESS_AND_STABILITY_SERVICES" in line
+    assert "fit=42" in line
+    assert "award=-" in line, "a null component must print as '-', not '0' or 'None'"
+    assert "timing=7" in line
+
+
 def test_scoring_sends_the_configured_effort_on_a_model_that_supports_it(monkeypatch):
     import agent.score as score_module
     from agent.models import RawCandidate
@@ -517,12 +716,28 @@ def test_scoring_defaults_to_medium_effort_unset_exactly_as_before(monkeypatch):
     assert fake.messages.calls[0]["output_config"]["effort"] == "medium"
 
 
+def test_triage_reasoning_field_is_declared_before_the_decision():
+    """Chain of thought for a model with no native thinking mode: `reasoning` has to
+    be generated before `is_opportunity` for it to actually inform the decision rather
+    than rationalise one already made — and for structured output, generation order
+    follows schema declaration order. A refactor that reorders these fields silently
+    turns a real chain of thought back into decoration."""
+    from agent.score import TRIAGE_SCHEMA
+
+    keys = list(TRIAGE_SCHEMA["properties"].keys())
+    assert keys.index("reasoning") < keys.index("is_opportunity"), (
+        "reasoning must be generated before the decision it is supposed to inform"
+    )
+    assert set(TRIAGE_SCHEMA["required"]) == {
+        "reasoning", "is_opportunity", "mismatch_reason", "reason"}
+
+
 def test_triage_stays_thinkingless_by_default_exactly_as_before(monkeypatch):
     import agent.score as score_module
     from agent.models import RawCandidate
     from agent.sources import Tier
 
-    fake = _FakeClient('{"is_opportunity": true, "reason": "looks real"}')
+    fake = _FakeClient('{"reasoning": "looks real", "is_opportunity": true, "mismatch_reason": "passed", "reason": "looks real"}')
     monkeypatch.setattr(score_module, "_client", lambda: fake)
 
     cfg = Config(programs=[ProgramCard(slug="p", name="P")])  # triage_effort unset
@@ -545,7 +760,7 @@ def test_triage_effort_is_a_no_op_on_haiku_but_real_on_sonnet(monkeypatch):
     from agent.models import RawCandidate
     from agent.sources import Tier
 
-    fake = _FakeClient('{"is_opportunity": true, "reason": "looks real"}')
+    fake = _FakeClient('{"reasoning": "looks real", "is_opportunity": true, "mismatch_reason": "passed", "reason": "looks real"}')
     monkeypatch.setattr(score_module, "_client", lambda: fake)
 
     candidate = RawCandidate(
@@ -604,7 +819,7 @@ def test_ultra_mode_keeps_going_past_the_result_cap(monkeypatch):
     from agent.score import Budget
     from agent.sources import Confidence, Source, Tier
 
-    monkeypatch.setattr(runmod, "triage", lambda c, b, cf: (True, "yes"))
+    monkeypatch.setattr(runmod, "triage", lambda c, b, cf: (True, "yes", "passed"))
     monkeypatch.setattr(runmod, "score_one",
                         lambda c, s, cf, b: runmod._unscored(
                             ParsedPage(url=c.source_url, title=c.title, text=c.text),
@@ -638,7 +853,7 @@ def test_without_ultra_mode_the_cap_still_stops_the_run(monkeypatch):
     from agent.score import Budget
     from agent.sources import Confidence, Source, Tier
 
-    monkeypatch.setattr(runmod, "triage", lambda c, b, cf: (True, "yes"))
+    monkeypatch.setattr(runmod, "triage", lambda c, b, cf: (True, "yes", "passed"))
     monkeypatch.setattr(runmod, "score_one",
                         lambda c, s, cf, b: runmod._unscored(
                             ParsedPage(url=c.source_url, title=c.title, text=c.text),
@@ -679,7 +894,7 @@ def test_ultra_mode_still_stops_on_budget(monkeypatch):
         return runmod._unscored(
             ParsedPage(url=c.source_url, title=c.title, text=c.text), s, cf, "test")
 
-    monkeypatch.setattr(runmod, "triage", lambda c, b, cf: (True, "yes"))
+    monkeypatch.setattr(runmod, "triage", lambda c, b, cf: (True, "yes", "passed"))
     monkeypatch.setattr(runmod, "score_one", fake_score_one)
 
     pages = [
@@ -782,3 +997,36 @@ def test_the_runner_reads_the_funnel_and_survives_a_broken_one():
     # where it would land in `progress` and be read back as a funnel.
     for junk in ("::stage", "::stage {", "::stage []", "::stage 7", "::stage null"):
         assert _funnel_from(junk) is None
+
+
+def test_starter_list_label_groups_a_real_mix_of_sources():
+    """Past findings' "funder lists read" breakdown reuses `directory.STARTER_LISTS`'s
+    own predicates rather than a second taxonomy — this is what makes the label honest
+    for any org's funder list, not only the ones the pilot happened to research."""
+    from agent.directory import STARTER_LISTS
+    from agent.run import _starter_list_label
+    from agent.sources import Confidence, Source, Tier
+
+    sd_funder = Source(name="SD", funder="A San Diego Foundation",
+                       url="https://sd.example/grants", tier=Tier.WARM)
+    ca_family = Source(name="CA family", funder="A CA Family Foundation",
+                       url="https://caf.example/grants", tier=Tier.WARM,
+                       sector="family_foundation")
+    federal = Source(name="Grants.gov", funder="U.S. Federal Government",
+                     url=None, tier=Tier.WARM, adapter="grants_gov")
+    # A non-adapter source always falls into "San Diego funders" unless its sector is
+    # one of the three CA-specific ones — that catch-all is `directory.py`'s own design
+    # ("The grouping is deliberately coarse"), so the fallback below can only be reached
+    # by an adapter this registry has never shipped.
+    unrecognized_adapter = Source(name="Future database", funder="Some Future Database",
+                                  url=None, tier=Tier.WARM, adapter="future_adapter")
+
+    assert _starter_list_label(sd_funder) == "San Diego funders"
+    assert _starter_list_label(ca_family) == "California family foundations"
+    assert _starter_list_label(federal) == "Federal grants"
+    assert _starter_list_label(unrecognized_adapter) == "Other funders"
+    # Every label this function can produce (other than the fallback) is a real,
+    # existing starter list name — nothing invented that Discover funders would not
+    # also recognise.
+    real_names = {lst.name for lst in STARTER_LISTS}
+    assert _starter_list_label(sd_funder) in real_names

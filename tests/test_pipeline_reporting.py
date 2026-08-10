@@ -126,12 +126,41 @@ def test_a_failing_triage_is_recorded_against_stage_2_with_the_real_error(monkey
     assert run.rejected_by_filter["triage_error"] == len(stage2)
 
 
+def test_a_wrong_topic_rejection_is_named_separately_from_not_open(monkeypatch):
+    """Two different failures used to share one reject bucket
+    ("triage_not_an_opportunity") — a closed program and a real, open, well-funded
+    grant for something the organization has never done read identically in the
+    run's own breakdown. `mismatch_reason` from triage() now picks a distinct name
+    for each, the same way `agent/apis.py` already gives `ca_category_off_mission`
+    and `ca_not_open_to_nonprofits` separate names rather than one shared bucket."""
+    run, cfg = _run(), _cfg()
+
+    def fake_triage(candidate, budget, cfg):
+        if "wrong-topic" in candidate.source_url:
+            return False, "real grant, but for road repair", "wrong_topic"
+        return False, "already closed", "not_open"
+
+    monkeypatch.setattr(runmod, "triage", fake_triage)
+
+    survivors = _survivors(2)
+    survivors[0] = (_page("https://wrong-topic.invalid"), survivors[0][1])
+
+    runmod.evaluate(survivors, cfg, run, Budget(ceiling_usd=1.0), use_llm=True)
+
+    stage2 = {r.detail: r.reason for r in run.rejects if r.stage == 2}
+    assert stage2["real grant, but for road repair"] == "triage_wrong_topic"
+    assert stage2["already closed"] == "triage_not_an_opportunity"
+    assert run.rejected_by_filter["triage_wrong_topic"] == 1
+    assert run.rejected_by_filter["triage_not_an_opportunity"] == 1
+
+
 def test_a_failing_scorer_is_recorded_against_stage_3_not_stage_2(monkeypatch):
     """Triage worked, scoring did not. Recorded against the box that was actually
     running, or the panel sends somebody to look at the wrong step."""
     run, cfg = _run(), _cfg()
 
-    monkeypatch.setattr(runmod, "triage", lambda c, b, cf: (True, "looks like a grant"))
+    monkeypatch.setattr(
+        runmod, "triage", lambda c, b, cf: (True, "looks like a grant", "passed"))
 
     def boom(candidate, source, cfg, budget):
         raise RuntimeError("overloaded_error: server busy")
@@ -181,7 +210,7 @@ def test_one_bad_page_among_good_ones_does_not_stop_the_run(monkeypatch):
         seen["n"] += 1
         if seen["n"] == 2:
             raise RuntimeError("ValueError: one odd page")
-        return False, "not an open call"
+        return False, "not an open call", "not_open"
 
     monkeypatch.setattr(runmod, "triage", sometimes)
 
@@ -209,7 +238,7 @@ def test_a_signal_mid_scoring_keeps_what_was_already_scored(monkeypatch):
         calls["n"] += 1
         if calls["n"] == 3:
             runmod._stop_requested = True
-        return True, "looks like a grant"
+        return True, "looks like a grant", "passed"
 
     survivors = _survivors(10)
     pages_by_url = {page.url: (page, source) for page, source in survivors}

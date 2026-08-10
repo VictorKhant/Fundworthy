@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import Confirm, { useConfirm } from "../components/Confirm";
+import { useConfirm } from "../components/Confirm";
 import Icon from "../components/Icon";
 import JoinOrg from "../components/JoinOrg";
-import Organization from "../components/Organization";
+import Organization, { Meter } from "../components/Organization";
 import Spinner, { Busy } from "../components/Spinner";
 import { api } from "../api";
-import { authEnabled, signOutNow } from "../auth";
+import { authEnabled, orgDisplayName, signOutNow } from "../auth";
 
 // The API key page.
 //
@@ -306,13 +306,14 @@ function OrgPanel({ settings, onChange }) {
 
   return (
     <section className="panel raised">
-      <h2>Organization</h2>
+      <h2>Name and city</h2>
       <p className="settings-lede">
-        Used wherever this app names you. Leave it blank and it says "your organization"
-        rather than guessing.
+        The name is used wherever Fundworthy refers to you. The city decides which
+        researched lists are offered first on <strong>Discover funders</strong> — it
+        never hides a grant from you.
       </p>
 
-      <div className="knobs">
+      <div className="knobs knobs-row">
         <label className="field">
           <span>Organization name</span>
           <input
@@ -334,26 +335,14 @@ function OrgPanel({ settings, onChange }) {
             placeholder="San Diego, California"
             onChange={(e) => setDraft({ ...draft, org_location: e.target.value })}
           />
-          <span className="muted small">
-            Only decides which funders we show you first. It never hides a grant from
-            you — that is the funder list's job, and yours.
-          </span>
         </label>
-      </div>
-
-      {error && <div className="notice error">{error}</div>}
-
-      <div className="row end">
         <Busy className="dark" busy={saving} busyLabel="Saving"
               onClick={save} disabled={!dirty}>
           Save
         </Busy>
       </div>
 
-      <p className="muted small">
-        Inviting teammates and switching between organizations needs accounts, which this
-        version does not have — see FUTURE.md.
-      </p>
+      {error && <div className="notice error">{error}</div>}
     </section>
   );
 }
@@ -494,38 +483,40 @@ function ShareFunders({ settings, onChange }) {
   );
 }
 
-// The moderation queue. Only rendered for whoever `FUNDWORTHY_ADMIN_EMAILS` names, and
-// the server checks again — this component simply is not fetched otherwise.
+// The moderation queue. Only rendered for whoever `FUNDWORTHY_ADMIN_EMAILS` names — the
+// parent `Settings` component is the one that finds this out (`reportsData`, fetched
+// once below), so the "Reported funders" tab itself can stay hidden from anyone else
+// rather than opening onto an empty or broken screen. The server checks again
+// regardless; a hidden tab is not a permission.
 //
 // A report hides the funder from everybody the moment it is filed, before anyone looks.
-// So the two buttons here are "it really was bad" and "put it back", and the second one
+// So the two actions here are "it really was bad" and "put it back", and the second one
 // matters: without it a single objection would permanently remove a good funder, and
-// one person's mistake would be indistinguishable from moderation.
-function ReportQueue() {
-  const [reports, setReports] = useState(null);
-  // Whether the endpoint answered at all, which is the only honest test of "am I an
-  // operator" — the route is gated by `FUNDWORTHY_ADMIN_EMAILS` and 404s otherwise, so
-  // a 200 is the permission and there is no second copy of the rule to drift.
-  const [amAdmin, setAmAdmin] = useState(false);
+// one person's mistake would be indistinguishable from moderation. Grouped by FUNDER,
+// not by report — two nonprofits can object to the same one independently, and
+// resolving that is one decision, not two (`app/repo.py: all_reports`).
+const REPORT_FILTERS = [
+  ["open", "Waiting on you"],
+  ["upheld", "Taken down"],
+  ["dismissed", "Left up"],
+];
+
+function ReportedFundersTab({ data, onReload }) {
+  const [filter, setFilter] = useState("open");
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
 
-  const load = useCallback(async () => {
-    try {
-      setReports((await api.admin.reports()).reports);
-      setAmAdmin(true);
-    } catch {
-      setAmAdmin(false);       // not an operator: this whole panel is not for them
-    }
-  }, []);
-  useEffect(() => { load(); }, [load]);
+  const groups = data.reports || [];
+  const counts = data.counts || { open: 0, upheld: 0, dismissed: 0 };
+  const visible = groups.filter((g) => g.status === filter);
 
-  async function resolve(id, uphold) {
-    setBusy(id);
+  async function resolve(g, uphold) {
+    const key = `${g.funder_org}:${g.funder_id}`;
+    setBusy(key);
     setError(null);
     try {
-      await api.admin.resolve(id, uphold);
-      await load();
+      await api.admin.resolve(g.funder_org, g.funder_id, uphold);
+      await onReload();
     } catch (e) {
       setError(e.message);
     } finally {
@@ -533,61 +524,89 @@ function ReportQueue() {
     }
   }
 
-  // Shown to an operator even with nothing queued, and that is the point rather than
-  // clutter. An empty queue and "FUNDWORTHY_ADMIN_EMAILS never took" look identical from
-  // the outside — and they cannot be told apart by curl either, because the router's
-  // sign-in gate answers an anonymous request long before the admin list is consulted.
-  // Seeing this panel at all is the confirmation that the variable is set and names you.
-  if (!amAdmin) return null;
-
-  const queue = reports || [];
-
   return (
-    <section className={`panel ${queue.length ? "danger-zone" : ""}`}>
-      <h2>Reported funders{queue.length ? ` — ${queue.length}` : ""}</h2>
-      {queue.length === 0 ? (
-        <p className="settings-lede">
-          Nothing reported. When another nonprofit reports a shared funder it is hidden
-          from everyone straight away and appears here for you to take down or restore.
-          <br />
-          <span className="muted small">
-            You are seeing this because your address is in FUNDWORTHY_ADMIN_EMAILS.
-          </span>
-        </p>
-      ) : (
-      <p className="settings-lede">
-        Each of these is hidden from everyone until you decide. Open the page before you
-        do; the person who reported it is not shown, and neither is the org that added it.
-      </p>
-      )}
-      {error && <div className="notice error">{error}</div>}
-      <ul className="plain">
-        {queue.map((r) => (
-          <li key={r.id} className="member">
-            <span>
-              <strong>{r.name || "(funder since deleted)"}</strong>
-              {r.url && (
-                <>
-                  {" "}
-                  <a href={r.url} target="_blank" rel="noopener noreferrer">open ↗</a>
-                </>
-              )}
-              {r.reason && <span className="muted small"> — “{r.reason}”</span>}
-            </span>
-            <span className="row">
-              <Busy className="text danger" busy={busy === r.id} busyLabel="Removing"
-                    onClick={() => resolve(r.id, true)}>
-                Take it down
-              </Busy>
-              <Busy className="text" busy={busy === r.id} busyLabel="Restoring"
-                    onClick={() => resolve(r.id, false)}>
-                It is fine — put it back
-              </Busy>
-            </span>
-          </li>
+    <>
+      <div className="report-stats">
+        {REPORT_FILTERS.map(([key, label]) => (
+          <div key={key} className="report-stat">
+            <strong>{counts[key] || 0}</strong>
+            <span>{label.toLowerCase()}</span>
+          </div>
         ))}
-      </ul>
-    </section>
+      </div>
+
+      <section className="panel raised">
+        <div className="panel-head">
+          <div>
+            <h2>Reported funders</h2>
+            <p className="settings-lede">
+              A report hides the funder from everyone straight away. Nothing here is
+              visible to other nonprofits while you decide.
+            </p>
+          </div>
+          <span className="pill locked">Admin only</span>
+        </div>
+
+        <div className="report-filters">
+          {REPORT_FILTERS.map(([key, label]) => (
+            <button key={key} type="button"
+                    className={`pill ${filter === key ? "dark" : ""}`}
+                    onClick={() => setFilter(key)}>
+              {label} · {counts[key] || 0}
+            </button>
+          ))}
+        </div>
+
+        {error && <div className="notice error">{error}</div>}
+
+        {visible.length === 0 ? (
+          <p className="muted small">Nothing here.</p>
+        ) : (
+          <ul className="plain report-list">
+            {visible.map((g) => {
+              const key = `${g.funder_org}:${g.funder_id}`;
+              return (
+                <li key={key} className="report-row">
+                  <div className="report-row-main">
+                    <strong>{g.name || "(funder since deleted)"}</strong>
+                    {g.reason && <p className="report-reason">“{g.reason}”</p>}
+                    <p className="muted small">
+                      {g.url && (
+                        <>
+                          <a href={g.url} target="_blank" rel="noopener noreferrer">
+                            {g.url.replace(/^https?:\/\//, "")}
+                          </a>
+                          {" · "}
+                        </>
+                      )}
+                      reported by {g.reported_by_count} organization
+                      {g.reported_by_count === 1 ? "" : "s"}
+                      {g.created_at && ` · ${g.created_at.slice(0, 10)}`}
+                    </p>
+                  </div>
+                  {g.status === "open" && (
+                    <span className="row report-actions">
+                      <Busy className="text danger" busy={busy === key}
+                            busyLabel="Removing" onClick={() => resolve(g, true)}>
+                        Take it down
+                      </Busy>
+                      <Busy className="text" busy={busy === key} busyLabel="Restoring"
+                            onClick={() => resolve(g, false)}>
+                        Leave it up
+                      </Busy>
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+
+        <p className="muted small">
+          You are seeing this because your address is in FUNDWORTHY_ADMIN_EMAILS.
+        </p>
+      </section>
+    </>
   );
 }
 
@@ -609,213 +628,36 @@ function ReportQueue() {
 // already using Fundworthy could not redeem a code at all. That is the group most likely
 // to be handed one: two nonprofits merging, or somebody moving jobs.
 //
-// The catch, and the reason for the dialog: **joining moves you.** It has always worked
-// that way, and it was safe to leave implicit while the form only showed on empty
-// accounts. From here it is not, because there is something to lose. What that is
-// depends on whether anyone else is in the org, so the dialog is assembled from the real
-// membership rather than warning generically.
+// It used to be a leave as much as a join — the same rules as closing an account, behind
+// a confirm dialog naming what would be lost — because redeeming a code MOVED you.
+// `db.redeem_invite` no longer moves anybody: it ADDS the org the code belongs to
+// alongside the one you already have, and switches you into it. Nothing here can be
+// lost, so there is nothing left to confirm.
 function JoinAnotherOrg({ onChange }) {
-  const [org, setOrg] = useState(null);
-  const [pending, setPending] = useState(null);   // the code awaiting confirmation
   const [note, setNote] = useState(null);
-  const decision = useRef(null);
-
-  const load = useCallback(() => {
-    api.org.read().then(setOrg).catch(() => setOrg(null));
-  }, []);
-  useEffect(() => { load(); }, [load]);
-
-  if (!org) return null;
-
-  const members = org.members || [];
-  const alone = members.length <= 1;
-  const stuck = org.you_are_admin && !alone;
-
-  // Resolved when the dialog is answered. `beforeJoin` awaits it, so the code is only
-  // sent if they confirm — the request never leaves until then.
-  function beforeJoin(code) {
-    setPending(code);
-    return new Promise((resolve) => { decision.current = resolve; });
-  }
-  function settle(ok) {
-    setPending(null);
-    decision.current?.(ok);
-    decision.current = null;
-  }
 
   return (
-    <section className="panel">
+    <section className="panel raised">
       <h2>Join another organization</h2>
-
-      {stuck ? (
-        <p className="settings-lede">
-          You are this organization's admin and {members.length - 1} other{" "}
-          {members.length === 2 ? "person is" : "people are"} in it. Hand it over to one
-          of them above first — joining somewhere else would leave nobody here who can
-          invite or remove anyone.
-        </p>
-      ) : (
-        <>
-          <p className="settings-lede">
-            If a colleague sent you an invitation code, you can move into their
-            organization. You will share their funders, programs and findings.{" "}
-            <strong>This moves you — it does not merge the two.</strong>
-          </p>
-          {note && <div className="notice">{note}</div>}
-          <JoinOrg cta="Join that organization" beforeJoin={beforeJoin}
-                   onJoined={async (result) => {
-                     setNote(result.stranded
-                       ? "You have moved. The organization you left had nobody else in "
-                         + "it, so its findings and saved key were deleted."
-                       : "You have moved into that organization.");
-                     await onChange();
-                     load();
-                   }} />
-        </>
-      )}
-
-      <Confirm
-        open={Boolean(pending)}
-        tone="clay"
-        title="Move to that organization?"
-        body={`You are about to leave ${org.name || "this organization"} and join the one
-               that code belongs to.`}
-        points={alone ? [
-          "You are the only person here, so this organization will be left empty.",
-          "Its findings, its run history and its saved API key will be deleted.",
-          "The funders you added by hand stay, and may be offered to other nonprofits "
-            + "if you turned sharing on.",
-          "Everything you see after this belongs to the organization you are joining.",
-        ] : [
-          `${members.length - 1} other ${members.length === 2 ? "person stays" : "people stay"} here, so this organization keeps everything.`,
-          "You lose access to it — its findings, its funders and its key.",
-          "You would need a new invitation code to come back.",
-        ]}
-        confirmLabel="Yes, move me"
-        busyLabel="Moving"
-        onCancel={() => settle(false)}
-        onConfirm={() => settle(true)}
-      />
-    </section>
-  );
-}
-
-// Report a bug, without leaving the dashboard.
-//
-// Three outcomes, not two, and they read differently on purpose:
-//
-//   filed: true   a GitHub issue exists. Show the link, clear the form — there is
-//                 nothing left to keep.
-//   filed: false  the report was saved on this install but GitHub filing itself
-//                 failed (no token configured, the repo unreachable, whatever). That
-//                 is not the user's problem to be alarmed by — it is still recorded —
-//                 so it gets the calm, plain notice, not the red one.
-//   thrown        the request never got a 200 at all: rate-limited (429), rejected
-//                 (422), or the server was unreachable. That is a real failure and
-//                 gets the same red notice every other form on this page uses for one.
-//
-// All three keep the typed text on screen except the first — a person should never
-// have to retype a bug report because filing it to GitHub happened to fail.
-// The backend's own error strings already end in a period ("...set FUNDWORTHY_GITHUB_
-// TOKEN and FUNDWORTHY_GITHUB_REPO."), and so does the sentence this joins them into —
-// stripping any trailing one first keeps that a single period, not "..REPO.. Your".
-function withoutTrailingPeriod(text) {
-  return text.replace(/\.+$/, "");
-}
-
-function BugReport() {
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState(null); // { ok, message?, url?, number? }
-  const [error, setError] = useState(null);
-
-  async function submit(e) {
-    e.preventDefault();
-    setBusy(true);
-    setError(null);
-    setResult(null);
-    try {
-      const res = await api.bugReport.file({
-        title: title.trim(),
-        description: description.trim(),
-        page: "Settings",
-      });
-      if (res.filed) {
-        setResult({ ok: true, url: res.issue_url, number: res.issue_number });
-        setTitle("");
-        setDescription("");
-      } else {
-        setResult({ ok: false, message: res.error || "the request failed" });
-      }
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <section className="panel">
-      <h2>Report a bug</h2>
       <p className="settings-lede">
-        Tell us what went wrong. This opens a GitHub issue automatically when that is
-        set up on this install; either way it is saved so a real person reads it.
+        Got an invitation code from a colleague? Using it <strong>adds</strong> their
+        organization to yours — nothing here moves or is deleted, and you switch between
+        them from the bottom of the menu.
       </p>
 
-      <form onSubmit={submit}>
-        <label className="field">
-          <span>What happened</span>
-          <input
-            type="text"
-            value={title}
-            required
-            minLength={3}
-            maxLength={200}
-            placeholder="One line describing the problem"
-            onChange={(e) => setTitle(e.target.value)}
-          />
-        </label>
+      {note && <div className="notice">{note}</div>}
+      <JoinOrg cta="Join them"
+               onJoined={async () => {
+                 setNote("You have joined that organization — switch to it from the "
+                        + "bottom of the menu, next to your name.");
+                 await onChange();
+               }} />
 
-        <label className="field">
-          <span>Details</span>
-          <textarea
-            value={description}
-            required
-            maxLength={5000}
-            rows={5}
-            placeholder="What happened? What did you expect instead? Steps to reproduce help a lot."
-            onChange={(e) => setDescription(e.target.value)}
-          />
-        </label>
-
-        {result && result.ok && (
-          <div className="notice">
-            Filed{result.number ? ` as issue #${result.number}` : ""} —{" "}
-            <a href={result.url} target="_blank" rel="noopener noreferrer">
-              see it on GitHub ↗
-            </a>.
-          </div>
-        )}
-        {result && !result.ok && (
-          <div className="notice plain">
-            Could not file this automatically: {withoutTrailingPeriod(result.message)}.
-            Your text is still here — copy it and open an issue by hand, or try again.
-          </div>
-        )}
-        {error && (
-          <div className="notice error">
-            Could not file this automatically: {withoutTrailingPeriod(error)}. Your text
-            is still here — copy it and open an issue by hand, or try again.
-          </div>
-        )}
-
-        <div className="row end">
-          <Busy className="dark" type="submit" busy={busy} busyLabel="Sending">
-            Report the bug
-          </Busy>
-        </div>
-      </form>
+      <p className="muted small">
+        You will see their funders, programs and findings while you are in that
+        organization, and their key pays for their searches. Yours stay exactly as they
+        are.
+      </p>
     </section>
   );
 }
@@ -945,7 +787,20 @@ function DeleteAccount() {
   );
 }
 
-export default function Settings({ state, onChange }) {
+// Four tabs where there used to be nine stacked panels. The page had grown one section
+// at a time — a key, a provider picker, a budget meter, org name, members, invites,
+// sharing, moderation, account deletion, a bug form — each addition reasonable on its
+// own and, together, a page nobody could scan. The grouping below is not new
+// information, only where it lives: money together, people together, the one
+// irreversible thing on its own, and moderation — which is not for most people who open
+// this page at all — behind a tab that only appears for whoever it is actually for.
+const SETTINGS_TABS = [
+  { id: "ai", label: "AI and spending" },
+  { id: "organization", label: "Organization" },
+  { id: "account", label: "Account" },
+];
+
+export default function Settings({ state, onChange, initialTab, onTabOpened }) {
   // Anthropic's "Add a key" on the provider panel is the same key box that is already on
   // this page, so it scrolls to it and puts the cursor in it rather than duplicating a
   // write-only field that no endpoint can read back.
@@ -955,28 +810,90 @@ export default function Settings({ state, onChange }) {
     keyBox.current?.focus({ preventScroll: true });
   };
 
+  const [tab, setTab] = useState(initialTab || "ai");
+  // null: not answered yet. false: this address is not an operator (or the install has
+  // no admin at all) — the same 404-means-"not for you" signal `ReportQueue` always
+  // used, just read one level up so the TAB can stay hidden, not only its contents.
+  // An object: the real data, fetched once here rather than once per tab-switch.
+  const [reportsData, setReportsData] = useState(null);
+
+  const loadReports = useCallback(async () => {
+    try {
+      setReportsData(await api.admin.reports());
+    } catch {
+      setReportsData(false);
+    }
+  }, []);
+  useEffect(() => { loadReports(); }, [loadReports]);
+
+  // The org switcher's "Join another organization…" is the one caller that wants a
+  // specific tab open. Every other entry to this page — the nav link, a reload — wants
+  // the default, so this only fires when something upstream actually asked for a tab.
+  useEffect(() => {
+    if (!initialTab) return;
+    setTab(initialTab);
+    onTabOpened?.();
+  }, [initialTab, onTabOpened]);
+
+  const tabs = reportsData
+    ? [...SETTINGS_TABS, { id: "reported", label: "Reported funders",
+                           badge: reportsData.counts?.open || 0 }]
+    : SETTINGS_TABS;
+
   return (
     <>
       <header>
         <h1>Settings</h1>
         <p className="muted small">
-          Set up once. You shouldn't need to come back here often.
+          Set up once. You shouldn't need to come back here often. Everything here
+          belongs to <strong>{orgDisplayName(state.settings?.org_name)}</strong> — the
+          key, the limit and the people.
         </p>
       </header>
 
-      <KeyPanel state={state} onChange={onChange} inputRef={keyBox} />
-      <Providers state={state} onGoKey={goKey} />
-      <OrgPanel settings={state.settings} onChange={onChange} />
-      <Organization spend={state.spend} onChange={onChange} />
+      <nav className="settings-tabs" role="tablist">
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={tab === t.id}
+            className={`settings-tab ${tab === t.id ? "on" : ""}`}
+            onClick={() => setTab(t.id)}
+          >
+            {t.label}
+            {t.badge > 0 && <span className="settings-tab-badge">{t.badge}</span>}
+          </button>
+        ))}
+      </nav>
 
-      <ShareFunders settings={state.settings} onChange={onChange} />
-      <ReportQueue />
-      {/* Below Organization, and above closing the account: both are ways of leaving,
-          and this is the reversible one. */}
-      {authEnabled() && <JoinAnotherOrg onChange={onChange} />}
-      <DeleteAccount />
+      {tab === "ai" && (
+        <>
+          <KeyPanel state={state} onChange={onChange} inputRef={keyBox} />
+          <Providers state={state} onGoKey={goKey} />
+          <section className="panel raised">
+            <h2>What it spends</h2>
+            {state.spend && <Meter spend={state.spend} onChange={onChange} />}
+          </section>
+        </>
+      )}
 
-      <BugReport />
+      {tab === "organization" && (
+        <>
+          <OrgPanel settings={state.settings} onChange={onChange} />
+          <Organization onChange={onChange} />
+          {/* Adding a second organization, and switching between them from the sidebar
+              — both real once joining stopped moving anybody. */}
+          {authEnabled() && <JoinAnotherOrg onChange={onChange} />}
+          <ShareFunders settings={state.settings} onChange={onChange} />
+        </>
+      )}
+
+      {tab === "account" && <DeleteAccount />}
+
+      {tab === "reported" && reportsData && (
+        <ReportedFundersTab data={reportsData} onReload={loadReports} />
+      )}
     </>
   );
 }

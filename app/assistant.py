@@ -62,7 +62,12 @@ Rules:
 - `summary` is one or two plain sentences they would recognise as their own program.
 - `keywords` are the phrases a matching funder would use. 5-10 of them.
 - `search_queries` are 3-5 complete searches, each one specific enough to return
-  funders rather than articles.
+  funders rather than articles. Vary the ANGLE of each query rather than restating the
+  same phrase with a different verb — one aimed at government or public funding
+  databases, one at named foundations or funder networks, one using a practice term
+  unique to THIS program (not one that would fit equally well on this organisation's
+  other programs), and one using a geography or funder-size qualifier if the page
+  states one. Two queries that would return the same ten results are one query, not two.
 - `funder_types` are the kinds of organisation that fund this sort of work.
 """
 

@@ -44,6 +44,7 @@ RESEARCHED_SOURCES: list[Source] = [
         tier=Tier.WARM,
         confidence=Confidence.CONFIRMED,
         sector="family_foundation",
+        region="Los Angeles County",
         notes=(
             "The Foundation reviews funding requests from 501(c)(3) public charity "
             "organizations, based in and serving Los Angeles County. · No application "
@@ -61,6 +62,7 @@ RESEARCHED_SOURCES: list[Source] = [
         tier=Tier.WARM,
         confidence=Confidence.CONFIRMED,
         sector="family_foundation",
+        region="Los Angeles County",
         notes=(
             "The Parsons Foundation accepts Letters of Inquiry (LOIs) via our online "
             "application portal · \"The Parsons Foundation makes grants to public "
@@ -79,6 +81,7 @@ RESEARCHED_SOURCES: list[Source] = [
         tier=Tier.WARM,
         confidence=Confidence.CONFIRMED,
         sector="family_foundation",
+        region="",
         notes=(
             "\"A recipient organization must be exempt from income taxation under "
             "Federal law as a 501(c)3.\" · \"The Board accepts, reviews and votes on "
@@ -98,6 +101,7 @@ RESEARCHED_SOURCES: list[Source] = [
         tier=Tier.WARM,
         confidence=Confidence.CONFIRMED,
         sector="family_foundation",
+        region="Alameda, Contra Costa, or San Francisco County",
         notes=(
             "\"The Community Arts program of the Zellerbach Family Foundation has an "
             "open application process; all other grantmaking is done by invitation.\" "
@@ -116,6 +120,7 @@ RESEARCHED_SOURCES: list[Source] = [
         tier=Tier.WARM,
         confidence=Confidence.CONFIRMED,
         sector="family_foundation",
+        region="Los Angeles County",
         notes=(
             "\"The Rose Hills Foundation supports qualified tax-exempt charitable "
             "organizations\" for the benefit of Southern California, \"with a current "

@@ -902,8 +902,10 @@ def test_moderation_is_hidden_from_ordinary_accounts(signed_in, token_for, monke
     me = auth_header(token_for())
 
     assert signed_in.get("/api/admin/reports", headers=me).status_code == 404
-    assert signed_in.post("/api/admin/reports/anything", json={"uphold": True},
-                          headers=me).status_code == 404
+    assert signed_in.post(
+        "/api/admin/reports/resolve",
+        json={"uphold": True, "funder_org": "x", "funder_id": "y"},
+        headers=me).status_code == 404
     assert signed_in.get("/api/org", headers=me).json()["platform_admin"] is False
 
 
@@ -914,9 +916,11 @@ def test_the_named_operator_can_moderate(signed_in, token_for, monkeypatch):
 
     assert signed_in.get("/api/admin/reports", headers=me).status_code == 200
     assert signed_in.get("/api/org", headers=me).json()["platform_admin"] is True
-    # An id that does not exist is a 404 from the handler, not from the gate.
-    assert signed_in.post("/api/admin/reports/nope", json={"uphold": True},
-                          headers=me).status_code == 404
+    # A funder with no open report is a 404 from the handler, not from the gate.
+    assert signed_in.post(
+        "/api/admin/reports/resolve",
+        json={"uphold": True, "funder_org": "x", "funder_id": "nope"},
+        headers=me).status_code == 404
 
 
 def test_a_report_names_the_funder_it_is_given_not_the_org_asking(signed_in, token_for,

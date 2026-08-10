@@ -15,18 +15,18 @@ import { Busy } from "./Spinner";
 //   Tutorial step 1   before the API-key copy. "Is someone here already using this?" is
 //                     the first question, because answering yes makes every later step
 //                     unnecessary — you inherit a configured org.
-//   Settings          "Join another organization", with no gate and a confirm dialog,
-//                     because from there it is a move rather than a beginning.
+//   Settings          "Join another organization" — a second org, on top of the one
+//                      you already have.
 //
-// **Redeeming MOVES you.** It does not merge and it does not copy. That was always true
-// and was safe to leave implicit while the form only appeared on empty accounts; it is
-// not safe now, which is why the Settings caller puts the consequences in a dialog and
-// the server enforces the same leave rules as closing an account (`db.redeem_invite`).
+// **Redeeming ADDS an organization; it does not move, merge, or copy.** It used to
+// move — the caller left their old org through the same rules as closing an account,
+// which needed a confirm dialog naming what would be lost. `db.redeem_invite` no
+// longer touches the home org at all (see its docstring), so there is nothing left to
+// confirm and no gate needed before calling this.
 
 export default function JoinOrg({
   cta = "Join my colleague",
   onJoined,
-  beforeJoin,          // optional async gate — Settings uses it for the confirm dialog
 }) {
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
@@ -37,9 +37,6 @@ export default function JoinOrg({
     const trimmed = code.trim();
     if (!trimmed) return;
     setError(null);
-
-    if (beforeJoin && !(await beforeJoin(trimmed))) return;
-
     setBusy(true);
     try {
       const result = await api.org.join(trimmed);

@@ -53,10 +53,11 @@ from agent.models import MAX_REJECTS
 from agent.score import (EFFORT_CHOICES, EFFORT_IDS, MODEL_CHOICES, PRICING,
                          SCORING_MODEL, TRIAGE_MODEL)
 from . import archive, auth, export, repo, scheduler, secrets
-from .db import (DEFAULT_ORG_ID, SECTORS, InviteError, create_invite, import_starter_list,
-                 init_db, list_invites, month_key, org_for_user, org_members, org_owner,
-                 redeem_invite, remove_member, remove_starter_list, revoke_invite,
-                 session, set_org_owner)
+from .db import (DEFAULT_ORG_ID, SECTORS, InviteError, create_invite, current_active_org,
+                 import_starter_list, init_db, list_invites, month_key, my_orgs,
+                 org_members, org_owner, redeem_invite, remove_member,
+                 remove_starter_list, revoke_invite, session, set_org_owner,
+                 switch_active_org)
 from .runner import MANAGER, preflight
 
 log = logging.getLogger(__name__)
@@ -78,18 +79,26 @@ def current_org(user=Depends(auth.require_user)) -> str:
 
     This is the tenant boundary, and it is deliberately the *only* way a handler learns
     an org id — none of them accept one from the client. An org id in a query parameter
-    or a request body would be an invitation to type somebody else's.
+    or a request body would be an invitation to type somebody else's. `POST /api/org/
+    switch` is the one legitimate exception, and it works precisely because it re-derives
+    the same boundary rather than bypassing it: it takes an org id from the client too,
+    but only ever *writes* it after checking a membership row exists — see
+    `db.switch_active_org`.
 
     With sign-in off there is no user to ask, and a local install binds to 127.0.0.1 with
     exactly one org, so it resolves to `DEFAULT_ORG_ID`. That keeps `./start.sh` a
     zero-configuration experience without giving a deployed install a way to reach the
     default org's data: on a deployed box `auth.require_user` has already raised 401
     before this function runs.
+
+    Resolves to the ACTIVE org, not always the home one — see `db.current_active_org`.
+    Someone who has joined a second organization by invitation code and switched into it
+    sees that org's data everywhere until they switch back.
     """
     if user is None:
         return DEFAULT_ORG_ID
     with session() as conn:
-        return org_for_user(conn, user.uid, user.email)
+        return current_active_org(conn, user.uid, user.email)
 
 
 # --- request bodies -----------------------------------------------------------
@@ -186,6 +195,7 @@ class FunderIn(BaseModel):
     # `_set()` ever sees it — the Block button in the dashboard would save nothing.
     blocked: bool | None = None
     tier: int | None = Field(None, ge=0, le=3)
+    region: str | None = None
     programs: list[str] | None = None
     notes: str | None = None
     exclude_reason: str | None = None
@@ -682,25 +692,36 @@ def report_shared(body: ShareReportIn, org: str = Depends(current_org)) -> dict:
 
 @api.get("/admin/reports", dependencies=[Depends(require_admin)])
 def list_reports() -> dict:
-    """The moderation queue. Crosses every tenant boundary, so it is gated by
-    `FUNDWORTHY_ADMIN_EMAILS` alone — see `require_admin`."""
+    """The moderation queue, one card per reported funder. Crosses every tenant
+    boundary, so it is gated by `FUNDWORTHY_ADMIN_EMAILS` alone — see `require_admin`.
+    `counts` is what the tab's three stat boxes and filter pills read, computed here
+    rather than three more round trips for numbers the list already has."""
     with session() as conn:
-        return {"reports": repo.open_reports(conn)}
+        groups = repo.all_reports(conn)
+    counts = {"open": 0, "upheld": 0, "dismissed": 0}
+    for g in groups:
+        counts[g["status"]] = counts.get(g["status"], 0) + 1
+    return {"reports": groups, "counts": counts}
 
 
 class ResolveIn(BaseModel):
     uphold: bool
+    funder_org: str = Field(min_length=1, max_length=64)
+    funder_id: str = Field(min_length=1, max_length=128)
 
 
-@api.post("/admin/reports/{report_id}", dependencies=[Depends(require_admin)])
-def resolve_shared_report(report_id: str, body: ResolveIn,
-                          user=Depends(auth.require_user)) -> dict:
-    """Take a reported funder down for good, or dismiss the report and restore it."""
+@api.post("/admin/reports/resolve", dependencies=[Depends(require_admin)])
+def resolve_shared_report(body: ResolveIn, user=Depends(auth.require_user)) -> dict:
+    """Take a reported funder down for good, or dismiss every open report against it
+    and put it back in the pool — see `repo.resolve_report_group` for why this resolves
+    the whole funder, not one report row."""
     with session() as conn:
-        if not repo.resolve_report(conn, report_id, uphold=body.uphold,
-                                   by=user.email if user else "local"):
-            raise HTTPException(404, "No such open report.")
-    return {"resolved": report_id, "upheld": body.uphold}
+        n = repo.resolve_report_group(conn, body.funder_org, body.funder_id,
+                                      uphold=body.uphold,
+                                      by=user.email if user else "local")
+        if not n:
+            raise HTTPException(404, "No open report for that funder.")
+    return {"resolved": n, "upheld": body.uphold}
 
 
 # --- bug reports ----------------------------------------------------------------
@@ -741,6 +762,7 @@ async def submit_bug_report(body: BugReportIn, request: Request,
         title = body.title.strip()
         description = body.description.strip()
         page = body.page.strip()
+        last_run = repo.latest_run(conn, org_id=org)
 
         report_id = repo.create_bug_report(
             conn, org_id=org, title=title, description=description, page=page,
@@ -751,7 +773,8 @@ async def submit_bug_report(body: BugReportIn, request: Request,
 
     issue_body = bugreport.format_issue_body(
         description, org_name=org_name, org_id=org, reporter=reported_by, page=page,
-        user_agent=request.headers.get("user-agent", ""))
+        user_agent=request.headers.get("user-agent", ""),
+        last_search=last_run["started_at"] if last_run else None)
 
     try:
         result = await bugreport.file_github_issue(title, issue_body)
@@ -828,8 +851,10 @@ def read_archive(month: str | None = None, org: str = Depends(current_org)) -> d
         # Without it this page would either invent a cap or drop the comparison, and
         # the archive renders the same component as This week.
         hours = repo.get_settings(conn, org_id=org).get("max_effort_hours")
+        # One card per search, not one pooled list — see `repo.list_runs_for_month`.
+        searches = repo.list_runs_for_month(conn, org_id=org, month=month) if month else []
     return {**summary, "months_available": months, "month": month,
-            "opportunities": rows, "max_effort_hours": hours}
+            "opportunities": rows, "max_effort_hours": hours, "searches": searches}
 
 
 # --- runs ---------------------------------------------------------------------
@@ -1086,6 +1111,45 @@ def read_org(org: str = Depends(current_org),
         }
 
 
+@api.get("/orgs/mine")
+def read_my_orgs(user=Depends(auth.require_user)) -> dict:
+    """Every organization this person can switch into, for the sidebar switcher.
+
+    Not gated on `current_org` — that resolves the *active* org, and this endpoint's
+    whole job is to list every org that is not necessarily the active one. On a local
+    install there is no user and exactly one org, so the switcher has nothing to do; the
+    dashboard does not call this route in that mode.
+    """
+    if user is None:
+        return {"orgs": []}
+    with session() as conn:
+        return {"orgs": my_orgs(conn, user.uid)}
+
+
+class SwitchOrgIn(BaseModel):
+    org_id: str = Field(min_length=1, max_length=128)
+
+
+@api.post("/org/switch")
+def switch_org(body: SwitchOrgIn, user=Depends(auth.require_user)) -> dict:
+    """Change which organization's data this person is looking at.
+
+    The only handler that takes an org id from the client — see the note on
+    `current_org` above for why that is safe here specifically: `db.switch_active_org`
+    checks a real membership row exists before writing anything, so this can only ever
+    move somebody to an org they already belong to, never anywhere else.
+    """
+    if user is None:
+        raise HTTPException(
+            400, "Switching organizations needs sign-in, which this install has off.")
+    with session() as conn:
+        try:
+            switch_active_org(conn, user.uid, body.org_id)
+        except ValueError as exc:
+            raise HTTPException(403, "You are not a member of that organization.") from exc
+    return {"org_id": body.org_id}
+
+
 class MemberIn(BaseModel):
     uid: str = Field(min_length=1, max_length=128)
 
@@ -1219,16 +1283,15 @@ class JoinIn(BaseModel):
 
 @api.post("/org/join")
 def join_org(body: JoinIn, user=Depends(auth.require_user)) -> dict:
-    """Redeem an invitation and move into that colleague's organization.
+    """Redeem an invitation and switch into that colleague's organization.
 
     Note this deliberately does **not** depend on `current_org`: resolving the caller's
-    current org would create an empty one for them a moment before they leave it.
+    current org would provision an empty home org for a brand-new sign-in a moment
+    before this ever needed one.
 
-    Joining **moves** somebody, so it is a leave as much as a join, and `redeem_invite`
-    applies the same two rules as closing an account: an admin with colleagues has to
-    hand the org over first, and an org left with nobody in it is stranded rather than
-    abandoned with a live API key in it. The response says which of those happened,
-    because "you also just wiped the org you were in" is not something to discover later.
+    Joining **adds** a second organization — see `db.redeem_invite` — rather than moving
+    anybody out of their first. Nothing here can strand an org or need an admin to hand
+    anything over first, because nobody is leaving.
     """
     if user is None:
         raise HTTPException(
