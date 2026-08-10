@@ -457,6 +457,10 @@ class _FakeContentBlock:
 class _FakeUsage:
     input_tokens = 10
     output_tokens = 10
+    # The real Anthropic SDK always populates these on `usage`, 0 when caching wasn't
+    # used — Budget.record() (FUTURE.md P1) now reads them on every call.
+    cache_creation_input_tokens = 0
+    cache_read_input_tokens = 0
 
 
 class _FakeResponse:

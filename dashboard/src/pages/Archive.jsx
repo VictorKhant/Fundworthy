@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { api, usd } from "../api";
+import { api, dayAndTime, usd } from "../api";
+import { useConfirm } from "../components/Confirm";
 import DownloadCsv from "../components/DownloadCsv";
 import { Finding } from "../components/Findings";
 import Icon from "../components/Icon";
-import Spinner from "../components/Spinner";
+import Spinner, { Busy } from "../components/Spinner";
 
 // Archived findings — one entry per SEARCH, not one pooled list per month.
 //
@@ -34,22 +35,13 @@ const monthName = (key) => {
   });
 };
 
-function dayAndTime(iso) {
-  const d = new Date(iso);
-  if (!iso || Number.isNaN(d.getTime())) return { day: "", time: "" };
-  return {
-    day: d.toLocaleDateString(undefined, {
-      weekday: "long", day: "numeric", month: "long",
-    }),
-    time: d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
-      .replace(" ", "").toLowerCase(),
-  };
-}
-
-function SearchCard({ search, month, maxEffortHours }) {
+function SearchCard({ search, month, maxEffortHours, onDeleted }) {
   const [open, setOpen] = useState(false);
   const [findings, setFindings] = useState(null);
   const [error, setError] = useState(null);
+  const [dialog, ask] = useConfirm();
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState(null);
 
   const { day, time } = dayAndTime(search.started_at);
   const trigger = search.trigger === "scheduled"
@@ -78,8 +70,56 @@ function SearchCard({ search, month, maxEffortHours }) {
     setOpen(!open);
   }
 
+  // Two dialogs, deliberately, not one with a typed field like Close your account — a
+  // single search is a smaller, more common action than the one truly irreversible
+  // thing in the app, so it earns a second plain "are you sure" rather than typing
+  // anything. Both still go through the app's own themed Confirm, never
+  // window.confirm.
+  async function handleDelete() {
+    setDeleteError(null);
+    const first = await ask({
+      tone: "clay",
+      icon: "bin",
+      title: "Delete this search?",
+      body: `This permanently removes ${day} ${time} from Past findings and the ` +
+            "database.",
+      points: [
+        search.kept_count > 0
+          ? `${search.kept_count} finding${search.kept_count === 1 ? "" : "s"} from ` +
+            "this search are deleted with it."
+          : "This search kept no findings — there is nothing else to lose.",
+        search.usd_spent > 0
+          ? `${usd(search.usd_spent)} also leaves this month's spend total.`
+          : "It cost nothing, so nothing changes in this month's spend total.",
+      ],
+      confirmLabel: "Continue…",
+    });
+    if (!first) return;
+
+    const second = await ask({
+      tone: "clay",
+      icon: "warning",
+      title: "Really delete it permanently?",
+      body: "Second check, on purpose — the row leaves the database for good. There " +
+            "is no undo.",
+      confirmLabel: "Yes, delete permanently",
+      busyLabel: "Deleting",
+    });
+    if (!second) return;
+
+    setDeleting(true);
+    try {
+      await api.runs.remove(search.id);
+      onDeleted(search.id);
+    } catch (e) {
+      setDeleteError(e.message);
+      setDeleting(false);
+    }
+  }
+
   return (
     <div className="search-card">
+      {dialog}
       <div className="search-card-head">
         <div>
           <h3>{day} <span className="muted search-card-time">{time}</span></h3>
@@ -99,7 +139,14 @@ function SearchCard({ search, month, maxEffortHours }) {
             <span>of your key</span>
           </div>
         </div>
+        <Busy className="iconbtn danger search-card-delete" busy={deleting}
+              busyLabel="Deleting" onClick={handleDelete}
+              title="Delete this search permanently"
+              aria-label="Delete this search permanently">
+          <Icon name="bin" size={15} />
+        </Busy>
       </div>
+      {deleteError && <div className="notice error">{deleteError}</div>}
 
       {hasBreakdown ? (
         <div className="search-card-boxes">
@@ -173,6 +220,39 @@ function SearchCard({ search, month, maxEffortHours }) {
   );
 }
 
+// A search behind "Show N searches that cost nothing and kept nothing" — collapsed by
+// default rather than filtered out server-side. A search that spent $0 and kept 0
+// findings is almost always a test run or a broken key, not a real quiet week (a real
+// one still triages and scores, so it spends *something*, even a fraction of a cent) —
+// but the same disclosure pattern this page already uses for "Show the N findings from
+// this search" applies: the app never silently drops a row, it collapses it behind a
+// toggle, so a real search that genuinely spent nothing (--no-llm, say) is still one
+// click away rather than gone.
+function EmptySearches({ searches, month, maxEffortHours, onDeleted }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="search-cards-empty">
+      <button type="button" className="text search-toggle" onClick={() => setOpen(!open)}
+              aria-expanded={open}>
+        {open ? "Hide" : "Show"} the {searches.length} search
+        {searches.length === 1 ? "" : "es"} that cost nothing and kept nothing
+        <span className={`search-toggle-caret ${open ? "on" : ""}`} aria-hidden="true">
+          <Icon name="chevron" size={12} />
+        </span>
+      </button>
+      {open && (
+        <div className="search-cards">
+          {searches.map((s) => (
+            <SearchCard key={s.id} search={s} month={month}
+                        maxEffortHours={maxEffortHours} onDeleted={onDeleted} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Archive() {
   const [data, setData] = useState(null);
   const [month, setMonth] = useState(null);
@@ -187,6 +267,13 @@ export default function Archive() {
       })
       .catch((e) => setError(e.message));
   }, [month]);
+
+  // A deleted search leaves the list it came from, immediately — the card is not
+  // merely collapsed, so leaving it in `data.searches` would make it reappear the
+  // moment anything else re-renders.
+  function handleDeleted(id) {
+    setData((d) => ({ ...d, searches: (d.searches || []).filter((s) => s.id !== id) }));
+  }
 
   if (error) {
     return (
@@ -211,6 +298,8 @@ export default function Archive() {
   const searches = data.searches || [];
   const totalKept = searches.reduce((n, s) => n + (s.kept_count || 0), 0);
   const totalSpent = searches.reduce((n, s) => n + (s.usd_spent || 0), 0);
+  const realSearches = searches.filter((s) => s.usd_spent > 0 || s.kept_count > 0);
+  const emptySearches = searches.filter((s) => !(s.usd_spent > 0 || s.kept_count > 0));
 
   return (
     <>
@@ -250,18 +339,30 @@ export default function Archive() {
               {totalKept} finding{totalKept === 1 ? "" : "s"} kept ·{" "}
               {usd(totalSpent)} of your key
             </span>
-            {(data.opportunities || []).length > 0 && <DownloadCsv month={month} />}
+            {(data.opportunities || []).length > 0 && (
+              <DownloadCsv month={month} searches={searches} />
+            )}
           </div>
 
           {searches.length === 0 ? (
             <p className="muted small">No searches recorded for {monthName(month)}.</p>
           ) : (
-            <div className="search-cards">
-              {searches.map((s) => (
-                <SearchCard key={s.id} search={s} month={month}
-                            maxEffortHours={data.max_effort_hours} />
-              ))}
-            </div>
+            <>
+              {realSearches.length > 0 && (
+                <div className="search-cards">
+                  {realSearches.map((s) => (
+                    <SearchCard key={s.id} search={s} month={month}
+                                maxEffortHours={data.max_effort_hours}
+                                onDeleted={handleDeleted} />
+                  ))}
+                </div>
+              )}
+              {emptySearches.length > 0 && (
+                <EmptySearches searches={emptySearches} month={month}
+                               maxEffortHours={data.max_effort_hours}
+                               onDeleted={handleDeleted} />
+              )}
+            </>
           )}
         </>
       )}

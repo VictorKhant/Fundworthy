@@ -378,6 +378,21 @@ def test_draft_rejects_a_non_url(client):
     assert r.status_code == 400
 
 
+def test_repeated_draft_requests_are_rate_limited(client):
+    """The tighter of the two caps (FUTURE.md P1) — every call to this route makes a
+    live fetch and a Sonnet call, up to the $0.10 ceiling in app/assistant.py, whether
+    or not it succeeds. A malformed URL fails before any of that runs, on purpose: the
+    rate limit itself has to fire before the request does any real work, not after."""
+    from app.main import DRAFT_PROGRAM_PER_MINUTE
+
+    for _ in range(DRAFT_PROGRAM_PER_MINUTE):
+        assert client.post(
+            "/api/programs/draft", json={"url": "just some words"}).status_code == 400
+
+    r = client.post("/api/programs/draft", json={"url": "just some words"})
+    assert r.status_code == 429
+
+
 # --- funders ------------------------------------------------------------------
 
 def test_funder_crud_and_deactivation(client):
@@ -447,6 +462,67 @@ def test_the_kill_switch_blocks_the_rerun_button(client):
     assert "switched off" in r.json()["detail"]
 
 
+# --- deleting a search from Past findings ---------------------------------------
+
+def test_deleting_a_search_removes_it_and_its_findings(client):
+    """Through the real HTTP layer, like the Block-button regression test — a request
+    model with a missing field would 200 without persisting anything and this would
+    never notice if it only called repo.delete_run directly."""
+    from datetime import date, datetime, timedelta, timezone
+
+    from agent.models import Opportunity, stable_id
+    from app import repo
+    from app.db import DEFAULT_ORG_ID, session
+
+    with session() as conn:
+        repo.create_run(conn, "r-del", org_id=DEFAULT_ORG_ID)
+        repo.update_run(conn, "r-del", status="done", usd_spent=0.43)
+        repo.save_opportunity(
+            conn,
+            Opportunity(
+                id=stable_id("https://example.invalid/a", "A grant"),
+                title="A grant", funder="Example Foundation",
+                source_url="https://example.invalid/a",
+                award_min=10_000, award_max=50_000,
+                deadline=date.today() + timedelta(days=60),
+                estimated_effort_hours=8, program_match=[], score=72,
+                score_rationale="fits", verified=True, needs_human_check=False,
+                fetched_at=datetime.now(timezone.utc),
+            ),
+            run_id="r-del", org_id=DEFAULT_ORG_ID,
+        )
+
+    res = client.delete("/api/runs/r-del")
+    assert res.status_code == 200
+    assert res.json() == {"run_id": "r-del", "findings_removed": 1}
+
+    with session() as conn:
+        assert repo.get_run(conn, "r-del", org_id=DEFAULT_ORG_ID) is None
+        assert repo.list_opportunities(conn, org_id=DEFAULT_ORG_ID) == []
+
+
+def test_deleting_an_unknown_search_404s(client):
+    res = client.delete("/api/runs/no-such-run")
+    assert res.status_code == 404
+
+
+def test_deleting_a_running_search_is_refused(client):
+    """Past findings never offers a running search as a card to delete in the first
+    place (`list_runs_for_month` excludes status='running'), but the endpoint has to
+    refuse it too — MANAGER is still writing progress into this exact row."""
+    from app import repo
+    from app.db import DEFAULT_ORG_ID, session
+
+    with session() as conn:
+        repo.create_run(conn, "r-live", org_id=DEFAULT_ORG_ID)
+
+    res = client.delete("/api/runs/r-live")
+    assert res.status_code == 409
+
+    with session() as conn:
+        assert repo.get_run(conn, "r-live", org_id=DEFAULT_ORG_ID) is not None
+
+
 # --- refusing a search that could not have worked -----------------------------
 #
 # Every one of these used to be found out the expensive way. The button started a
@@ -473,6 +549,22 @@ def test_a_search_with_no_api_key_is_refused_instead_of_crawling_for_nothing(cli
     r = client.post("/api/runs", json={})
     assert r.status_code == 409
     assert "Settings" in r.json()["detail"], "say which page fixes it"
+
+
+def test_repeated_run_requests_are_rate_limited(client):
+    """FUTURE.md P1: `POST /api/runs` had no per-minute cap — only guards on what
+    happens after the request lands (RunManager's one-run-per-org concurrency,
+    `runner.preflight`). Every call below is refused for want of a key, which is
+    exactly the case a rate limit still has to catch: a script hammering a route that
+    always 409s still costs CPU on every attempt, on a box with exactly one to spare."""
+    from app.main import RUNS_PER_MINUTE
+
+    _tick_a_program(client)
+    for _ in range(RUNS_PER_MINUTE):
+        assert client.post("/api/runs", json={}).status_code == 409
+
+    r = client.post("/api/runs", json={})
+    assert r.status_code == 429
 
 
 def test_the_free_crawl_mode_still_needs_no_key(client):

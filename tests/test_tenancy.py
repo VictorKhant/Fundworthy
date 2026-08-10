@@ -237,6 +237,49 @@ def test_deleting_a_funder_only_deletes_your_copy(db):
         assert repo.delete_funder(conn, shared_id, org_id=B) is False
 
 
+def test_deleting_a_search_only_deletes_your_own(db):
+    """Run ids are uuids (app/db.py's own comment on the `runs` table says so), so there
+    is no id-collision case to force here the way `create_funder`'s derived ids allow —
+    but `repo.delete_run` takes an id and an org_id as two separate arguments, and it
+    would be easy to write the DELETE with only the id. If it ever did, B could delete
+    A's run by guessing or observing A's id; this proves it can't."""
+    with session(db) as conn:
+        repo.create_run(conn, "run-a", org_id=A)
+        repo.create_run(conn, "run-b", org_id=B)
+
+        assert repo.delete_run(conn, "run-a", org_id=B) is None
+        assert repo.get_run(conn, "run-a", org_id=A) is not None
+
+        result = repo.delete_run(conn, "run-a", org_id=A)
+        assert result == {"run_id": "run-a", "findings_removed": 0}
+        assert repo.get_run(conn, "run-a", org_id=A) is None
+        # B's own run is untouched by A's delete.
+        assert repo.get_run(conn, "run-b", org_id=B) is not None
+
+
+def test_deleting_a_search_only_removes_findings_currently_credited_to_it(db):
+    """An opportunity a later search re-confirmed has its `run_id` reassigned to that
+    later run (`list_runs_for_month`'s own dedup note) — deleting the earlier run must
+    not reach across and take a finding that has since moved on."""
+    with session(db) as conn:
+        repo.create_run(conn, "run-1", org_id=A)
+        repo.create_run(conn, "run-2", org_id=A)
+        repo.save_opportunity(conn, _opp(title="Still credited to run-1"),
+                              run_id="run-1", org_id=A)
+        moved = _opp(title="Re-confirmed by run-2",
+                     source_url="https://example.invalid/moved")
+        repo.save_opportunity(conn, moved, run_id="run-1", org_id=A)
+        repo.save_opportunity(conn, moved, run_id="run-2", org_id=A)  # takes over run_id
+
+        result = repo.delete_run(conn, "run-1", org_id=A)
+
+        # Only the row still pointing at run-1 went with it — the re-confirmed one, now
+        # owned by run-2, survives.
+        assert result["findings_removed"] == 1
+        remaining = repo.list_opportunities(conn, org_id=A)
+        assert [o["title"] for o in remaining] == ["Re-confirmed by run-2"]
+
+
 def test_program_cards_are_not_shared(db):
     """A program card is the closest thing a small nonprofit has to written strategy, and
     an unscoped `list_programs(active_only=True)` sent every org's into one system
@@ -1522,6 +1565,73 @@ def test_reporting_twice_is_one_report_not_a_pattern(db):
         assert again["already"] is True and again["report_id"] == first["report_id"]
         open_groups = [g for g in repo.all_reports(conn) if g["status"] == "open"]
         assert len(open_groups) == 1
+
+
+def test_reporting_a_pair_that_names_nothing_real_is_refused(db):
+    """FUTURE.md P1: `report_shared_funder` used to accept ANY `(funder_org,
+    funder_id)`, real or not. A guessed or stale pair — never added by hand, never
+    checked OK, or from an org that has since opted back out — now names nothing
+    `GET /api/directory/shared` could have returned, and the report is refused rather
+    than silently queued."""
+    with session(db) as conn:
+        with pytest.raises(ValueError, match="not currently being shared"):
+            repo.report_shared_funder(conn, funder_org=B, funder_id="no-such-funder",
+                                      reported_by=A, reason="x")
+
+        # A real funder that was never shared (share_funders left off) is just as
+        # implausible as one that does not exist at all.
+        never_shared = repo.create_funder(
+            conn, {"name": "Private Fund", "url": "https://private.invalid"}, org_id=B)
+        conn.execute("UPDATE funders SET check_ok=1 WHERE org_id=? AND id=?",
+                     (B, never_shared["id"]))
+        with pytest.raises(ValueError, match="not currently being shared"):
+            repo.report_shared_funder(conn, funder_org=B, funder_id=never_shared["id"],
+                                      reported_by=A, reason="x")
+
+
+def test_a_second_report_against_an_already_hidden_funder_still_works(db):
+    """The plausibility check has to look at the FUNDER, not at whether a report has
+    already hidden it — `test_reports_from_different_orgs_group_into_one_card` below
+    depends on a second, third nonprofit still being able to pile onto an entry the
+    first report already took off the list, which is the social proof the moderation
+    queue is for."""
+    with session(db) as conn:
+        ensure_org(conn, "org_third", "Third")
+        f = _shared_funder(conn, B, "Already Hidden Fund", "https://example.invalid/h")
+        repo.report_shared_funder(conn, funder_org=B, funder_id=f["id"],
+                                  reported_by=A, reason="first")
+        assert repo.shared_funders(conn, org_id=A) == []
+
+        second = repo.report_shared_funder(conn, funder_org=B, funder_id=f["id"],
+                                           reported_by="org_third", reason="second")
+        assert second["already"] is False
+
+
+def test_reporting_is_capped_per_org_per_rolling_day(db):
+    """The other half of the same finding: the plausibility check alone cannot stop an
+    org from scripting `GET /api/directory/shared` and reporting every real row it
+    returns, one call each — that is still a script away from emptying the whole pool.
+    Same rolling-24h shape as `count_recent_bug_reports`."""
+    with session(db) as conn:
+        funders = [
+            _shared_funder(conn, B, f"Fund {i}", f"https://example.invalid/f{i}")
+            for i in range(repo.MAX_FUNDER_REPORTS_PER_ORG_PER_DAY + 1)
+        ]
+        for f in funders[:-1]:
+            repo.report_shared_funder(conn, funder_org=B, funder_id=f["id"],
+                                      reported_by=A, reason="x")
+
+        assert (repo.count_recent_funder_reports(conn, org_id=A)
+                == repo.MAX_FUNDER_REPORTS_PER_ORG_PER_DAY)
+        # Re-reporting one already reported today must not itself count against the
+        # cap a second time — the idempotency check above returns `already: True`
+        # before a second row is ever inserted.
+        repo.report_shared_funder(conn, funder_org=B, funder_id=funders[0]["id"],
+                                  reported_by=A, reason="x again")
+        assert (repo.count_recent_funder_reports(conn, org_id=A)
+                == repo.MAX_FUNDER_REPORTS_PER_ORG_PER_DAY)
+        # A different org's reports never count against this one's cap.
+        assert repo.count_recent_funder_reports(conn, org_id=B) == 0
 
 
 def test_reports_from_different_orgs_group_into_one_card(db):

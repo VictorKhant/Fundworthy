@@ -68,6 +68,14 @@ def _hermetic_environment(monkeypatch, tmp_path):
     monkeypatch.setattr(auth, "_config", None, raising=False)
     monkeypatch.setattr(auth, "_jwks_client", None, raising=False)
 
+    # Same class of leak: `app/ratelimit.py` (FUTURE.md P1) keeps its hit counters in a
+    # module-global dict, not the per-test database, so without this a test that calls
+    # POST /api/runs or POST /api/programs/draft more than a couple of times would start
+    # failing with 429s the moment enough *other* tests had quietly used up the same
+    # org's budget earlier in the same pytest process.
+    from app import ratelimit
+    ratelimit._hits.clear()
+
 
 def pytest_configure(config):
     config.addinivalue_line(

@@ -26,6 +26,7 @@ Everything the browser can do:
     GET    /api/runs                   run history
     POST   /api/runs                   ← the "Re-run search pipeline" button
     POST   /api/runs/stop              ← the stop button
+    DELETE /api/runs/{id}              permanently remove one search and its findings
     GET    /api/runs/current           live progress while one is going
 
     GET    /api/health                 public — an uptime ping, holds nothing
@@ -52,7 +53,7 @@ from pydantic import BaseModel, Field
 from agent.models import MAX_REJECTS
 from agent.score import (EFFORT_CHOICES, EFFORT_IDS, MODEL_CHOICES, PRICING,
                          SCORING_MODEL, TRIAGE_MODEL)
-from . import archive, auth, export, repo, scheduler, secrets
+from . import archive, auth, export, ratelimit, repo, scheduler, secrets
 from .db import (DEFAULT_ORG_ID, SECTORS, InviteError, create_invite, current_active_org,
                  import_starter_list, init_db, list_invites, month_key, my_orgs,
                  org_members, org_owner, redeem_invite, remove_member,
@@ -64,6 +65,13 @@ log = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DIST = REPO_ROOT / "dashboard" / "dist"
+
+# Per-org, per-minute (FUTURE.md P1: neither route had any). Both are already gated by
+# what happens after the request lands — RunManager's one-run-per-org concurrency and
+# runner.preflight for /runs, nothing at all for /programs/draft, which is why its cap
+# is tighter: every attempt there costs real money, whether or not it succeeds.
+RUNS_PER_MINUTE = 5
+DRAFT_PROGRAM_PER_MINUTE = 3
 
 # Two routers, and the split is the security boundary. Everything on `api` is behind
 # `auth.require_user`; `public` holds only the two things that must answer before anyone
@@ -430,6 +438,9 @@ async def draft_program(body: DraftIn, org: str = Depends(current_org)) -> dict:
     """The assistant. Returns a draft for the user to review — saves nothing."""
     from .assistant import AssistantError, draft_program_card
 
+    if not ratelimit.check(f"draft:{org}", limit=DRAFT_PROGRAM_PER_MINUTE):
+        raise HTTPException(429, "Too many requests — wait a moment and try again.")
+
     url = body.url.strip()
     with session() as conn:
         # Refuse a page this org has already turned into a card. Reading it again would
@@ -450,8 +461,13 @@ async def draft_program(body: DraftIn, org: str = Depends(current_org)) -> dict:
                 "Edit that card instead, or paste a different page.")
 
         key = secrets.effective_api_key(conn, org_id=org)
+        settings = repo.get_settings(conn, org_id=org)
     try:
-        return {"draft": await draft_program_card(url, key)}
+        return {"draft": await draft_program_card(
+            url, key,
+            org_name=settings.get("org_name") or "",
+            org_location=settings.get("org_location") or "",
+        )}
     except AssistantError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
@@ -681,11 +697,26 @@ def report_shared(body: ShareReportIn, org: str = Depends(current_org)) -> dict:
 
     The reporting org is recorded and never shown. Who objected to whom is exactly the
     kind of thing a small nonprofit sector would gossip about.
+
+    Capped per org per day, the same rolling-24h shape as bug reports: `report_shared_
+    funder`'s own plausibility check refuses a pair that was never really offered, but
+    it cannot refuse a script that reports every REAL row `GET /api/directory/shared`
+    just returned — that endpoint hands back exactly the pairs needed to empty the whole
+    pool in one pass, one report each, from a single account.
     """
     with session() as conn:
-        out = repo.report_shared_funder(
-            conn, funder_org=body.from_org, funder_id=body.funder_id,
-            reported_by=org, reason=body.reason)
+        if (repo.count_recent_funder_reports(conn, org_id=org)
+                >= repo.MAX_FUNDER_REPORTS_PER_ORG_PER_DAY):
+            raise HTTPException(
+                429,
+                f"You've reported {repo.MAX_FUNDER_REPORTS_PER_ORG_PER_DAY} shared "
+                "funders in the last 24 hours — give it a bit before reporting more.")
+        try:
+            out = repo.report_shared_funder(
+                conn, funder_org=body.from_org, funder_id=body.funder_id,
+                reported_by=org, reason=body.reason)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
     log.info("shared funder %s/%s reported", body.from_org, body.funder_id)
     return {"reported": True, **out}
 
@@ -817,6 +848,7 @@ def list_opportunities(month: str | None = None, run_id: str | None = None,
 
 @api.get("/opportunities/export.csv")
 def export_opportunities(month: str | None = None, run_id: str | None = None,
+                         run_ids: str | None = None,
                          org: str = Depends(current_org)):
     """Download the brief as a spreadsheet file. (CLAUDE.md)
 
@@ -826,10 +858,17 @@ def export_opportunities(month: str | None = None, run_id: str | None = None,
 
     Same rows and same order as GET /opportunities — one query, one sort, so the file
     can never disagree with the page they downloaded it from.
+
+    `run_ids` is the Past findings picker — comma-separated search ids, so someone can
+    print "Aug 7 10am" and "Aug 6 1pm" together without the rest of the month's noise.
+    A bare query param stays a string in the URL either way, so a comma-joined list needs
+    no new FastAPI import; `run_id` (singular) stays for the one-search case elsewhere.
     """
     key = month or month_key()
+    ids = [r for r in run_ids.split(",") if r] if run_ids else None
     with session() as conn:
-        rows = repo.list_opportunities(conn, org_id=org, month=key, run_id=run_id)
+        rows = repo.list_opportunities(conn, org_id=org, month=key, run_id=run_id,
+                                       run_ids=ids)
         org_name = repo.get_settings(conn, org_id=org)["org_name"]
     return Response(
         content=export.to_csv(rows),
@@ -963,6 +1002,8 @@ def start_run(body: RunIn, org: str = Depends(current_org),
     the person reading them, and all returned by `GET /api/state` so the button can be
     disabled with the same sentence it would have failed with.
     """
+    if not ratelimit.check(f"runs:{org}", limit=RUNS_PER_MINUTE):
+        raise HTTPException(429, "Too many requests — wait a moment and try again.")
     try:
         run_id = MANAGER.start(no_llm=body.no_llm, budget=body.budget,
                                max_opportunities=body.max_opportunities,
@@ -982,6 +1023,31 @@ def stop_run(org: str = Depends(current_org)) -> dict:
     already spent on it.
     """
     return {"stopped": MANAGER.stop(org_id=org)}
+
+
+@api.delete("/runs/{run_id}")
+def delete_run(run_id: str, org: str = Depends(current_org)) -> dict:
+    """Permanently remove one search from Past findings — the row and the findings
+    currently credited to it, gone from the database, not merely hidden.
+
+    The dashboard gates this behind two confirmations of its own before it ever calls
+    here, because there is nothing this endpoint itself can undo. It still re-checks
+    ownership the normal way (`repo.delete_run` is org-scoped), the same as every other
+    delete in this file — a confirm dialog is not a permission.
+    """
+    with session() as conn:
+        run = repo.get_run(conn, run_id, org_id=org)
+        if run is None:
+            raise HTTPException(404, "No such search.")
+        if run["status"] == "running":
+            # Past findings never shows a running search as a card to begin with
+            # (`list_runs_for_month` excludes `status='running'`), so this only fires on
+            # a direct call — but MANAGER is still writing progress to this row, and
+            # deleting out from under a live search is a race worth refusing outright
+            # rather than "probably fine."
+            raise HTTPException(409, "This search is still running — stop it first.")
+        result = repo.delete_run(conn, run_id, org_id=org)
+    return result
 
 
 # --- one call for the whole dashboard -----------------------------------------

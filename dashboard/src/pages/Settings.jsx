@@ -357,6 +357,7 @@ function OrgPanel({ settings, onChange }) {
 // could reasonably be heard as "share my findings", which would be a very different and
 // much worse thing.
 function ShareFunders({ settings, onChange }) {
+  const [dialog, ask] = useConfirm();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [mine, setMine] = useState(null);
@@ -380,7 +381,29 @@ function ShareFunders({ settings, onChange }) {
   }, []);
   useEffect(() => { load(); }, [load, settings.share_funders]);
 
+  // Turning this ON is the one place on this page where a checkbox silently starts
+  // publishing rows, so it goes through the same confirm Discover.jsx's identical
+  // toggle already requires — the two used to disagree (a comment on the Discover side
+  // claimed they matched when they didn't), so someone who found this setting via
+  // Settings rather than Discover started sharing with one unconfirmed click. Turning
+  // it off stays direct: stopping is not a thing anyone needs warning about.
   async function toggle(next) {
+    if (next) {
+      const answer = await ask({
+        icon: "upload",
+        title: "Share the funders you add?",
+        points: [
+          "Only funders you typed in yourself. The researched lists are already "
+            + "available to everyone, so re-sharing a copy of one adds nothing.",
+          "Only the name, the web address, the sector and your note. Never your "
+            + "findings, your programs, your spending or your name.",
+          "Nothing appears until we have checked the page opens and looks like it is "
+            + "about grants. Untick this at any time and yours stop being offered.",
+        ],
+        confirmLabel: "Share mine",
+      });
+      if (!answer) return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -404,6 +427,7 @@ function ShareFunders({ settings, onChange }) {
 
   return (
     <section className="panel">
+      {dialog}
       <h2>Helping other nonprofits</h2>
       <p className="settings-lede">
         Funders you add by hand are research somebody did. Sharing them puts the name and

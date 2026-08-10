@@ -117,9 +117,14 @@ export const api = {
   // else — there is no way to attach a header to it. So: fetch it, read the filename off
   // Content-Disposition exactly as the browser would have, and hand the blob to a
   // synthetic link. The user sees no difference; the file keeps its real name.
-  downloadCsv: async (month) => {
-    const res = await send(
-      `/api/opportunities/export.csv${month ? `?month=${month}` : ""}`);
+  // `runIds` is the Past findings picker — several searches printed together. Omitted
+  // (or empty), this downloads the whole month exactly as it always did.
+  downloadCsv: async (month, runIds) => {
+    const q = new URLSearchParams();
+    if (month) q.set("month", month);
+    if (runIds && runIds.length) q.set("run_ids", runIds.join(","));
+    const qs = q.toString();
+    const res = await send(`/api/opportunities/export.csv${qs ? `?${qs}` : ""}`);
     if (res.status === 401 || res.status === 403) {
       throw await guard(res, await res.json().catch(() => ({})));
     }
@@ -141,6 +146,10 @@ export const api = {
     current: () => get("/api/runs/current"),
     start: (opts) => post("/api/runs", opts),
     stop: () => post("/api/runs/stop"),
+    // Permanently removes one search from Past findings — the row and the findings
+    // credited to it, gone from the database. The dashboard asks twice before calling
+    // this; there is nothing here that can be walked back afterward.
+    remove: (runId) => del(`/api/runs/${runId}`),
     // Which candidates a search set aside. Fetched when a stage box is opened, not with
     // the dashboard — there can be hundreds of rows and nobody reads them by default.
     rejects: (runId, { reason, limit = 60, offset = 0 } = {}) => {
@@ -251,6 +260,23 @@ export function pacificStamp(value) {
   const get = (t) => parts.find((p) => p.type === t)?.value ?? "";
 
   return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")} ${get("timeZoneName")}`;
+}
+
+// A search's own timestamp, split for the Past findings card and its spreadsheet
+// picker — "Friday, August 7" / "7:04pm" rather than one long string neither can lay
+// out on its own. Shared rather than duplicated because DownloadCsv's picker has to
+// label the exact same runs Archive.jsx already renders as cards, and a second copy of
+// this formatting would be the one place they could drift apart.
+export function dayAndTime(iso) {
+  const d = new Date(iso);
+  if (!iso || Number.isNaN(d.getTime())) return { day: "", time: "" };
+  return {
+    day: d.toLocaleDateString(undefined, {
+      weekday: "long", day: "numeric", month: "long",
+    }),
+    time: d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+      .replace(" ", "").toLowerCase(),
+  };
 }
 
 // Whoever this install is for. The UI used to hardcode the organization's name in a dozen

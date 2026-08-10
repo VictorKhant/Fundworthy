@@ -61,6 +61,69 @@ def _survivors(n: int) -> list[tuple[ParsedPage, Source]]:
     return [(_page(f"https://f{i}.invalid"), _src(f"funder{i}")) for i in range(n)]
 
 
+class _Sink:
+    """A minimal stand-in — just `.name` plus the two writes `_write_to_sinks` calls."""
+
+    def __init__(self, name, *, fail_opportunities=False, fail_run_log=False):
+        self.name = name
+        self.fail_opportunities = fail_opportunities
+        self.fail_run_log = fail_run_log
+        self.run_log_written = False
+
+    def write_opportunities(self, opportunities, run):
+        if self.fail_opportunities:
+            raise RuntimeError("disk full")
+        return len(opportunities)
+
+    def write_run_log(self, run):
+        if self.fail_run_log:
+            raise RuntimeError("database is locked")
+        self.run_log_written = True
+
+
+# --- bug 3: a failed run-log write must not exit 0 (FUTURE.md P1) --------------
+
+def test_a_failed_run_log_write_is_reported_as_a_failed_run():
+    """`sinks/sqlite.py: write_run_log` is what actually lands status/finished_at/
+    stop_reason on the `runs` row. Before this, only the opportunities-write loop set
+    `failed`; a broken run-log write was logged and nothing else, so `main()` still
+    returned 0 — telling `RunManager._finalize`'s own backstop (app/runner.py, which
+    only acts on a run still showing status='running') that everything was fine, while
+    the row it depended on being updated was never touched."""
+    sink = _Sink("sqlite", fail_run_log=True)
+    run = _run()
+
+    written, failed = runmod._write_to_sinks([sink], [], run)
+
+    assert failed is True
+    assert run.stop_reason == StopReason.PARTIAL
+    assert any("sqlite" in n and "WRITE FAILED" in n for n in run.notes)
+
+
+def test_a_failed_opportunities_write_still_attempts_the_run_log(monkeypatch):
+    """The two loops are independent on purpose — a sink that could not write results
+    still gets a chance to write the run log explaining that, rather than one failure
+    silently cancelling the other."""
+    sink = _Sink("sqlite", fail_opportunities=True)
+    run = _run()
+
+    written, failed = runmod._write_to_sinks([sink], [], run)
+
+    assert failed is True
+    assert sink.run_log_written is True
+
+
+def test_a_clean_write_is_not_reported_as_failed():
+    sink = _Sink("sqlite")
+    run = _run()
+
+    written, failed = runmod._write_to_sinks([sink], ["one opportunity"], run)
+
+    assert failed is False
+    assert run.stop_reason is None
+    assert written == 1
+
+
 # --- bug 1: the two halves of stage 1 must count the same population -----------
 
 def test_the_real_pipeline_counts_adapter_rejects_in_the_parsed_total(monkeypatch):
