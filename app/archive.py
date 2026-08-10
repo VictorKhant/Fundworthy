@@ -1,33 +1,54 @@
 """The monthly archive: dedup on the way in, purge on the way out.
 
-The problem this solves is the user's, not the database's. If the agent runs every week
-and the same San Diego Foundation page is open all month, they see the same row four
-Thursdays running and start skimming past the whole list. So: a finding is shown once
-per month, and the month resets.
+The problem the dedup half solves is the user's, not the database's. If the agent runs
+every week and the same San Diego Foundation page is open all month, they see the same
+row four Thursdays running and start skimming past the whole list. So: a finding is
+shown once per month, and the month resets — a grant seen in July can legitimately
+resurface as a fresh row in August, which is the intended, documented exception
+(CLAUDE.md), not a bug in the dedup.
 
 Two operations, both cheap:
 
-`seen_this_month`  — a primary-key probe against `opportunities`. Runs inside the free
-                     deterministic tier, before triage, so a repeat costs $0.00 rather
-                     than a Haiku call. With `id` as a TEXT PRIMARY KEY the lookup is an
-                     index probe: constant time whether the month holds 20 rows or 2,000.
+`seen_this_month`  — a primary-key probe against `opportunities`, scoped to the CURRENT
+                     month only, regardless of the retention window below. Runs inside
+                     the free deterministic tier, before triage, so a repeat costs $0.00
+                     rather than a Haiku call.
 
-`purge_old_months`  — `DELETE FROM opportunities WHERE month_key < <this month>`, run once
-                     at the start of each run. Bounds the file, and lets a grant seen in
-                     July legitimately resurface in August. That resurfacing is the
-                     intended, documented exception (CLAUDE.md) — the archive is a
-                     "don't repeat yourself this month" index, not a permanent record.
+`purge_old_months`  — `DELETE FROM opportunities WHERE month_key < <12 months back>`,
+                     run once at the start of each run. Bounds the file without erasing
+                     Past findings: a search from ten months ago is still a real record
+                     of what ran and what it cost, and CLAUDE.md's dedup exception only
+                     needs the CURRENT month's ids, not the whole table swept every
+                     month — the two used to share one threshold, which is why the
+                     archive only ever held one month at a time.
 
-Nothing here decides *what* to keep; it only decides what the user has already been shown.
+Nothing here decides *what* to keep; it only decides what the user has already been shown
+and how long a record survives.
 """
 
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from .db import month_key
 
 log = logging.getLogger(__name__)
+
+# "The whole year", in calendar months, including the current one — Past findings'
+# own header says "anything older than twelve months is removed", so this is the one
+# number that promise actually has to match.
+RETENTION_MONTHS = 12
+
+
+def _months_before(n: int, *, now: datetime | None = None) -> str:
+    """The `month_key` exactly `n` calendar months before now, wrapping year
+    boundaries correctly (unlike naive `month - n` arithmetic, which goes negative
+    every January)."""
+    now = now or datetime.now(timezone.utc)
+    total = now.year * 12 + (now.month - 1) - n
+    year, zero_based_month = divmod(total, 12)
+    return f"{year:04d}-{zero_based_month + 1:02d}"
 
 
 def seen_this_month(conn, opportunity_id: str, *, org_id: str,
@@ -62,7 +83,8 @@ def seen_ids_this_month(conn, *, org_id: str, month: str | None = None) -> set[s
 
 
 def purge_old_months(conn, *, org_id: str, keep: str | None = None) -> int:
-    """Delete every row from a month before `keep` (default: the current month).
+    """Delete every row from a month before `keep` (default: `RETENTION_MONTHS` back
+    from the current month — a rolling year of Past findings, current month included).
 
     Returns how many rows went, so the run log can say it out loud. A purge that
     happens silently is indistinguishable from data loss.
@@ -71,7 +93,7 @@ def purge_old_months(conn, *, org_id: str, keep: str | None = None) -> int:
     every run, before any fetching. Unscoped it meant any org pressing Re-run on the 1st
     of the month wiped every other org's archive first.
     """
-    keep = keep or month_key()
+    keep = keep or _months_before(RETENTION_MONTHS - 1)
     cur = conn.execute(
         "DELETE FROM opportunities WHERE month_key < ? AND org_id=?", (keep, org_id))
     removed = cur.rowcount or 0

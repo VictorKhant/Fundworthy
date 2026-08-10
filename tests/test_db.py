@@ -347,6 +347,48 @@ def test_purge_is_a_no_op_when_everything_is_current(db):
         assert len(repo.list_opportunities(conn, org_id=DEFAULT_ORG_ID)) == 1
 
 
+def test_purge_keeps_a_full_year_and_removes_only_beyond_it(db):
+    """Past findings' own header says "anything older than twelve months is removed" —
+    this is the number that promise has to match. It used to be one month: the purge
+    threshold and the dedup window were the same constant, so a search from three
+    months ago was gone the moment a new month's search ran, not just no-longer-shown."""
+    from app.archive import _months_before
+
+    with session(db) as conn:
+        repo.save_opportunity(
+            conn, _opp(id=stable_id("https://example.invalid/recent", "Recent"),
+                      title="Recent", source_url="https://example.invalid/recent"),
+            run_id="run1", org_id=DEFAULT_ORG_ID)
+        conn.execute("UPDATE opportunities SET month_key=? WHERE title='Recent'",
+                     (_months_before(6),))
+
+        repo.save_opportunity(
+            conn, _opp(id=stable_id("https://example.invalid/ancient", "Ancient"),
+                      title="Ancient", source_url="https://example.invalid/ancient"),
+            run_id="run0", org_id=DEFAULT_ORG_ID)
+        conn.execute("UPDATE opportunities SET month_key=? WHERE title='Ancient'",
+                     (_months_before(13),))
+
+    with session(db) as conn:
+        removed = archive.purge_old_months(conn, org_id=DEFAULT_ORG_ID)
+        remaining = {r["title"] for r in repo.list_opportunities(conn, org_id=DEFAULT_ORG_ID)}
+
+    assert removed == 1
+    assert remaining == {"Recent"}
+
+
+def test_months_before_wraps_the_year_boundary():
+    from datetime import datetime, timezone
+
+    from app.archive import _months_before
+
+    now = datetime(2026, 8, 15, tzinfo=timezone.utc)
+    assert _months_before(0, now=now) == "2026-08"
+    assert _months_before(1, now=now) == "2026-07"
+    assert _months_before(8, now=now) == "2025-12"
+    assert _months_before(11, now=now) == "2025-09"
+
+
 # --- reading order ------------------------------------------------------------
 
 def test_human_check_rows_sort_last(db):

@@ -911,13 +911,6 @@ footer {
 /* --- past findings --------------------------------------------------------- */
 
 .archive-months { margin-bottom: 18px; gap: 8px; }
-/* Dashed, because it explains a deletion. A solid panel would read as another section
-   of results; this is a note about why some are missing. */
-.archive-note {
-  background: var(--panel); border: 1px dashed var(--dash-soft); border-radius: 14px;
-  padding: 16px 20px; margin-bottom: 18px;
-  font-size: 13.5px; color: var(--muted); max-width: 74ch;
-}
 
 /* --- settings -------------------------------------------------------------- */
 
@@ -2129,8 +2122,12 @@ button.iconbtn.on { background: var(--accent-soft); color: var(--accent-deep); }
    its baseline, which is the plain button default `button, a.button` never accounts
    for an icon inside it. */
 button.download-csv {
-  display: inline-flex; align-items: center; gap: 8px;
+  display: inline-flex; align-items: center; gap: 8px; line-height: 1;
 }
+/* Flex `align-items: center` centers the SVG's own box, but an inline-formatting-
+   context quirk in some browsers still measures its baseline against the text next to
+   it rather than the row itself — `display: block` opts it out of that entirely. */
+button.download-csv svg { display: block; flex-shrink: 0; }
 
 /* The panel itself — sage-tinted so it reads as "the thing the meter above belongs to",
    not a generic form dropped under it. Presets, a typed figure, Cancel/Save: one

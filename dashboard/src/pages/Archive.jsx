@@ -253,13 +253,6 @@ export default function Archive() {
             {(data.opportunities || []).length > 0 && <DownloadCsv month={month} />}
           </div>
 
-          <div className="archive-note">
-            The archive keeps the current month. When a search runs in a new month, the
-            previous month's rows are cleared — that is what stops you being shown the
-            same grant every week, and it means anything still open gets a fresh look
-            next month rather than being hidden forever.
-          </div>
-
           {searches.length === 0 ? (
             <p className="muted small">No searches recorded for {monthName(month)}.</p>
           ) : (
