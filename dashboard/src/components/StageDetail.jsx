@@ -29,6 +29,10 @@ const REASON_LABEL = {
   already_seen_this_run: "The same page came up twice in this search",
   thin_landing_page: "The page had almost nothing on it",
   triage_not_an_opportunity: "Not an open funding opportunity",
+  // A real, open, sometimes well-funded call — just not for anything this
+  // organization does. Split out from the reason above so a closed program and a
+  // $750K grant for the wrong kind of work stop reading as the same failure.
+  triage_wrong_topic: "Open, but not something you do",
   claim_could_not_be_confirmed: "Kept, but a claim could not be confirmed",
   no_award_stated: "No award amount anywhere on the page",
   // Not a verdict about the page — a failure of ours. These two used to be invisible:
@@ -64,9 +68,10 @@ const PARAGRAPH = {
    + "much it throws away. Anything set aside here never cost you a penny — and if a "
    + "rejection below looks wrong, the fix is usually your award floor or your deadline "
    + "runway under “Adjust search settings”.",
-  2: "Each surviving page got one cheap question, and the answer below is the "
-   + "researcher's own words. This step exists so the expensive one only reads pages "
-   + "that are genuinely open calls.",
+  2: "Each surviving page got two cheap questions — is it a real, open call, and does "
+   + "it match what you actually do — and the answer below is the researcher's own "
+   + "words. This step exists so the expensive one only reads pages that are "
+   + "genuinely worth a closer look.",
   3: "These were read in full and scored. Anything set aside here was already past both "
    + "cheaper checks, so it is usually a deadline the parser could not see earlier.",
 };

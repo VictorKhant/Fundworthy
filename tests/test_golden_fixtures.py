@@ -283,7 +283,7 @@ def _live_check() -> int:
                             tier=Tier.WARM, confidence=Confidence.CONFIRMED)
             candidate = to_candidate(page, fx.funder, int(Tier.WARM))
             try:
-                relevant, reason = triage(candidate, budget, cfg)
+                relevant, reason, mismatch = triage(candidate, budget, cfg)
             except Exception as exc:  # noqa: BLE001
                 print(f"  {fx.slug:<26} ERROR: {exc!r}")
                 continue

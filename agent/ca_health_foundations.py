@@ -51,6 +51,7 @@ RESEARCHED_SOURCES: list[Source] = [
         tier=Tier.WARM,
         confidence=Confidence.CONFIRMED,
         sector="health_conversion",
+        region="statewide California",
         notes=(
             "\"If you would like to make an unsolicited request, please follow "
             "these instructions.\" · \"While unsolicited requests are accepted by "
@@ -73,6 +74,7 @@ RESEARCHED_SOURCES: list[Source] = [
         tier=Tier.WARM,
         confidence=Confidence.CONFIRMED,
         sector="health_conversion",
+        region="26-county Northern/Central California region",
         notes=(
             "\"Will Sierra Health Foundation fund only tax-exempt 501(c)(3) "
             "organizations? No. We also fund public agencies, such as school "
@@ -93,6 +95,7 @@ RESEARCHED_SOURCES: list[Source] = [
         tier=Tier.WARM,
         confidence=Confidence.CONFIRMED,
         sector="health_conversion",
+        region="Santa Clara County and Northern San Benito County",
         notes=(
             "\"Applicants must be public agencies or nonprofit organizations (tax "
             "exempt at the Federal and State level)\" (Health Partnership Grants); "
@@ -115,6 +118,8 @@ RESEARCHED_SOURCES: list[Source] = [
         tier=Tier.WARM,
         confidence=Confidence.CONFIRMED,
         sector="health_conversion",
+        region=("specific South LA County zip codes only (Inglewood, Hawthorne, "
+               "Lennox, part of LA, El Segundo, Watts, Compton, Lawndale)"),
         notes=(
             "\"Nonprofit hospitals and nonprofits with health as a focus of their "
             "mission can apply for the funds.\" Created 1999 from the sale of "
@@ -137,6 +142,7 @@ RESEARCHED_SOURCES: list[Source] = [
         tier=Tier.WARM,
         confidence=Confidence.CONFIRMED,
         sector="health_conversion",
+        region="southern/central San Mateo County",
         notes=(
             "\"Any 501c3 nonprofit organization or government agency that serves "
             "District residents may apply.\" NOT a for-profit conversion — this is "
@@ -160,6 +166,7 @@ RESEARCHED_SOURCES: list[Source] = [
         tier=Tier.WARM,
         confidence=Confidence.CONFIRMED,
         sector="health_conversion",
+        region="northern San Mateo County",
         notes=(
             "\"Grants are open to 501(c)(3) non-profit organizations or public "
             "agencies serving residents of San Bruno, Millbrae, Burlingame, "

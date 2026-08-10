@@ -17,6 +17,7 @@ const BLANK = {
   name: "",
   url: "",
   sector: "foundation",
+  region: "",
   warm: false,
   active: true,
   notes: "",
@@ -54,6 +55,20 @@ function Editor({ initial, sectors, onSave, onCancel, saving }) {
             </option>
           ))}
         </select>
+      </label>
+
+      <label className="field">
+        <span>Where do they give money?</span>
+        <input
+          value={form.region || ""}
+          onChange={set("region")}
+          placeholder="e.g. San Diego County, or leave blank if not restricted"
+        />
+        <small className="muted">
+          Only if their own page says so — a county, a region, "statewide California".
+          Shown on the row so it is not buried in notes; not a filter, so leaving it
+          blank never hides this funder from anyone.
+        </small>
       </label>
 
       {/* Yours to state, and nobody else's. The starter lists used to arrive with this
@@ -131,13 +146,21 @@ function Row({ funder, onToggle, onEdit, onBlock, selecting, selected, onSelect 
         </div>
         {/* The sector moves under the name rather than holding a column of its own. As a
             column it was empty space on every row at desktop width and an orphaned
-            fragment at mobile. */}
+            fragment at mobile. Region joins it the same way — a real, researched fact
+            ("Los Angeles County", "Sonoma County") that used to live only in a
+            paragraph of notes nobody reads before importing a statewide list. Shown,
+            not filtered: the funder is still real and still on the list either way,
+            this just says which part of California it actually serves. */}
         <div className="funder-sub muted">
           {host && (
             <a href={funder.url} target="_blank" rel="noopener noreferrer">{host} ↗</a>
           )}
           {host && sector && <span aria-hidden="true"> · </span>}
           {sector}
+          {sector && funder.region && <span aria-hidden="true"> · </span>}
+          {funder.region && <span title="Where this funder gives money">
+            <Icon name="pin" size={11} /> {funder.region}
+          </span>}
         </div>
         {!funder.active && funder.exclude_reason && (
           <div className="muted small">Paused because: {funder.exclude_reason}</div>

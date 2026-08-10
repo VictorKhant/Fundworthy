@@ -38,6 +38,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
+from .config import ProgramCard
 from .parse import Evidence, ParsedPage, _parse_date
 
 log = logging.getLogger(__name__)
@@ -150,6 +151,49 @@ CA_CATEGORIES: dict[str, set[str]] = {
     },
 }
 
+# The comment above this dict already named the risk: a program beyond the original
+# three contributes nothing here and falls through to "search everything". That was
+# meant for a genuinely new org's genuinely new program — it turned out to also be the
+# ordinary case for the org THIS was tuned for, the moment they recreated their own
+# three cards through "Build it from a link" (the intended way to make one) and got
+# different auto-generated slugs (`RISE_ARTS`, not `ARTS`). Confirmed live on a real
+# $2 run: none of the three matched, every CA category was searched, and a
+# $750K-4.5M heat-infrastructure grant that has nothing to do with any of the org's
+# programs survived free filtering into a paid Sonnet call because of it.
+#
+# `agent/apis.py`'s Grants.gov adapter already solves the equivalent problem correctly
+# (`program_vocabularies` below: `card.api_vocabulary()` falls back to the card's own
+# keywords when the slug has no tuned default). This is that same fallback for the CA
+# portal's fixed category taxonomy — matched against words the card already carries
+# (keywords, summary, what it funds), not invented, and only ever WIDENS which
+# programs can narrow the search; a program that matches nothing here still falls
+# through to the same honest "search everything, and say so" behavior as before.
+_CATEGORY_KEYWORDS: dict[str, set[str]] = {
+    "Libraries and Arts": {"art", "arts", "cultural", "culture", "creative"},
+    "Health & Human Services": {
+        "health", "wellness", "wellbeing", "behavioral", "trauma", "burnout"},
+    # "training" alone is too generic to be a signal on its own — RISE Arts' own
+    # summary says "cohort-based business development training" for artists, which is
+    # nothing to do with workforce/labor programs. Paired terms only.
+    "Employment, Labor & Training": {
+        "leadership", "workforce", "fellowship", "civic engagement", "employment"},
+    "Housing, Community and Economic Development": {
+        "housing", "community", "economic"},
+    "Education": {"education", "youth", "school"},
+}
+
+
+def _derived_categories(card: ProgramCard) -> set[str]:
+    """A best-effort category set for a program whose slug is not one of the three
+    tuned above, from the same keywords/summary already on the card — never a category
+    outside the portal's own taxonomy already used elsewhere in this file, only a wider
+    set of programs able to reach the ones that exist."""
+    haystack = " ".join(
+        [*card.keywords, card.summary, card.what_it_funds]
+    ).lower()
+    return {cat for cat, words in _CATEGORY_KEYWORDS.items()
+            if any(w in haystack for w in words)}
+
 # Cross-cutting tags that describe who a grant serves, not what it funds. "Disadvantaged
 # Communities" sits on urban watershed restoration, sea level rise adaptation and archery
 # in schools — real programs, none of them the org's. So it can support a match but never
@@ -206,18 +250,30 @@ async def fetch_ca_grants_portal(fetcher, cfg) -> ApiResult:
     result = ApiResult()
 
     # Categories for the ticked programs. A program with no mapping (anything beyond
-    # the three we tuned) contributes nothing here, so the run says which ones and why
-    # rather than either silently narrowing to the other programs' categories or
-    # silently widening to everything. Both of those look identical to a working
-    # filter from the outside, and one of them quietly drops their opportunities.
+    # the three we tuned) used to contribute nothing here at all — now its own
+    # keywords get one try at deriving a category before it falls through to the
+    # "search everything" case, so the ordinary act of recreating a card through
+    # "Build it from a link" (which mints a new slug every time) doesn't quietly
+    # widen every run back to unfiltered. Still never invented: `mapped` and
+    # `derived` both only ever narrow using the portal's own fixed taxonomy.
     active = list(cfg.programs_active)
+    by_slug = {c.slug: c for c in cfg.programs}
     mapped = [p for p in active if p in CA_CATEGORIES]
-    unmapped = [p for p in active if p not in CA_CATEGORIES]
+    derived: dict[str, set[str]] = {}
+    for p in active:
+        if p in CA_CATEGORIES:
+            continue
+        card = by_slug.get(p)
+        cats = _derived_categories(card) if card is not None else set()
+        if cats:
+            derived[p] = cats
+    truly_unmapped = [p for p in active if p not in CA_CATEGORIES and p not in derived]
 
-    if not mapped:
-        # Nothing ticked has a category mapping. Filtering on an empty set would reject
-        # every row; filtering on all categories would ignore their selection entirely.
-        # Neither is honest, so we don't narrow, and we say so.
+    if not mapped and not derived:
+        # Nothing ticked has a category mapping, derived or tuned. Filtering on an
+        # empty set would reject every row; filtering on all categories would ignore
+        # their selection entirely. Neither is honest, so we don't narrow, and we say
+        # so.
         wanted = set().union(*CA_CATEGORIES.values())
         result.warn(
             "No ticked program matches a California funding category "
@@ -225,12 +281,15 @@ async def fetch_ca_grants_portal(fetcher, cfg) -> ApiResult:
             "searched. Expect more California results to review than usual."
         )
     else:
-        wanted = {c for p in mapped for c in CA_CATEGORIES[p]}
-        if unmapped:
+        wanted = ({c for p in mapped for c in CA_CATEGORIES[p]}
+                 | {c for cats in derived.values() for c in cats})
+        covered = mapped + list(derived.keys())
+        if truly_unmapped:
             result.warn(
-                f"California was searched for {', '.join(mapped)} only. "
-                f"{', '.join(unmapped)} has no California funding category on file, so "
-                "nothing was searched for it there — Grants.gov still covers it."
+                f"California was searched for {', '.join(covered)} only. "
+                f"{', '.join(truly_unmapped)} has no California funding category on "
+                "file, so nothing was searched for it there — Grants.gov still "
+                "covers it."
             )
 
     for rec in records:

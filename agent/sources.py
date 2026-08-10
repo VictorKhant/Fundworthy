@@ -60,6 +60,14 @@ class Source:
     notes: str = ""
     sector: str = ""   # blank => derived by sector_for(); see FUTURE.md
     adapter: str | None = None   # key into apis.ADAPTERS; None means crawl the HTML
+    # Which county/counties or region this funder actually gives to, stated on its own
+    # page. Blank for the San Diego registry (it needs none — that whole list already
+    # is San Diego) and for the two indexed databases (federal / statewide by nature).
+    # Populated for the statewide-CA additions, where it is the single most important
+    # fact a different org needs before importing a list researched for "California"
+    # broadly — see app/db.py's funders.region column for why this is a label, not a
+    # filter.
+    region: str = ""
 
     @property
     def is_api(self) -> bool:

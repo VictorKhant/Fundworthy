@@ -41,6 +41,7 @@ RESEARCHED_SOURCES: list[Source] = [
         tier=Tier.WARM,
         confidence=Confidence.CONFIRMED,
         sector="community_foundation",
+        region="San Mateo and/or Santa Clara counties",
         notes=(
             "\"SVCF awards grants through an open Request for Proposals (RFP) "
             "process.\" · \"Organizations with a 501(c)(3) designation, those that "
@@ -60,6 +61,7 @@ RESEARCHED_SOURCES: list[Source] = [
         tier=Tier.WARM,
         confidence=Confidence.CONFIRMED,
         sector="community_foundation",
+        region="Alameda, Contra Costa, Marin, San Francisco, and San Mateo counties",
         notes=(
             "\"All 501(c)(3) nonprofit organizations based in the five Bay Area "
             "counties we serve can apply to the following funding opportunities.\" "
@@ -76,6 +78,7 @@ RESEARCHED_SOURCES: list[Source] = [
         tier=Tier.WARM,
         confidence=Confidence.CONFIRMED,
         sector="community_foundation",
+        region="Humboldt, Del Norte, and Trinity counties (CA), plus Curry County (OR)",
         notes=(
             "\"Non-profit organizations, public benefit organizations (including "
             "churches, educational organizations/schools, hospitals, government "
@@ -95,6 +98,7 @@ RESEARCHED_SOURCES: list[Source] = [
         tier=Tier.WARM,
         confidence=Confidence.CONFIRMED,
         sector="community_foundation",
+        region="Sonoma County",
         notes=(
             "\"Our competitive grants are open to incorporated, charitable 501(c)(3) "
             "organizations serving Sonoma County.\" Multiple named programs (Arts "
@@ -110,6 +114,7 @@ RESEARCHED_SOURCES: list[Source] = [
         tier=Tier.WARM,
         confidence=Confidence.CONFIRMED,
         sector="community_foundation",
+        region="Stanislaus County",
         notes=(
             "\"The Stanislaus Community Foundation's (SCF) Resilient Stanislaus Fund "
             "will provide support to 501(c)(3) nonprofit organizations serving "
@@ -126,6 +131,7 @@ RESEARCHED_SOURCES: list[Source] = [
         tier=Tier.WARM,
         confidence=Confidence.CONFIRMED,
         sector="community_foundation",
+        region="Monterey County",
         notes=(
             "\"Impact grants are open to 501(c)3* nonprofit organizations and "
             "public agencies serving Monterey County residents.\" Impact Grants "
@@ -142,6 +148,7 @@ RESEARCHED_SOURCES: list[Source] = [
         tier=Tier.WARM,
         confidence=Confidence.CONFIRMED,
         sector="community_foundation",
+        region="Santa Barbara County",
         notes=(
             "\"Organizations must be certified as tax exempt under Section 501(c)(3) "
             "of the Internal Revenue Code or use a fiscal sponsor with 501(c)(3) tax "
@@ -159,6 +166,7 @@ RESEARCHED_SOURCES: list[Source] = [
         tier=Tier.WARM,
         confidence=Confidence.CONFIRMED,
         sector="community_foundation",
+        region="San Luis Obispo County",
         notes=(
             "\"In good standing with the Internal Revenue Service as a 501(c)(3) "
             "and/or 509(a)(1), or able to provide a current contract outlining a "
@@ -179,6 +187,7 @@ RESEARCHED_SOURCES: list[Source] = [
         tier=Tier.WARM,
         confidence=Confidence.CONFIRMED,
         sector="community_foundation",
+        region="Riverside and San Bernardino counties",
         notes=(
             "\"Nonprofit, public benefit organizations with evidence of tax-exempt "
             "status under Section 501(c)(3) of the Internal Revenue Code and not "
@@ -197,6 +206,7 @@ RESEARCHED_SOURCES: list[Source] = [
         tier=Tier.WARM,
         confidence=Confidence.CONFIRMED,
         sector="community_foundation",
+        region="Orange County",
         notes=(
             "\"Other grant applications are considered from 501(c)(3) nonprofit "
             "organizations whose work is aligned with our mission and priority "
@@ -215,6 +225,7 @@ RESEARCHED_SOURCES: list[Source] = [
         tier=Tier.WARM,
         confidence=Confidence.CONFIRMED,
         sector="community_foundation",
+        region="Pasadena Unified School District boundaries (Pasadena, Altadena, Sierra Madre)",
         notes=(
             "\"Be a tax-exempt organization under Section 501(c)(3) or 170(c)(1) or "
             "(2)(b).\" Oversees ~11 grant programs annually (Animal Welfare, Arts & "
@@ -232,6 +243,7 @@ RESEARCHED_SOURCES: list[Source] = [
         tier=Tier.WARM,
         confidence=Confidence.CONFIRMED,
         sector="community_foundation",
+        region="City of Long Beach",
         notes=(
             "\"Grants are made to US-based, 501(C)(3) nonprofits, educational "
             "institutions, and government entities serving Long Beach who are in "

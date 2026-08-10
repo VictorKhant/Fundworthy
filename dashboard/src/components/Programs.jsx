@@ -74,7 +74,8 @@ function Editor({ initial, onSave, onCancel, onDelete, globalFloor, saving }) {
         </div>
         <small className="muted">
           Paste the program's own page. The assistant reads it and fills this card in for
-          you to correct — it only uses what is on that page.
+          you to correct — it only uses what is on that page. Costs a few cents on your
+          Anthropic key, capped at $0.10 — same key your weekly search runs on.
         </small>
       </label>
 
