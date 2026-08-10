@@ -2111,6 +2111,14 @@ button.iconbtn.on { background: var(--accent-soft); color: var(--accent-deep); }
 }
 .capedit-open svg { color: var(--fg); }
 
+/* "Download spreadsheet" (This week and Past findings) — a bare inline SVG next to
+   text with no flex context sits hard against the word with no gap and floats above
+   its baseline, which is the plain button default `button, a.button` never accounts
+   for an icon inside it. */
+button.download-csv {
+  display: inline-flex; align-items: center; gap: 8px;
+}
+
 /* The panel itself — sage-tinted so it reads as "the thing the meter above belongs to",
    not a generic form dropped under it. Presets, a typed figure, Cancel/Save: one
    pending value with one commit step, never a preset that saves on click while a typed

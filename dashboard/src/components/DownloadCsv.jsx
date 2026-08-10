@@ -33,9 +33,9 @@ export default function DownloadCsv({ month }) {
 
   return (
     <>
-      <Busy busy={busy} busyLabel="Preparing" onClick={download}>
+      <Busy className="download-csv" busy={busy} busyLabel="Preparing" onClick={download}>
         <Icon name="download" size={15} />
-      Download spreadsheet
+        Download spreadsheet
       </Busy>
       {error && <span className="muted small">{error}</span>}
     </>
