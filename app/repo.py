@@ -577,6 +577,14 @@ def list_runs_for_month(conn, *, org_id: str, month: str) -> list[dict]:
     stage boxes already own that) and excludes runs still in progress — a run belongs
     here once it has something to report.
 
+    Also excludes a run that never actually read anything: `sources_attempted == 0`
+    means the crawl never started — the kill switch was off, there was no key, or no
+    funder was ticked, all refused before `agent.run.crawl()` ever ran. That is not a
+    search with a quiet result; it is not a search. A real search that tried and found
+    nothing (`sources_attempted > 0`, zero kept) still belongs here — CLAUDE.md's own
+    point is that a low count is not a failure, only an empty attempt is not an
+    attempt.
+
     `kept_count` is **not** `opportunities_scored` off the run row — that is how many
     this run scored the day it ran, and does not shrink when a later search re-confirms
     the same finding and takes over its `run_id` (the same dedup rule every other
@@ -585,7 +593,7 @@ def list_runs_for_month(conn, *, org_id: str, month: str) -> list[dict]:
     how many it originally produced.
     """
     rows = conn.execute(
-        "SELECT * FROM runs WHERE org_id=? AND status<>'running' "
+        "SELECT * FROM runs WHERE org_id=? AND status<>'running' AND sources_attempted>0 "
         "AND substr(started_at, 1, 7)=? ORDER BY started_at DESC",
         (org_id, month),
     ).fetchall()

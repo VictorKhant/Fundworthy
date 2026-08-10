@@ -2310,7 +2310,7 @@ button.download-csv {
 }
 .settings-tab {
   display: inline-flex; align-items: center; gap: 7px;
-  padding: 0 0 12px; border: 0; border-bottom: 2px solid transparent;
+  padding: 0 0 12px; border: 0; border-bottom: 2px solid transparent; border-radius: 0;
   background: none; font: inherit; font-size: 15px; color: var(--muted);
   white-space: nowrap; cursor: pointer;
 }
@@ -2404,25 +2404,13 @@ button.download-csv {
 .search-toggle-caret { display: inline-flex; transition: transform .15s ease; }
 .search-toggle-caret.on { transform: rotate(90deg); }
 
-.search-findings { padding-top: 14px; display: flex; flex-direction: column; gap: 2px; }
-.search-finding {
-  display: flex; align-items: center; gap: 14px; padding: 12px 4px;
-  border-top: 1px solid var(--line);
+/* Findings inside an expanded search card render with the same `.opps`/`Finding`
+   card `This week` uses (Findings.jsx) — not a bespoke compact row. */
+.search-findings { padding-top: 14px; }
+.search-card-no-breakdown {
+  border: 1px dashed var(--line); border-radius: 12px; padding: 10px 14px;
+  margin: 16px 0;
 }
-.search-findings > .search-finding:first-child { border-top: 0; }
-.search-finding-score {
-  flex-shrink: 0; width: 3em; text-align: right;
-  font-family: var(--display); font-size: 19px; color: var(--accent-deep);
-}
-.search-finding-body { min-width: 0; flex: 1; }
-.search-finding-body strong { display: block; font-size: 14.5px; }
-.search-finding-title { margin: 2px 0; color: var(--body); }
-.search-finding-match { flex-shrink: 0; }
-.search-finding-link {
-  flex-shrink: 0; display: inline-flex; color: var(--muted); transform: rotate(-90deg);
-}
-.search-finding-link:hover { color: var(--fg); }
-.search-findings-footer { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
 
 /* --- sidebar: report a bug next to sign out ----------------------------------- */
 

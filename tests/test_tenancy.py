@@ -284,10 +284,11 @@ def test_list_runs_for_month_scopes_by_month_and_excludes_running(db):
 
     with session(db) as conn:
         repo.create_run(conn, "run_this_month", org_id=A, trigger="scheduled")
-        repo.update_run(conn, "run_this_month", status="done")
+        repo.update_run(conn, "run_this_month", status="done", sources_attempted=12)
         repo.create_run(conn, "run_still_running", org_id=A, trigger="manual")
+        repo.update_run(conn, "run_still_running", sources_attempted=12)
         repo.create_run(conn, "run_last_month", org_id=A, trigger="manual")
-        repo.update_run(conn, "run_last_month", status="done")
+        repo.update_run(conn, "run_last_month", status="done", sources_attempted=12)
         conn.execute("UPDATE runs SET started_at=? WHERE id=?",
                     ("2020-01-15T10:00:00+00:00", "run_last_month"))
 
@@ -303,6 +304,28 @@ def test_list_runs_for_month_scopes_by_month_and_excludes_running(db):
     assert "rejects" not in row and "log_tail" not in row
 
 
+def test_list_runs_for_month_excludes_a_search_that_never_started(db):
+    """A run refused before `crawl()` ever ran (the kill switch, no key, no ticked
+    program) leaves `sources_attempted` at its default of 0 — that is not a quiet
+    search, it is not a search, and it should not clutter Past findings next to real
+    ones. A real search that tried and genuinely found nothing still belongs, because
+    CLAUDE.md's whole point is that a low count is not a failure."""
+    from app.db import month_key
+
+    with session(db) as conn:
+        repo.create_run(conn, "run_never_started", org_id=A, trigger="manual")
+        repo.update_run(conn, "run_never_started", status="done")  # sources_attempted=0
+        repo.create_run(conn, "run_tried_and_found_nothing", org_id=A, trigger="manual")
+        repo.update_run(conn, "run_tried_and_found_nothing", status="done",
+                        sources_attempted=40)
+
+        rows = repo.list_runs_for_month(conn, org_id=A, month=month_key())
+
+    ids = [r["id"] for r in rows]
+    assert "run_never_started" not in ids
+    assert "run_tried_and_found_nothing" in ids
+
+
 def test_list_runs_for_month_reports_findings_currently_credited_to_it(db):
     """`kept_count` is live, not the run's own historical `opportunities_scored` — a
     later search that re-confirms the same finding takes over its `run_id`, and an old
@@ -311,7 +334,7 @@ def test_list_runs_for_month_reports_findings_currently_credited_to_it(db):
 
     with session(db) as conn:
         repo.create_run(conn, "run_x", org_id=A)
-        repo.update_run(conn, "run_x", status="done")
+        repo.update_run(conn, "run_x", status="done", sources_attempted=5)
         repo.save_opportunity(conn, _opp(), run_id="run_x", org_id=A)
 
         rows = repo.list_runs_for_month(conn, org_id=A, month=month_key())
