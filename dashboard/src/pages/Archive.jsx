@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { api, awardRange, usd } from "../api";
+import { api, usd } from "../api";
 import DownloadCsv from "../components/DownloadCsv";
+import { Finding } from "../components/Findings";
 import Icon from "../components/Icon";
 import Spinner from "../components/Spinner";
 
@@ -17,6 +18,12 @@ import Spinner from "../components/Spinner";
 // `available_months` still holds — for the same reason as before: it is what stops the
 // same grant reappearing every week forever, and what lets something still open next
 // month get a second look.
+//
+// Findings render with the exact same `Finding` card `This week` uses — not a
+// second, compact list style. A hand-built compact row broke outright the first time a
+// funder name and a long "Matched X, Y, Z" pill both had to fit one line; the real
+// card already handles long text, chips that wrap, and the AI/sourced split correctly,
+// because it is the one that has actually been used.
 
 const monthName = (key) => {
   if (!key) return "";
@@ -39,34 +46,7 @@ function dayAndTime(iso) {
   };
 }
 
-function SearchFinding({ o, programBySlug }) {
-  const range = awardRange(o);
-  const due = o.deadline_type === "rolling"
-    ? "Rolling deadline"
-    : o.deadline ? `Due ${o.deadline}` : "Deadline not stated";
-  const matched = (o.program_match || []).map((slug) => programBySlug[slug] || slug);
-
-  return (
-    <div className="search-finding">
-      <span className="search-finding-score">{o.score}%</span>
-      <div className="search-finding-body">
-        <strong>{o.funder}</strong>
-        <p className="search-finding-title">{o.title}</p>
-        <p className="muted small">{range || "Amount not stated"} · {due}</p>
-      </div>
-      {matched.length > 0 && (
-        <span className="pill search-finding-match">Matched {matched.join(", ")}</span>
-      )}
-      <a className="search-finding-link" href={o.source_url}
-         target="_blank" rel="noopener noreferrer"
-         title="Open the funder's page" aria-label={`Open ${o.funder}'s page`}>
-        <Icon name="chevron" size={13} />
-      </a>
-    </div>
-  );
-}
-
-function SearchCard({ search, month }) {
+function SearchCard({ search, month, maxEffortHours }) {
   const [open, setOpen] = useState(false);
   const [findings, setFindings] = useState(null);
   const [error, setError] = useState(null);
@@ -78,7 +58,13 @@ function SearchCard({ search, month }) {
   const programs = search.programs_snapshot || [];
   const groups = search.funder_groups || [];
   const funderCount = groups.reduce((n, g) => n + g.count, 0);
-  const programBySlug = Object.fromEntries(programs.map((p) => [p.slug, p.name]));
+  // A search that passed preflight and actually ran always has at least one ticked
+  // program in its snapshot — so an empty one here can only mean one thing: this
+  // search ran before Fundworthy started recording the breakdown at all (schema v19).
+  // It is not that nothing was ticked or nothing was read; we simply never asked. Two
+  // different facts, and showing "0 ticked" for the second would be a guess dressed as
+  // a fact — the same rule this app applies to a funder's own page, applied to itself.
+  const hasBreakdown = programs.length > 0;
 
   async function toggle() {
     if (!open && findings === null) {
@@ -101,7 +87,7 @@ function SearchCard({ search, month }) {
         </div>
         <div className="search-card-stats">
           <div className="search-stat">
-            <strong>{funderCount}</strong>
+            <strong>{hasBreakdown ? funderCount : "—"}</strong>
             <span>funders read</span>
           </div>
           <div className="search-stat">
@@ -115,30 +101,38 @@ function SearchCard({ search, month }) {
         </div>
       </div>
 
-      <div className="search-card-boxes">
-        <div className="search-box">
-          <div className="search-box-head">
-            Program cards searched for — {programs.length}
+      {hasBreakdown ? (
+        <div className="search-card-boxes">
+          <div className="search-box">
+            <div className="search-box-head">
+              Program cards searched for — {programs.length}
+            </div>
+            <div className="search-box-chips">
+              {programs.map((p) => (
+                <span key={p.slug} className="chip on">✓ {p.name}</span>
+              ))}
+            </div>
           </div>
-          <div className="search-box-chips">
-            {programs.length === 0 ? (
-              <span className="muted small">None ticked for this search.</span>
-            ) : programs.map((p) => (
-              <span key={p.slug} className="chip on">✓ {p.name}</span>
-            ))}
+          <div className="search-box">
+            <div className="search-box-head">Funder lists read — {groups.length}</div>
+            <div className="search-box-chips">
+              {groups.length === 0 ? (
+                <span className="muted small">
+                  Every funder list came back empty or unreadable this search.
+                </span>
+              ) : groups.map((g) => (
+                <span key={g.label} className="chip on">✓ {g.label} · {g.count}</span>
+              ))}
+            </div>
           </div>
         </div>
-        <div className="search-box">
-          <div className="search-box-head">Funder lists read — {groups.length}</div>
-          <div className="search-box-chips">
-            {groups.length === 0 ? (
-              <span className="muted small">Nothing read for this search.</span>
-            ) : groups.map((g) => (
-              <span key={g.label} className="chip on">✓ {g.label} · {g.count}</span>
-            ))}
-          </div>
-        </div>
-      </div>
+      ) : (
+        <p className="muted small search-card-no-breakdown">
+          This search ran before Fundworthy started recording which program cards and
+          funder lists a search used — a search from here on will show the full
+          breakdown.
+        </p>
+      )}
 
       <button type="button" className="text search-toggle" onClick={toggle}
               aria-expanded={open}>
@@ -166,14 +160,12 @@ function SearchCard({ search, month }) {
           {findings?.length === 0 && (
             <p className="muted small">Nothing was recorded for this search.</p>
           )}
-          {findings?.map((o) => (
-            <SearchFinding key={o.id} o={o} programBySlug={programBySlug} />
-          ))}
-          {findings && findings.length > 0 && (
-            <p className="muted small search-findings-footer">
-              {search.kept_count} kept from {funderCount} funders read, against{" "}
-              {programs.length} ticked program card{programs.length === 1 ? "" : "s"}.
-            </p>
+          {findings?.length > 0 && (
+            <div className="opps">
+              {findings.map((o) => (
+                <Finding key={o.id} o={o} maxEffortHours={maxEffortHours} />
+              ))}
+            </div>
           )}
         </div>
       )}
@@ -261,19 +253,13 @@ export default function Archive() {
             {(data.opportunities || []).length > 0 && <DownloadCsv month={month} />}
           </div>
 
-          <div className="archive-note">
-            The archive keeps the current month. When a search runs in a new month, the
-            previous month's rows are cleared — that is what stops you being shown the
-            same grant every week, and it means anything still open gets a fresh look
-            next month rather than being hidden forever.
-          </div>
-
           {searches.length === 0 ? (
             <p className="muted small">No searches recorded for {monthName(month)}.</p>
           ) : (
             <div className="search-cards">
               {searches.map((s) => (
-                <SearchCard key={s.id} search={s} month={month} />
+                <SearchCard key={s.id} search={s} month={month}
+                            maxEffortHours={data.max_effort_hours} />
               ))}
             </div>
           )}

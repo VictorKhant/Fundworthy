@@ -1,4 +1,5 @@
 import Icon from "./Icon";
+import { useConfirm } from "./Confirm";
 import { Busy } from "./Spinner";
 
 // The weekly knobs. Folded away behind "Adjust search settings" in the status strip,
@@ -31,12 +32,21 @@ function Knob({ label, hint, children }) {
 // full sentence that used to sit under each one as a `<small>` moves to `title`, the
 // same trade Knob already makes above — that alone is most of what made three checkbox
 // rows read as three paragraphs.
-function ToggleChip({ icon, label, hint, checked, onChange }) {
+// `disabled` greys the chip out and blocks the click — for a switch that names a real,
+// planned setting (the schema already carries it, the API already accepts it) but has
+// no pipeline behind it yet. Showing it disabled rather than hiding it is a signpost:
+// leaving it out would make onboarding's own "search beyond your list" idea point at
+// nothing, the same reasoning behind the disabled OpenAI/DeepSeek/Qwen cards on
+// Settings and "Find funders near you" on Discover funders.
+function ToggleChip({ icon, label, hint, checked, onChange, disabled }) {
   return (
-    <label className={`togglechip ${checked ? "on" : ""}`} title={hint}>
-      <input type="checkbox" checked={checked} onChange={onChange} />
+    <label className={`togglechip ${checked ? "on" : ""} ${disabled ? "soon" : ""}`}
+           title={hint}>
+      <input type="checkbox" checked={checked} disabled={disabled}
+             onChange={disabled ? undefined : onChange} />
       <Icon name={icon} size={14} />
       <span>{label}</span>
+      {disabled && <span className="togglechip-soon">Soon</span>}
     </label>
   );
 }
@@ -44,8 +54,36 @@ function ToggleChip({ icon, label, hint, checked, onChange }) {
 export default function SearchSettings({
   draft, set, dirty, saving, onSave, onUndo,
 }) {
+  const [dialog, ask] = useConfirm();
+
+  // Explained on the way IN, not buried in a hover title nobody reads before ticking
+  // a box that changes how the budget gets spent. Only asked when turning it on —
+  // turning it back off needs no explanation, the same asymmetry Confirm.jsx uses
+  // everywhere else in this app.
+  async function toggleUltra(checked) {
+    if (checked) {
+      const answer = await ask({
+        icon: "zap",
+        title: "Turn on Ultra mode?",
+        points: [
+          "Off, a search stops once it has \"Result cap\" results. Ultra mode ignores "
+            + "that cap and keeps scoring until the budget above runs out or your "
+            + "funder list does — whichever comes first.",
+          "It does not search further than your funder list already does — a short "
+            + "list still tops out at what's on it.",
+          "It can spend up to the full \"Spend limit\" you set above, every search, "
+            + "instead of stopping early to save some of it.",
+        ],
+        confirmLabel: "Turn it on",
+      });
+      if (!answer) return;
+    }
+    set("ultra_mode", checked);
+  }
+
   return (
     <section className="searchpanel">
+      {dialog}
       <div className="knobs">
         <Knob
           label="Award floor ($)"
@@ -140,9 +178,9 @@ export default function SearchSettings({
           <ToggleChip
             icon="globe"
             label="Beyond your list"
-            hint="Also look beyond the funders on your list — being built; for now this searches your list only."
+            hint="Not built yet — every search only reads the funders on your list. This will look further once it exists."
             checked={draft.search_beyond_partners}
-            onChange={(e) => set("search_beyond_partners", e.target.checked)}
+            disabled
           />
 
           {/* Off by default, deliberately: CLAUDE.md's whole premise is that a short
@@ -156,10 +194,10 @@ export default function SearchSettings({
             label="Ultra mode"
             hint={
               'Spend the whole search budget — ignores "result cap" above and keeps ' +
-              "scoring until the budget or your funder list runs out."
+              "scoring until the budget or your funder list runs out. Click for details."
             }
             checked={draft.ultra_mode}
-            onChange={(e) => set("ultra_mode", e.target.checked)}
+            onChange={(e) => toggleUltra(e.target.checked)}
           />
         </div>
 
