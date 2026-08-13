@@ -1,5 +1,9 @@
 # Fundworthy
 
+### [▶ Watch the demo](https://youtu.be/czNsetBg7q4)
+
+[![Fundworthy demo](https://img.youtube.com/vi/czNsetBg7q4/maxresdefault.jpg)](https://youtu.be/czNsetBg7q4)
+
 A weekly **funding-opportunity agent for nonprofits**. It watches the funders an
 organization cares about and leaves a short, sourced, ranked list of what is worth
 applying for — on a dashboard the organization controls.
