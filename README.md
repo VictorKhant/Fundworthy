@@ -1,5 +1,7 @@
 # Fundworthy
 
+**[Live site →](https://fundworthy.duckdns.org/)**
+
 ### [▶ Watch the demo](https://youtu.be/czNsetBg7q4)
 
 [![Fundworthy demo](https://img.youtube.com/vi/czNsetBg7q4/maxresdefault.jpg)](https://youtu.be/czNsetBg7q4)
